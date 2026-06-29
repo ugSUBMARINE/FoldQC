@@ -1,0 +1,16 @@
+[project]
+name = "FoldQC"
+version = "0.1.0"
+description = "PyMOL plugin for visualizing structure-prediction confidence metrics."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+  { name = "Karl Gruber" }
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 88
