@@ -216,6 +216,7 @@ from FoldQC import metrics, session  # noqa: E402
 from FoldQC.gui import (  # noqa: E402
     APP_TITLE,
     FoldQCPluginDialog,
+    PREDICTION_FILE_FILTER,
     _PlotTarget,
 )
 
@@ -272,9 +273,10 @@ class _SessionPredictionFiles:
 
 
 class _Discovery:
-    def __init__(self, candidates, files_by_candidate) -> None:
+    def __init__(self, candidates, files_by_candidate, input_path=None) -> None:
         self.candidates = tuple(candidates)
         self.files_by_candidate = list(files_by_candidate)
+        self.input_path = input_path
         self.scanned = []
 
     def scan(self, candidate):
@@ -731,6 +733,39 @@ class GuiModelSwitchingTests(unittest.TestCase):
         self.assertEqual(dialog._vmin_edit.text(), "0.1")
         self.assertEqual(dialog._vmax_edit.text(), "0.9")
 
+    def test_browse_file_filter_includes_supported_archives(self) -> None:
+        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog._dir_edit = _LineEdit("/tmp")
+        dialog._load_prediction_dir = lambda: None
+        dialog._raise_after_native_dialog = lambda: (_ for _ in ()).throw(
+            AssertionError("Open dialog should return a path")
+        )
+        captured = {}
+
+        def get_open_file_name(*args):
+            captured["title"] = args[1]
+            captured["filter"] = args[3]
+            return ("/tmp/archive.tar.gz", "")
+
+        old_dialog = getattr(_PYMOL.Qt.QtWidgets, "QFileDialog", None)
+        _PYMOL.Qt.QtWidgets.QFileDialog = types.SimpleNamespace(
+            getOpenFileName=get_open_file_name
+        )
+        try:
+            dialog._browse_file()
+        finally:
+            if old_dialog is None:
+                delattr(_PYMOL.Qt.QtWidgets, "QFileDialog")
+            else:
+                _PYMOL.Qt.QtWidgets.QFileDialog = old_dialog
+
+        self.assertEqual(dialog._dir_edit.text(), "/tmp/archive.tar.gz")
+        self.assertIn("archive", captured["title"])
+        self.assertEqual(captured["filter"], PREDICTION_FILE_FILTER)
+        self.assertIn("*.tar", captured["filter"])
+        self.assertIn("*.tar.gz", captured["filter"])
+        self.assertIn("*.tgz", captured["filter"])
+
     def test_restore_target_selects_only_present_pymol_object(self) -> None:
         dialog = self._session_dialog()
         dialog._pending_session_restore.target_name = "target_model_1"
@@ -839,6 +874,96 @@ class GuiModelSwitchingTests(unittest.TestCase):
         self.assertEqual(discovery.scanned, [candidate])
         self.assertEqual(dialog._model_combo.currentData(), 0)
         self.assertEqual(dialog._dir_edit.text(), str(root / "target"))
+
+    def test_load_prediction_dir_keeps_archive_input_path_in_text_field(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            archive = root / "archive.tar.gz"
+            archive.write_text("archive")
+            extracted = root / "foldqc_archive_x" / "archive" / "prediction"
+            files = _SessionPredictionFiles(extracted, ranks=(0,))
+            candidate = _candidate("prediction", provider="boltz_api", path=extracted)
+            discovery = _Discovery(
+                [candidate], [(candidate, files)], input_path=archive
+            )
+            dialog = self._session_dialog()
+            dialog._dir_edit.setText(str(archive))
+            dialog._choose_prediction_candidate = lambda _candidates: (
+                _ for _ in ()
+            ).throw(AssertionError("Chooser should not be shown for one candidate"))
+            _PYMOL.cmd = _Cmd()
+
+            with (
+                mock.patch(
+                    "FoldQC.loader.discover_prediction_candidates",
+                    return_value=discovery,
+                ),
+                mock.patch(
+                    "FoldQC.loader.load_prediction_data",
+                    return_value=types.SimpleNamespace(
+                        provider="boltz_api",
+                        rank=0,
+                        structure_path=files.structure_path(0),
+                        structure_plddt=np.array([0.8], dtype=np.float32),
+                        plddt=None,
+                        confidence=None,
+                        summary_confidence=None,
+                        pae=None,
+                        pde=None,
+                        contact_probs=None,
+                    ),
+                ),
+            ):
+                dialog._load_prediction_dir()
+
+        self.assertIs(dialog._pred_files, files)
+        self.assertEqual(discovery.scanned, [candidate])
+        self.assertEqual(dialog._dir_edit.text(), str(archive))
+
+    def test_load_prediction_dir_keeps_single_structure_input_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            structure = root / "model.cif"
+            structure.write_text("data")
+            files = _SessionPredictionFiles(root, ranks=(0,))
+            candidate = _candidate(
+                "model.cif", provider="structure_only", path=structure
+            )
+            discovery = _Discovery(
+                [candidate],
+                [(candidate, files)],
+                input_path=structure,
+            )
+            dialog = self._session_dialog()
+            dialog._dir_edit.setText(str(structure))
+            _PYMOL.cmd = _Cmd()
+
+            with (
+                mock.patch(
+                    "FoldQC.loader.discover_prediction_candidates",
+                    return_value=discovery,
+                ),
+                mock.patch(
+                    "FoldQC.loader.load_prediction_data",
+                    return_value=types.SimpleNamespace(
+                        provider="structure_only",
+                        rank=0,
+                        structure_path=files.structure_path(0),
+                        structure_plddt=np.array([0.8], dtype=np.float32),
+                        plddt=None,
+                        confidence=None,
+                        summary_confidence=None,
+                        pae=None,
+                        pde=None,
+                        contact_probs=None,
+                    ),
+                ),
+            ):
+                dialog._load_prediction_dir()
+
+        self.assertIs(dialog._pred_files, files)
+        self.assertEqual(discovery.scanned, [candidate])
+        self.assertEqual(dialog._dir_edit.text(), str(structure))
 
     def test_load_prediction_dir_multiple_candidates_loads_selected_candidate(
         self,

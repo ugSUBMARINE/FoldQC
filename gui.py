@@ -36,6 +36,9 @@ from .compat import (
 from .palettes import iter_gui_palettes
 
 APP_TITLE = "FoldQC"
+PREDICTION_FILE_FILTER = (
+    "Prediction files (*.cif *.pdb *.zip *.tar *.tar.gz *.tgz);;All files (*)"
+)
 
 
 @dataclass
@@ -125,17 +128,17 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
         dir_group = QtWidgets.QGroupBox("Prediction output or structure")
         dir_layout = QtWidgets.QHBoxLayout(dir_group)
         self._dir_edit = QtWidgets.QLineEdit()
-        self._dir_edit.setPlaceholderText("Output folder, .zip, .cif, or .pdb file")
+        self._dir_edit.setPlaceholderText("Output folder, archive, .cif, or .pdb file")
         self._dir_edit.setToolTip(
             "Path to a Boltz, AlphaFold 3, AlphaFold 3 Server, or Chai-1 "
-            "Discovery, or Protenix output folder, prediction zip, or single "
+            "Discovery, or Protenix output folder, prediction archive, or single "
             "CIF/PDB structure file. Press Return to load."
         )
         self._dir_btn = QtWidgets.QPushButton("Folder\u2026")
         self._dir_btn.setToolTip("Choose a prediction output folder to load.")
         self._file_btn = QtWidgets.QPushButton("File\u2026")
         self._file_btn.setToolTip(
-            "Choose a prediction zip or single CIF/PDB file to load."
+            "Choose a prediction archive or single CIF/PDB file to load."
         )
         self._disable_default_button(self._dir_btn)
         self._disable_default_button(self._file_btn)
@@ -558,12 +561,12 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
             self._raise_after_native_dialog()
 
     def _browse_file(self) -> None:
-        """Select a single CIF/PDB structure file or prediction zip archive."""
+        """Select a single CIF/PDB structure file or prediction archive."""
         result = QtWidgets.QFileDialog.getOpenFileName(
             self,
-            "Select predicted structure file or prediction zip",
+            "Select predicted structure file or prediction archive",
             self._dir_edit.text() or str(Path.home()),
-            "Prediction files (*.cif *.pdb *.zip);;All files (*)",
+            PREDICTION_FILE_FILTER,
         )
         path = result[0] if isinstance(result, tuple) else result
         if path:
@@ -598,7 +601,9 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
                 if candidate is None:
                     return
                 self._pred_files = discovery.scan(candidate)
-                self._dir_edit.setText(str(candidate.path))
+                self._dir_edit.setText(
+                    str(self._session_path_for_loaded_candidate(discovery, candidate))
+                )
             except Exception as exc:
                 QtWidgets.QMessageBox.warning(self, APP_TITLE, str(exc))
                 return
@@ -623,6 +628,15 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
             self._on_model_changed()
         finally:
             self._loading_prediction = False
+
+    def _session_path_for_loaded_candidate(self, discovery, candidate) -> Path:
+        """Return the path to show/save after loading one discovery candidate."""
+        input_path = getattr(discovery, "input_path", None)
+        if input_path is not None:
+            input_path = Path(input_path)
+            if input_path.is_file():
+                return input_path
+        return Path(candidate.path)
 
     def _choose_prediction_candidate(self, candidates):
         """Let the user pick one prediction directory from multiple candidates."""

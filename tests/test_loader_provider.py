@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import io
 import json
 import sys
+import tarfile
 import tempfile
 import unittest
 import zipfile
@@ -54,6 +56,33 @@ def _write_protenix_job(root: Path) -> None:
         predictions / f"{root.name}_summary_confidence_sample_0.json",
         {"ranking_score": 1.0},
     )
+
+
+def _tar_write_mode(path: Path) -> str:
+    return "w:gz" if path.name.endswith((".tar.gz", ".tgz")) else "w"
+
+
+def _add_tar_text(tf: tarfile.TarFile, name: str, text: str) -> None:
+    data = text.encode()
+    info = tarfile.TarInfo(name)
+    info.size = len(data)
+    tf.addfile(info, io.BytesIO(data))
+
+
+def _add_tar_json(tf: tarfile.TarFile, name: str, payload: dict) -> None:
+    _add_tar_text(tf, name, json.dumps(payload))
+
+
+def _add_tar_bytes(tf: tarfile.TarFile, name: str, data: bytes) -> None:
+    info = tarfile.TarInfo(name)
+    info.size = len(data)
+    tf.addfile(info, io.BytesIO(data))
+
+
+def _npz_bytes(**arrays) -> bytes:
+    buffer = io.BytesIO()
+    np.savez(buffer, **arrays)
+    return buffer.getvalue()
 
 
 class LoaderProviderTests(unittest.TestCase):
@@ -649,6 +678,77 @@ class LoaderProviderTests(unittest.TestCase):
         np.testing.assert_allclose(data.plddt, np.array([0.9, 0.4], dtype=np.float32))
         np.testing.assert_allclose(data.pae, np.array([[0.0, 1.0], [2.0, 0.0]]))
 
+    def test_boltz_api_tar_gz_scans_and_loads(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive = Path(tmp) / "archive.tar.gz"
+            with tarfile.open(archive, _tar_write_mode(archive)) as tf:
+                _add_tar_text(
+                    tf,
+                    "prediction/sample_0_predicted_structure.cif",
+                    CIF_TEXT,
+                )
+                _add_tar_bytes(
+                    tf,
+                    "prediction/sample_0_pae.npz",
+                    _npz_bytes(pae=np.array([[0.0, 1.0], [1.0, 0.0]])),
+                )
+                _add_tar_json(
+                    tf,
+                    "prediction/metrics.json",
+                    {
+                        "all_sample_results": [
+                            {"metrics": {"structure_confidence": 0.91, "ptm": 0.8}}
+                        ]
+                    },
+                )
+
+            files = scan_prediction_path(archive)
+            data = load_prediction_data(files, rank=0, load_pae=True)
+
+        self.assertEqual(files.provider, "boltz_api")
+        self.assertEqual(files.input_path.name, "archive.tar.gz")
+        self.assertEqual(files.name, "prediction")
+        self.assertEqual(files.pred_dir.name, "prediction")
+        np.testing.assert_allclose(data.pae, np.array([[0.0, 1.0], [1.0, 0.0]]))
+        self.assertEqual(data.confidence["confidence_score"], 0.91)
+
+    def test_tgz_prediction_archive_scans(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive = Path(tmp) / "server_job.tgz"
+            with tarfile.open(archive, _tar_write_mode(archive)) as tf:
+                _add_tar_text(tf, "server_job/server_job_model_0.cif", CIF_TEXT)
+                _add_tar_json(
+                    tf,
+                    "server_job/server_job_summary_confidences_0.json",
+                    {"ranking_score": 1.0},
+                )
+                _add_tar_json(tf, "server_job/server_job_full_data_0.json", {})
+
+            files = scan_prediction_path(archive)
+
+        self.assertEqual(files.provider, "af3_server")
+        self.assertEqual(files.input_path.name, "server_job.tgz")
+        self.assertEqual(files.pred_dir.name, "server_job")
+
+    def test_plain_tar_prediction_archive_scans(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive = Path(tmp) / "server_job.tar"
+            with tarfile.open(archive, _tar_write_mode(archive)) as tf:
+                _add_tar_text(tf, "server_job_model_0.cif", CIF_TEXT)
+                _add_tar_json(
+                    tf,
+                    "server_job_summary_confidences_0.json",
+                    {"ranking_score": 1.0},
+                )
+                _add_tar_json(tf, "server_job_full_data_0.json", {})
+
+            files = scan_prediction_path(archive)
+
+        self.assertEqual(files.provider, "af3_server")
+        self.assertEqual(files.input_path.name, "server_job.tar")
+        self.assertEqual(files.name, "server_job")
+        self.assertEqual(files.models[0].object_name, "server_job_model_0")
+
     def test_wrapped_prediction_folder_scans_child_provider_dir(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             wrapper = Path(tmp) / "download"
@@ -761,6 +861,84 @@ class LoaderProviderTests(unittest.TestCase):
             self.assertIsNotNone(files._temporary_directory)
             self.assertIsNone(discovery._temporary_directory)
             self.assertTrue(structure_path.exists())
+
+    def test_discover_multiple_prediction_tar_transfers_extraction_lifetime(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive = Path(tmp) / "jobs.tar"
+            with tarfile.open(archive, _tar_write_mode(archive)) as tf:
+                for job in ["b_job", "a_job"]:
+                    _add_tar_text(tf, f"{job}/{job}_model_0.cif", CIF_TEXT)
+                    _add_tar_json(
+                        tf,
+                        f"{job}/{job}_summary_confidences_0.json",
+                        {"ranking_score": 1.0},
+                    )
+                    _add_tar_json(tf, f"{job}/{job}_full_data_0.json", {})
+
+            discovery = discover_prediction_candidates(archive)
+            files = discovery.scan(discovery.candidates[0])
+            structure_path = files.structure_path(0)
+
+            self.assertEqual(
+                [c.relative_path for c in discovery.candidates],
+                ["a_job", "b_job"],
+            )
+            self.assertIsNotNone(files._temporary_directory)
+            self.assertIsNone(discovery._temporary_directory)
+            self.assertTrue(structure_path.exists())
+
+    def test_invalid_tar_archive_reports_clear_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive = Path(tmp) / "invalid.tar"
+            archive.write_text("not a tar archive")
+
+            with self.assertRaisesRegex(ValueError, "Invalid archive"):
+                scan_prediction_path(archive)
+
+    def test_tar_archive_rejects_unsafe_paths(self) -> None:
+        unsafe_names = [
+            "../evil.cif",
+            "/evil.cif",
+            "C:/evil.cif",
+            r"\\server\share\evil.cif",
+        ]
+        for unsafe_name in unsafe_names:
+            with self.subTest(unsafe_name=unsafe_name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    archive = Path(tmp) / "unsafe.tar"
+                    with tarfile.open(archive, _tar_write_mode(archive)) as tf:
+                        _add_tar_text(tf, unsafe_name, CIF_TEXT)
+
+                    with self.assertRaisesRegex(ValueError, "Unsafe path"):
+                        scan_prediction_path(archive)
+
+    def test_tar_archive_rejects_links_and_special_members(self) -> None:
+        unsafe_members = [
+            ("link", tarfile.SYMTYPE, "prediction/sample_0_predicted_structure.cif"),
+            (
+                "hardlink",
+                tarfile.LNKTYPE,
+                "prediction/sample_0_predicted_structure.cif",
+            ),
+            ("fifo", tarfile.FIFOTYPE, ""),
+        ]
+        for member_name, member_type, linkname in unsafe_members:
+            with self.subTest(member_name=member_name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    archive = Path(tmp) / "unsafe.tar"
+                    with tarfile.open(archive, _tar_write_mode(archive)) as tf:
+                        info = tarfile.TarInfo(member_name)
+                        info.type = member_type
+                        info.linkname = linkname
+                        tf.addfile(info)
+
+                    with self.assertRaisesRegex(
+                        ValueError,
+                        "Refusing to extract link|Unsupported member type",
+                    ):
+                        scan_prediction_path(archive)
 
     def test_flat_prediction_zip_uses_zip_stem_as_provider_directory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

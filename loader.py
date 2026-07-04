@@ -2,14 +2,14 @@
 Loader
 ======
 Discover and read prediction outputs from Boltz-2, Boltz Lab, Boltz API,
-AlphaFold 3, AlphaFold Server, Chai-1 Discovery, Protenix, a zipped prediction
-output, or a single predicted structure file.
+AlphaFold 3, AlphaFold Server, Chai-1 Discovery, Protenix, an archived
+prediction output, or a single predicted structure file.
 
 The public API remains intentionally small:
 
 ``scan_prediction_path(path)``
-    Accepts an output directory, a zip archive containing an output directory,
-    or a single CIF/PDB file and returns a provider-aware
+    Accepts an output directory, an archive containing an output directory, or
+    a single CIF/PDB file and returns a provider-aware
     :class:`PredictionFiles`.
 
 ``scan_prediction_dir(path)``
@@ -26,16 +26,17 @@ import json
 import re
 import shutil
 import stat
+import tarfile
 import tempfile
 import zipfile
 from dataclasses import dataclass, field
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 import numpy as np
 
 STRUCTURE_SUFFIXES = {".cif", ".pdb"}
-ARCHIVE_SUFFIXES = {".zip"}
+ARCHIVE_EXTENSIONS = (".tar.gz", ".zip", ".tgz", ".tar")
 PROVIDER_LABELS = {
     "boltz": "Boltz",
     "boltz_lab": "Boltz Lab",
@@ -288,7 +289,7 @@ class PredictionDiscovery:
 
 
 def scan_prediction_path(path: str | Path) -> PredictionFiles:
-    """Detect and scan a prediction output directory, zip, or structure file."""
+    """Detect and scan a prediction output directory, archive, or structure."""
     discovery = discover_prediction_candidates(path)
     return discovery.scan(discovery.candidates[0])
 
@@ -303,11 +304,11 @@ def scan_prediction_dir(path: str | Path) -> PredictionFiles:
 
 
 def discover_prediction_candidates(path: str | Path) -> PredictionDiscovery:
-    """Find loadable prediction candidates below a folder, zip, or structure file."""
+    """Find loadable prediction candidates below a folder, archive, or structure."""
     source = Path(path).expanduser().resolve()
     if source.is_file():
-        if source.suffix.lower() in ARCHIVE_SUFFIXES:
-            return _discover_zip_file(source)
+        if _archive_kind(source) is not None:
+            return _discover_archive_file(source)
         if source.suffix.lower() in STRUCTURE_SUFFIXES:
             return PredictionDiscovery(
                 input_path=source,
@@ -320,7 +321,7 @@ def discover_prediction_candidates(path: str | Path) -> PredictionDiscovery:
                     ),
                 ),
             )
-        raise ValueError(f"Unsupported structure file format: {source.suffix}")
+        raise ValueError(f"Unsupported file format: {source.name}")
     if source.is_dir():
         candidates = _prediction_candidates_in_tree(source)
         if not candidates:
@@ -444,7 +445,7 @@ def _provider_label(provider: str) -> str:
 
 
 class _TemporaryExtraction:
-    """Keep extracted zip contents alive while PredictionFiles is referenced."""
+    """Keep extracted archive contents alive while PredictionFiles is referenced."""
 
     def __init__(self, root: Path) -> None:
         self.root = root
@@ -531,22 +532,48 @@ def _looks_like_protenix(pred_dir: Path) -> bool:
 
 
 def _scan_zip_file(path: Path) -> PredictionFiles:
-    discovery = _discover_zip_file(path)
+    discovery = _discover_archive_file(path)
     return discovery.scan(discovery.candidates[0])
 
 
-def _discover_zip_file(path: Path) -> PredictionDiscovery:
-    if not zipfile.is_zipfile(path):
-        raise ValueError(f"Invalid zip archive: {path}")
+def _archive_kind(path: Path) -> str | None:
+    name = path.name.lower()
+    if name.endswith(".zip"):
+        return "zip"
+    if name.endswith((".tar", ".tar.gz", ".tgz")):
+        return "tar"
+    return None
 
-    temp_root = Path(tempfile.mkdtemp(prefix=f"foldqc_{_safe_object_name(path.stem)}_"))
-    extract_root = temp_root / _safe_object_name(path.stem)
+
+def _archive_base_name(path: Path) -> str:
+    name = path.name
+    for suffix in ARCHIVE_EXTENSIONS:
+        if name.lower().endswith(suffix):
+            return name[: -len(suffix)]
+    return path.stem
+
+
+def _discover_archive_file(path: Path) -> PredictionDiscovery:
+    kind = _archive_kind(path)
+    if kind == "zip" and not zipfile.is_zipfile(path):
+        raise ValueError(f"Invalid archive: {path}")
+    if kind == "tar" and not tarfile.is_tarfile(path):
+        raise ValueError(f"Invalid archive: {path}")
+    if kind is None:
+        raise ValueError(f"Unsupported archive format: {path}")
+
+    archive_name = _safe_object_name(_archive_base_name(path))
+    temp_root = Path(tempfile.mkdtemp(prefix=f"foldqc_{archive_name}_"))
+    extract_root = temp_root / archive_name
     try:
-        _extract_zip_safely(path, extract_root)
+        if kind == "zip":
+            _extract_zip_safely(path, extract_root)
+        else:
+            _extract_tar_safely(path, extract_root)
         candidates = _prediction_candidates_in_tree(extract_root)
         if not candidates:
             raise ValueError(
-                "Could not recognize prediction output format inside zip archive.\n"
+                "Could not recognize prediction output format inside archive.\n"
                 "Expected the archive to contain a Boltz, Boltz Lab, Boltz API, "
                 "AlphaFold 3, AlphaFold 3 Server, Chai-1 Discovery, or Protenix "
                 "output folder."
@@ -560,6 +587,10 @@ def _discover_zip_file(path: Path) -> PredictionDiscovery:
         candidates=tuple(candidates),
         _temporary_directory=_TemporaryExtraction(temp_root),
     )
+
+
+def _discover_zip_file(path: Path) -> PredictionDiscovery:
+    return _discover_archive_file(path)
 
 
 def _extract_zip_safely(zip_path: Path, destination: Path) -> None:
@@ -596,10 +627,67 @@ def _extract_zip_safely(zip_path: Path, destination: Path) -> None:
 def _safe_zip_member_path(member: zipfile.ZipInfo) -> Path | None:
     raw_name = member.filename.replace("\\", "/")
     path = PurePosixPath(raw_name)
+    windows_path = PureWindowsPath(raw_name)
     if not path.parts:
         return None
-    if path.is_absolute() or any(part == ".." for part in path.parts):
+    if (
+        path.is_absolute()
+        or windows_path.is_absolute()
+        or windows_path.drive
+        or any(part == ".." for part in path.parts)
+    ):
         raise ValueError(f"Unsafe path in zip archive: {member.filename}")
+    parts = [part for part in path.parts if part not in {"", "."}]
+    if not parts:
+        return None
+    return Path(*parts)
+
+
+def _extract_tar_safely(tar_path: Path, destination: Path) -> None:
+    destination.mkdir(parents=True, exist_ok=False)
+    destination_root = destination.resolve()
+    with tarfile.open(tar_path, mode="r:*") as tf:
+        for member in tf.getmembers():
+            member_path = _safe_tar_member_path(member)
+            if member_path is None:
+                continue
+            target = (destination / member_path).resolve()
+            try:
+                target.relative_to(destination_root)
+            except ValueError as exc:
+                raise ValueError(f"Unsafe path in tar archive: {member.name}") from exc
+
+            if member.isdir():
+                target.mkdir(parents=True, exist_ok=True)
+                continue
+            if not member.isfile():
+                raise ValueError(
+                    f"Unsupported member type in tar archive: {member.name}"
+                )
+
+            source = tf.extractfile(member)
+            if source is None:
+                raise ValueError(f"Could not extract tar member: {member.name}")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with source, target.open("wb") as dst:
+                shutil.copyfileobj(source, dst)
+
+
+def _safe_tar_member_path(member: tarfile.TarInfo) -> Path | None:
+    if member.issym() or member.islnk():
+        raise ValueError(f"Refusing to extract link from tar archive: {member.name}")
+    raw_name = member.name.replace("\\", "/")
+    path = PurePosixPath(raw_name)
+    windows_path = PureWindowsPath(raw_name)
+    if not path.parts:
+        return None
+    if (
+        path.is_absolute()
+        or windows_path.is_absolute()
+        or windows_path.drive
+        or any(part == ".." for part in path.parts)
+    ):
+        raise ValueError(f"Unsafe path in tar archive: {member.name}")
     parts = [part for part in path.parts if part not in {"", "."}]
     if not parts:
         return None
@@ -610,7 +698,7 @@ def _find_prediction_dir_in_extract(extract_root: Path) -> Path:
     return _find_prediction_dir_in_tree(
         extract_root,
         not_found_message=(
-            "Could not recognize prediction output format inside zip archive.\n"
+            "Could not recognize prediction output format inside archive.\n"
             "Expected the archive to contain a Boltz, Boltz Lab, Boltz API, "
             "AlphaFold 3, AlphaFold 3 Server, Chai-1 Discovery, or Protenix "
             "output folder."

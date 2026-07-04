@@ -3,8 +3,9 @@
 FoldQC is a PyMOL plugin for visualizing confidence metrics from predicted
 protein structures. It supports Boltz (local) prediction folders, Boltz Lab and Boltz
 API outputs, AlphaFold 3 local and server outputs, Chai-1 Discovery and
-Protenix prediction folders, and single CIF/PDB files with pLDDT values stored
-in B-factors.
+Protenix prediction folders, zip/tar archives containing one supported
+prediction folder, and single CIF/PDB files with pLDDT values stored in
+B-factors.
 
 FoldQC can color structures by pLDDT, PAE, PDE, contact probability, chain
 ipTM, and ensemble metrics. It also provides line plots, matrix plots, PAE/PDE
@@ -51,7 +52,7 @@ Development of FoldQC has included coding assistance from OpenAI's Codex.
 ## Usage
 
 1. Open FoldQC from the PyMOL plugin menu.
-2. Choose a prediction folder or a single `.cif`/`.pdb` structure file.
+2. Choose a prediction folder, archive, or single `.cif`/`.pdb` structure file.
 3. Select the model, target object, metric, and color palette.
 4. Click the paint/color action to write the metric into B-factors and color the
    structure in PyMOL.
