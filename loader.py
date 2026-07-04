@@ -1,9 +1,9 @@
 """
 Loader
 ======
-Discover and read prediction outputs from Boltz-2, AlphaFold 3,
-AlphaFold Server, Chai-1 Discovery, Protenix, a zipped prediction output, or a
-single predicted structure file.
+Discover and read prediction outputs from Boltz-2, Boltz Lab, Boltz API,
+AlphaFold 3, AlphaFold Server, Chai-1 Discovery, Protenix, a zipped prediction
+output, or a single predicted structure file.
 
 The public API remains intentionally small:
 
@@ -38,6 +38,8 @@ STRUCTURE_SUFFIXES = {".cif", ".pdb"}
 ARCHIVE_SUFFIXES = {".zip"}
 PROVIDER_LABELS = {
     "boltz": "Boltz",
+    "boltz_lab": "Boltz Lab",
+    "boltz_api": "Boltz API",
     "alphafold3": "AlphaFold 3",
     "af3_server": "AlphaFold 3 Server",
     "chai1": "Chai-1 Discovery",
@@ -325,6 +327,7 @@ def discover_prediction_candidates(path: str | Path) -> PredictionDiscovery:
             raise ValueError(
                 f"Could not recognize prediction output format in {source}.\n"
                 "Expected the folder to contain a Boltz prediction folder, "
+                "a Boltz Lab output folder, a Boltz API output folder, "
                 "an AlphaFold 3 output folder, an AlphaFold 3 Server output folder, "
                 "a Chai-1 Discovery output folder, or a Protenix output folder; "
                 "or select a single .cif/.pdb structure file."
@@ -367,7 +370,7 @@ def load_prediction_data(
         data.summary_confidence = _load_json(model.summary_path)
         data.confidence = _normalise_confidence(data.summary_confidence)
 
-    if pred_files.provider == "boltz":
+    if pred_files.provider in {"boltz", "boltz_lab", "boltz_api"}:
         _load_boltz_model_data(
             pred_files,
             model,
@@ -427,6 +430,10 @@ def _prediction_dir_provider(pred_dir: Path) -> str | None:
         return "chai1"
     if _looks_like_protenix(pred_dir):
         return "protenix"
+    if _looks_like_boltz_api(pred_dir):
+        return "boltz_api"
+    if _looks_like_boltz_lab(pred_dir):
+        return "boltz_lab"
     if _looks_like_boltz(pred_dir):
         return "boltz"
     return None
@@ -455,6 +462,22 @@ def _looks_like_boltz(pred_dir: Path) -> bool:
         list(pred_dir.glob(f"{name}_model_*.cif"))
         or list(pred_dir.glob(f"{name}_model_*.pdb"))
     )
+
+
+def _looks_like_boltz_lab(pred_dir: Path) -> bool:
+    metrics_path = pred_dir / "metrics.json"
+    return metrics_path.exists() and bool(_boltz_sample_structure_paths(pred_dir))
+
+
+def _looks_like_boltz_api(pred_dir: Path) -> bool:
+    prediction_dir = _boltz_api_prediction_dir(pred_dir)
+    if prediction_dir is None:
+        return False
+    metrics = _load_optional_json(prediction_dir / "metrics.json")
+    if _is_boltz_api_metrics(metrics):
+        return True
+    run = _load_optional_json(pred_dir / "run.json")
+    return _is_boltz_api_output(run.get("output") if isinstance(run, dict) else None)
 
 
 def _looks_like_af3(pred_dir: Path) -> bool:
@@ -524,8 +547,9 @@ def _discover_zip_file(path: Path) -> PredictionDiscovery:
         if not candidates:
             raise ValueError(
                 "Could not recognize prediction output format inside zip archive.\n"
-                "Expected the archive to contain a Boltz, AlphaFold 3, "
-                "AlphaFold 3 Server, Chai-1 Discovery, or Protenix output folder."
+                "Expected the archive to contain a Boltz, Boltz Lab, Boltz API, "
+                "AlphaFold 3, AlphaFold 3 Server, Chai-1 Discovery, or Protenix "
+                "output folder."
             )
     except Exception:
         shutil.rmtree(temp_root, ignore_errors=True)
@@ -587,8 +611,9 @@ def _find_prediction_dir_in_extract(extract_root: Path) -> Path:
         extract_root,
         not_found_message=(
             "Could not recognize prediction output format inside zip archive.\n"
-            "Expected the archive to contain a Boltz, AlphaFold 3, "
-            "AlphaFold 3 Server, Chai-1 Discovery, or Protenix output folder."
+            "Expected the archive to contain a Boltz, Boltz Lab, Boltz API, "
+            "AlphaFold 3, AlphaFold 3 Server, Chai-1 Discovery, or Protenix "
+            "output folder."
         ),
     )
 
@@ -660,6 +685,8 @@ def _is_provider_internal_candidate(
         return _has_ancestor_candidate(candidate, candidates, provider="protenix")
     if candidate.provider == "protenix" and candidate.path.name.startswith("seed_"):
         return _has_ancestor_candidate(candidate, candidates, provider="protenix")
+    if candidate.provider == "boltz_api" and candidate.path.name == "prediction":
+        return _has_ancestor_candidate(candidate, candidates, provider="boltz_api")
     return False
 
 
@@ -713,6 +740,10 @@ def _scan_prediction_dir_exact(pred_dir: Path, *, input_path: Path) -> Predictio
         files = _scan_chai_dir(pred_dir)
     elif provider == "protenix":
         files = _scan_protenix_dir(pred_dir)
+    elif provider == "boltz_api":
+        files = _scan_boltz_api_dir(pred_dir)
+    elif provider == "boltz_lab":
+        files = _scan_boltz_lab_dir(pred_dir)
     elif provider == "boltz":
         files = _scan_boltz_dir(pred_dir)
     else:
@@ -817,6 +848,121 @@ def _scan_boltz_dir(pred_dir: Path) -> PredictionFiles:
     if embeddings_path.exists():
         files.embeddings_file = embeddings_path
 
+    return files
+
+
+def _scan_boltz_lab_dir(pred_dir: Path) -> PredictionFiles:
+    candidates = _boltz_sample_candidates(pred_dir)
+    if not candidates:
+        raise ValueError(
+            f"No Boltz Lab prediction files found in {pred_dir}.\n"
+            "Expected files named like 'sample_<n>_predicted_structure.cif' "
+            "or '.pdb' with a metrics.json file."
+        )
+
+    metrics = _load_optional_json(pred_dir / "metrics.json")
+    sample_results = (
+        metrics.get("sample_results", {}) if isinstance(metrics, dict) else {}
+    )
+    if not isinstance(sample_results, dict):
+        sample_results = {}
+
+    name = pred_dir.name
+    files = PredictionFiles(
+        name=name,
+        pred_dir=pred_dir,
+        provider="boltz_lab",
+        input_path=pred_dir,
+        capabilities={"structure_plddt"},
+    )
+
+    for rank, item in enumerate(
+        sorted(candidates, key=lambda item: item["sample_index"])
+    ):
+        sample_index = int(item["sample_index"])
+        confidence = sample_results.get(f"sample_{sample_index}")
+        files.models.append(
+            ModelFiles(
+                rank=rank,
+                structure_path=item["structure_path"],
+                display_label=f"sample {sample_index}",
+                object_name=f"{_safe_object_name(name)}_model_{rank}",
+                pae_path=item["pae_path"],
+                metadata={
+                    "sample_index": sample_index,
+                    "confidence": confidence if isinstance(confidence, dict) else None,
+                },
+            )
+        )
+
+    if any(model.pae_path is not None for model in files.models):
+        files.capabilities.add("pae")
+    return files
+
+
+def _scan_boltz_api_dir(pred_dir: Path) -> PredictionFiles:
+    prediction_dir = _boltz_api_prediction_dir(pred_dir)
+    if prediction_dir is None:
+        raise ValueError(
+            f"No Boltz API prediction files found in {pred_dir}.\n"
+            "Expected a run root with 'outputs/files/prediction' or an extracted "
+            "'prediction' folder."
+        )
+
+    candidates = _boltz_sample_candidates(prediction_dir)
+    if not candidates:
+        raise ValueError(
+            f"No Boltz API prediction files found in {prediction_dir}.\n"
+            "Expected files named like 'sample_<n>_predicted_structure.cif' "
+            "or '.pdb'."
+        )
+
+    metrics_by_sample = _boltz_api_metrics_by_sample(pred_dir, prediction_dir)
+    for item in candidates:
+        sample_index = int(item["sample_index"])
+        item["confidence"] = metrics_by_sample.get(sample_index)
+        item["structure_confidence"] = _float_or_none(
+            (item["confidence"] or {}).get("structure_confidence")
+        )
+
+    candidates.sort(
+        key=lambda item: (
+            item["structure_confidence"] is None,
+            -float(item["structure_confidence"] or 0.0),
+            item["sample_index"],
+        )
+    )
+
+    name = pred_dir.name
+    files = PredictionFiles(
+        name=name,
+        pred_dir=pred_dir,
+        provider="boltz_api",
+        input_path=pred_dir,
+        capabilities={"structure_plddt"},
+    )
+
+    for rank, item in enumerate(candidates):
+        sample_index = int(item["sample_index"])
+        metadata = {
+            "sample_index": sample_index,
+            "confidence": item["confidence"],
+        }
+        if item["structure_confidence"] is not None:
+            metadata["structure_confidence"] = item["structure_confidence"]
+        files.models.append(
+            ModelFiles(
+                rank=rank,
+                structure_path=item["structure_path"],
+                display_label=f"rank {rank} - sample {sample_index}",
+                object_name=f"{_safe_object_name(name)}_model_{rank}",
+                pae_path=item["pae_path"],
+                metadata=metadata,
+            )
+        )
+
+    if any(model.pae_path is not None for model in files.models):
+        files.capabilities.add("pae")
     return files
 
 
@@ -1147,6 +1293,8 @@ def _load_boltz_model_data(
     if model.confidence_path is not None:
         confidence = _load_json(model.confidence_path)
         data.confidence = _normalise_confidence(confidence)
+    elif isinstance(model.metadata.get("confidence"), dict):
+        data.confidence = _normalise_confidence(model.metadata["confidence"])
 
     if pred_files.affinity_file is not None:
         data.affinity = _load_json(pred_files.affinity_file)
@@ -1387,6 +1535,92 @@ def _float_or_none(value) -> float | None:
         return None
 
 
+def _boltz_api_prediction_dir(pred_dir: Path) -> Path | None:
+    if _is_boltz_api_prediction_leaf(pred_dir):
+        return pred_dir
+    nested = pred_dir / "outputs" / "files" / "prediction"
+    if _is_boltz_api_prediction_leaf(nested):
+        return nested
+    return None
+
+
+def _is_boltz_api_prediction_leaf(pred_dir: Path) -> bool:
+    return (
+        pred_dir.is_dir()
+        and (pred_dir / "metrics.json").exists()
+        and bool(_boltz_sample_structure_paths(pred_dir))
+    )
+
+
+def _boltz_sample_structure_paths(pred_dir: Path) -> dict[int, Path]:
+    structures_by_sample: dict[int, Path] = {}
+    for suffix in (".pdb", ".cif"):
+        for path in pred_dir.glob(f"sample_*_predicted_structure{suffix}"):
+            sample_index = _parse_boltz_sample_structure_stem(path.stem)
+            if sample_index is not None:
+                structures_by_sample[sample_index] = path
+    return structures_by_sample
+
+
+def _parse_boltz_sample_structure_stem(stem: str) -> int | None:
+    match = re.fullmatch(r"sample_(\d+)_predicted_structure", stem)
+    return int(match.group(1)) if match else None
+
+
+def _boltz_sample_candidates(pred_dir: Path) -> list[dict[str, Any]]:
+    candidates = []
+    for sample_index, structure_path in _boltz_sample_structure_paths(pred_dir).items():
+        pae_path = pred_dir / f"sample_{sample_index}_pae.npz"
+        candidates.append(
+            {
+                "sample_index": sample_index,
+                "structure_path": structure_path,
+                "pae_path": pae_path if pae_path.exists() else None,
+            }
+        )
+    return sorted(candidates, key=lambda item: item["sample_index"])
+
+
+def _is_boltz_api_metrics(metrics: dict | None) -> bool:
+    if not isinstance(metrics, dict):
+        return False
+    return "all_sample_results" in metrics or "best_sample" in metrics
+
+
+def _is_boltz_api_output(output: dict | None) -> bool:
+    if not isinstance(output, dict):
+        return False
+    return "all_sample_results" in output or "best_sample" in output
+
+
+def _boltz_api_metrics_by_sample(
+    pred_dir: Path,
+    prediction_dir: Path,
+) -> dict[int, dict]:
+    metrics = _load_optional_json(prediction_dir / "metrics.json")
+    results = None
+    if isinstance(metrics, dict):
+        results = metrics.get("all_sample_results")
+
+    if not isinstance(results, list) or not results:
+        run = _load_optional_json(pred_dir / "run.json")
+        output = run.get("output") if isinstance(run, dict) else None
+        if isinstance(output, dict):
+            results = output.get("all_sample_results")
+
+    if not isinstance(results, list):
+        return {}
+
+    by_sample = {}
+    for sample_index, result in enumerate(results):
+        if not isinstance(result, dict):
+            continue
+        metrics_for_sample = result.get("metrics", result)
+        if isinstance(metrics_for_sample, dict):
+            by_sample[sample_index] = metrics_for_sample
+    return by_sample
+
+
 def _protenix_prediction_candidates(pred_dir: Path) -> list[dict[str, Any]]:
     candidates: list[dict[str, Any]] = []
     for predictions_dir in _protenix_prediction_dirs(pred_dir):
@@ -1488,6 +1722,9 @@ def _normalise_confidence(confidence: dict | None) -> dict | None:
         return None
     normalised = dict(confidence)
 
+    if "structure_confidence" in normalised and "confidence_score" not in normalised:
+        normalised["confidence_score"] = normalised["structure_confidence"]
+
     if "chain_ptm" in normalised and "chains_ptm" not in normalised:
         chain_ptm = normalised["chain_ptm"]
         if isinstance(chain_ptm, list):
@@ -1568,6 +1805,15 @@ def _load_json(path: Path | None) -> dict:
         return {}
     with path.open() as fh:
         return json.load(fh)
+
+
+def _load_optional_json(path: Path) -> dict | None:
+    if not path.exists():
+        return None
+    try:
+        return _load_json(path)
+    except (OSError, json.JSONDecodeError):
+        return None
 
 
 def _first(paths) -> Path | None:

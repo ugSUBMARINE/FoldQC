@@ -16,6 +16,8 @@ def provider_display_label(provider: str) -> str:
     """Return the user-facing provider label used in summaries."""
     return {
         "boltz": "Boltz-2",
+        "boltz_lab": "Boltz Lab",
+        "boltz_api": "Boltz API",
         "alphafold3": "AlphaFold 3",
         "af3_server": "AlphaFold 3 Server",
         "chai1": "Chai-1 Discovery",

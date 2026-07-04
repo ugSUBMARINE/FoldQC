@@ -1,9 +1,10 @@
 # FoldQC
 
 FoldQC is a PyMOL plugin for visualizing confidence metrics from predicted
-protein structures. It supports Boltz prediction folders, AlphaFold 3 local and
-server outputs, Chai-1 Discovery and Protenix prediction folders, and single
-CIF/PDB files with pLDDT values stored in B-factors.
+protein structures. It supports Boltz (local) prediction folders, Boltz Lab and Boltz
+API outputs, AlphaFold 3 local and server outputs, Chai-1 Discovery and
+Protenix prediction folders, and single CIF/PDB files with pLDDT values stored
+in B-factors.
 
 FoldQC can color structures by pLDDT, PAE, PDE, contact probability, chain
 ipTM, and ensemble metrics. It also provides line plots, matrix plots, PAE/PDE
@@ -88,7 +89,7 @@ Base columns:
 | Column | Meaning |
 | --- | --- |
 | `export_schema_version` | CSV schema version. Currently `1`. |
-| `provider` | Prediction provider, such as `boltz`, `alphafold3`, `af3_server`, `chai1`, `protenix`, or `structure_only`. |
+| `provider` | Prediction provider, such as `boltz`, `boltz_lab`, `boltz_api`, `alphafold3`, `af3_server`, `chai1`, `protenix`, or `structure_only`. |
 | `prediction_name` | Provider-scanned prediction name. |
 | `input_path` | Original selected folder, zip, CIF, or PDB path. |
 | `structure_path` | Structure file used for token mapping in this session. |

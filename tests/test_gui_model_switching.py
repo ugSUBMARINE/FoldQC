@@ -1594,6 +1594,42 @@ class GuiModelSwitchingTests(unittest.TestCase):
         )
         self.assertTrue(dialog._prop_combo.model().item(chain_row).flags() & enabled)
 
+    def test_chain_iptm_is_disabled_when_confidence_lacks_chain_scores(self) -> None:
+        enabled = _PYMOL.Qt.QtCore.Qt.ItemFlag.ItemIsEnabled
+        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog._pred_files = types.SimpleNamespace(
+            has_pae=False,
+            has_pde=False,
+            has_contact_probs=False,
+            has_plddt=False,
+            has_structure_plddt=True,
+            supports_ensemble=False,
+        )
+        dialog._pred_data = types.SimpleNamespace(
+            plddt=None,
+            structure_plddt=np.array([0.9], dtype=np.float32),
+            confidence={
+                "confidence_score": 0.91,
+                "chains_ptm": {},
+                "pair_chains_iptm": {},
+            },
+            summary_confidence=None,
+        )
+        dialog._prop_combo = _Combo(len(metrics.PROPERTIES), enabled)
+
+        dialog._update_property_availability()
+
+        chain_row = next(
+            row
+            for row, prop in enumerate(metrics.PROPERTIES)
+            if prop["key"] == "chain_iptm"
+        )
+        plddt_row = next(
+            row for row, prop in enumerate(metrics.PROPERTIES) if prop["key"] == "plddt"
+        )
+        self.assertFalse(dialog._prop_combo.model().item(chain_row).flags() & enabled)
+        self.assertTrue(dialog._prop_combo.model().item(plddt_row).flags() & enabled)
+
     def test_ensemble_properties_require_loaded_ensemble(self) -> None:
         enabled = _PYMOL.Qt.QtCore.Qt.ItemFlag.ItemIsEnabled
         dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)

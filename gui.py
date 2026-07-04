@@ -50,6 +50,35 @@ class _PlotTarget:
     members: list | None = None
 
 
+def _confidence_has_chain_iptm_metric_data(confidence) -> bool:
+    """Return true when confidence metadata can drive the Chain ipTM metric."""
+    if not isinstance(confidence, dict):
+        return False
+    for key in ("chains_iptm", "chain_iptm", "chains_ptm"):
+        if _score_table_has_values(confidence.get(key)):
+            return True
+    for key in ("pair_chains_iptm", "chain_pair_iptm"):
+        if _pair_score_table_has_values(confidence.get(key)):
+            return True
+    return False
+
+
+def _score_table_has_values(value) -> bool:
+    if isinstance(value, dict):
+        return bool(value)
+    if isinstance(value, list):
+        return bool(value)
+    return False
+
+
+def _pair_score_table_has_values(value) -> bool:
+    if isinstance(value, dict):
+        return any(_score_table_has_values(row) for row in value.values())
+    if isinstance(value, list):
+        return any(_score_table_has_values(row) for row in value)
+    return False
+
+
 # ---------------------------------------------------------------------------
 # Dialog
 # ---------------------------------------------------------------------------
@@ -846,6 +875,7 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
             getattr(self._pred_data, "confidence", None) is not None
             or getattr(self._pred_data, "summary_confidence", None) is not None
         )
+        has_chain_iptm = self._has_chain_iptm_metric_data()
         has_ensemble = bool(getattr(self, "_ensemble_members", None))
 
         model = self._prop_combo.model()
@@ -866,6 +896,8 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
                 available = False
             if prop.get("needs_confidence", False) and not has_confidence:
                 available = False
+            if prop["key"] == "chain_iptm" and not has_chain_iptm:
+                available = False
             if prop.get("ensemble_level", False) and not has_ensemble:
                 available = False
             item = model.item(combo_row)
@@ -875,6 +907,16 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
                     item.setFlags(flags | ItemIsEnabled)
                 else:
                     item.setFlags(flags & ~ItemIsEnabled)
+
+    def _has_chain_iptm_metric_data(self) -> bool:
+        """Return whether loaded confidence has data for the Chain ipTM metric."""
+        if self._pred_data is None:
+            return False
+        for attr in ("confidence", "summary_confidence"):
+            confidence = getattr(self._pred_data, attr, None)
+            if _confidence_has_chain_iptm_metric_data(confidence):
+                return True
+        return False
 
     def _select_first_available_property(self) -> None:
         """Move the property combo away from a disabled item after loading."""

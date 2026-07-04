@@ -351,3 +351,41 @@ def test_confidence_summary_boltz_without_confidence() -> None:
 
     assert "provider         : Boltz-2" in text
     assert "No confidence data loaded." in text
+
+
+def test_confidence_summary_boltz_lab_uses_boltz_metrics() -> None:
+    text = reports.format_confidence_summary(
+        types.SimpleNamespace(
+            provider="boltz_lab",
+            confidence={
+                "confidence_score": 0.91,
+                "ptm": 0.82,
+                "iptm": 0.73,
+                "complex_pde": 1.2,
+            },
+            affinity=None,
+        )
+    )
+
+    assert "provider         : Boltz Lab" in text
+    assert "confidence_score : 0.9100" in text
+    assert "complex_pde      : 1.2000 Å" in text
+
+
+def test_confidence_summary_boltz_api_uses_boltz_metrics() -> None:
+    text = reports.format_confidence_summary(
+        types.SimpleNamespace(
+            provider="boltz_api",
+            confidence={
+                "confidence_score": 0.95,
+                "ptm": 0.92,
+                "iptm": 0.83,
+                "complex_ipde": 1.8,
+            },
+            affinity=None,
+        )
+    )
+
+    assert "provider         : Boltz API" in text
+    assert "confidence_score : 0.9500" in text
+    assert "complex_ipde     : 1.8000 Å" in text

@@ -90,6 +90,159 @@ class LoaderProviderTests(unittest.TestCase):
         self.assertTrue(files.has_plddt)
         np.testing.assert_allclose(data.plddt, np.array([0.7, 0.6]))
 
+    def test_boltz_lab_directory_scans_sample_layout(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            pred_dir = Path(tmp) / "lab_job"
+            pred_dir.mkdir()
+            (pred_dir / "sample_0_predicted_structure.cif").write_text(CIF_TEXT)
+            np.savez(pred_dir / "sample_0_pae.npz", pae=np.array([[0.0, 1.0]]))
+            _write_json(
+                pred_dir / "metrics.json",
+                {
+                    "sample_results": {
+                        "sample_0": {
+                            "structure_confidence": 0.91,
+                            "ptm": 0.82,
+                            "complex_pde": 1.2,
+                        }
+                    }
+                },
+            )
+
+            files = scan_prediction_path(pred_dir)
+            data = load_prediction_data(files, rank=0, load_pae=True)
+
+        self.assertEqual(files.provider, "boltz_lab")
+        self.assertEqual(files.provider_label, "Boltz Lab")
+        self.assertEqual(files.name, "lab_job")
+        self.assertEqual(files.n_models, 1)
+        self.assertTrue(files.has_pae)
+        self.assertEqual(files.models[0].display_label, "sample 0")
+        self.assertEqual(files.models[0].metadata["sample_index"], 0)
+        self.assertEqual(
+            files.structure_path(0).name, "sample_0_predicted_structure.cif"
+        )
+        np.testing.assert_allclose(data.pae, np.array([[0.0, 1.0]]))
+        self.assertEqual(data.confidence["confidence_score"], 0.91)
+        self.assertEqual(data.confidence["structure_confidence"], 0.91)
+
+    def test_boltz_api_run_root_scans_samples_best_first(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "api_job"
+            prediction = root / "outputs" / "files" / "prediction"
+            prediction.mkdir(parents=True)
+            (root / ".boltz-run.json").write_text("{}")
+            (prediction / "sample_0_predicted_structure.cif").write_text(CIF_TEXT)
+            (prediction / "sample_1_predicted_structure.cif").write_text(CIF_TEXT)
+            np.savez(prediction / "sample_1_pae.npz", pae=np.array([[0.0, 2.0]]))
+            results = [
+                {"metrics": {"structure_confidence": 0.25, "ptm": 0.7}},
+                {"metrics": {"structure_confidence": 0.95, "ptm": 0.9}},
+            ]
+            _write_json(
+                prediction / "metrics.json",
+                {"best_sample": results[1], "all_sample_results": results},
+            )
+            _write_json(root / "run.json", {"output": {"all_sample_results": results}})
+
+            files = scan_prediction_path(root)
+            data = load_prediction_data(files, rank=0, load_pae=True)
+
+        self.assertEqual(files.provider, "boltz_api")
+        self.assertEqual(files.provider_label, "Boltz API")
+        self.assertEqual(files.name, "api_job")
+        self.assertEqual(files.n_models, 2)
+        self.assertTrue(files.has_pae)
+        self.assertEqual(files.models[0].display_label, "rank 0 - sample 1")
+        self.assertEqual(files.models[0].metadata["sample_index"], 1)
+        self.assertEqual(files.models[1].display_label, "rank 1 - sample 0")
+        self.assertEqual(
+            files.structure_path(0).name, "sample_1_predicted_structure.cif"
+        )
+        np.testing.assert_allclose(data.pae, np.array([[0.0, 2.0]]))
+        self.assertEqual(data.confidence["confidence_score"], 0.95)
+        self.assertEqual(data.confidence["ptm"], 0.9)
+
+    def test_boltz_api_run_root_falls_back_to_run_json_metrics(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "api_job"
+            prediction = root / "outputs" / "files" / "prediction"
+            prediction.mkdir(parents=True)
+            (prediction / "sample_0_predicted_structure.cif").write_text(CIF_TEXT)
+            _write_json(prediction / "metrics.json", {"all_sample_results": []})
+            _write_json(
+                root / "run.json",
+                {
+                    "output": {
+                        "all_sample_results": [
+                            {"metrics": {"structure_confidence": 0.81, "iptm": 0.72}}
+                        ]
+                    }
+                },
+            )
+
+            files = scan_prediction_path(root)
+            data = load_prediction_data(files, rank=0)
+
+        self.assertEqual(files.provider, "boltz_api")
+        self.assertEqual(data.confidence["confidence_score"], 0.81)
+        self.assertEqual(data.confidence["iptm"], 0.72)
+
+    def test_boltz_api_extracted_prediction_folder_scans_directly(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            prediction = Path(tmp) / "prediction"
+            prediction.mkdir()
+            (prediction / "sample_0_predicted_structure.cif").write_text(CIF_TEXT)
+            _write_json(
+                prediction / "metrics.json",
+                {
+                    "all_sample_results": [
+                        {"metrics": {"structure_confidence": 0.88, "ptm": 0.77}}
+                    ]
+                },
+            )
+
+            files = scan_prediction_path(prediction)
+            data = load_prediction_data(files, rank=0)
+
+        self.assertEqual(files.provider, "boltz_api")
+        self.assertEqual(files.name, "prediction")
+        self.assertEqual(files.n_models, 1)
+        self.assertEqual(data.confidence["confidence_score"], 0.88)
+
+    def test_boltz_lab_and_api_parent_discovery_reports_top_level_candidates(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = Path(tmp)
+            lab = parent / "lab_job"
+            lab.mkdir()
+            (lab / "sample_0_predicted_structure.cif").write_text(CIF_TEXT)
+            _write_json(
+                lab / "metrics.json",
+                {"sample_results": {"sample_0": {"structure_confidence": 0.5}}},
+            )
+
+            api = parent / "api_job"
+            prediction = api / "outputs" / "files" / "prediction"
+            prediction.mkdir(parents=True)
+            (prediction / "sample_0_predicted_structure.cif").write_text(CIF_TEXT)
+            _write_json(
+                prediction / "metrics.json",
+                {"all_sample_results": [{"metrics": {"structure_confidence": 0.9}}]},
+            )
+            _write_json(api / "run.json", {"output": {"all_sample_results": []}})
+
+            discovery = discover_prediction_candidates(parent)
+
+        self.assertEqual(
+            [
+                (candidate.provider, candidate.relative_path)
+                for candidate in discovery.candidates
+            ],
+            [("boltz_api", "api_job"), ("boltz_lab", "lab_job")],
+        )
+
     def test_chai_ranked_directory_scans_json_scores_and_pae(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "chai_job"
