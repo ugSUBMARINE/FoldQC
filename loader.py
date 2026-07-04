@@ -482,13 +482,26 @@ def _looks_like_boltz_api(pred_dir: Path) -> bool:
 
 
 def _looks_like_af3(pred_dir: Path) -> bool:
-    return bool(
-        list(pred_dir.glob("*_model.cif"))
-        or (pred_dir / "model.cif").exists()
-        or list(pred_dir.glob("*_confidences.json"))
-        or (pred_dir / "confidences.json").exists()
-        or (pred_dir / "summary_confidences.json").exists()
-        or list(pred_dir.glob("seed-*_sample-*"))
+    if _af3_model_path(pred_dir) is not None and (
+        _has_af3_metadata(pred_dir) or _af3_ranking_scores_path(pred_dir) is not None
+    ):
+        return True
+
+    has_root_ranking_scores = _af3_ranking_scores_path(pred_dir) is not None
+    for sample_dir in pred_dir.glob("seed-*_sample-*"):
+        if not sample_dir.is_dir():
+            continue
+        if _af3_model_path(sample_dir) is not None and (
+            _has_af3_metadata(sample_dir) or has_root_ranking_scores
+        ):
+            return True
+    return False
+
+
+def _has_af3_metadata(pred_dir: Path) -> bool:
+    return (
+        _first_confidence_json(pred_dir) is not None
+        or _af3_summary_path(pred_dir) is not None
     )
 
 

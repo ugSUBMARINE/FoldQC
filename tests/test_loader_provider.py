@@ -571,6 +571,25 @@ class LoaderProviderTests(unittest.TestCase):
             [(1, 1), (1, 0)],
         )
 
+    def test_discovery_ignores_directory_of_standalone_model_cifs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = Path(tmp) / "examples"
+            structures = parent / "AF3_models"
+            structures.mkdir(parents=True)
+            for name in ["daao_ala_model.cif", "sbpzs_r_aze_model.cif"]:
+                (structures / name).write_text(CIF_TEXT)
+            _write_af3_server_job(parent / "server_job")
+
+            discovery = discover_prediction_candidates(parent)
+
+        self.assertEqual(
+            [
+                (candidate.provider, candidate.relative_path)
+                for candidate in discovery.candidates
+            ],
+            [("af3_server", "server_job")],
+        )
+
     def test_af3_atom_plddts_collapse_to_token_values(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "af3"
