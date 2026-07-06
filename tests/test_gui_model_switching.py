@@ -134,9 +134,14 @@ def _install_fake_pymol() -> types.SimpleNamespace:
             self.minimum_height = height
 
     class _MessageBox:
+        Yes = 1
+        Cancel = 2
+        StandardButton = types.SimpleNamespace(Yes=Yes, Cancel=Cancel)
         warnings: list[tuple[str, str]] = []
         criticals: list[tuple[str, str]] = []
         infos: list[tuple[str, str]] = []
+        questions: list[tuple[str, str]] = []
+        question_response = Yes
 
         @classmethod
         def warning(cls, _parent, title: str, message: str) -> None:
@@ -149,6 +154,18 @@ def _install_fake_pymol() -> types.SimpleNamespace:
         @classmethod
         def information(cls, _parent, title: str, message: str) -> None:
             cls.infos.append((title, message))
+
+        @classmethod
+        def question(
+            cls,
+            _parent,
+            title: str,
+            message: str,
+            _buttons=None,
+            _default_button=None,
+        ) -> int:
+            cls.questions.append((title, message))
+            return cls.question_response
 
     class _Signal:
         def __init__(self) -> None:
@@ -520,6 +537,23 @@ def _token(
     )
 
 
+def _atom(
+    chain: str,
+    resi: int | str,
+    resn: str = "ALA",
+    *,
+    hetatm: bool = False,
+    name: str = "CA",
+):
+    return types.SimpleNamespace(
+        chain=chain,
+        resi=str(resi),
+        resn=resn,
+        hetatm=hetatm,
+        name=name,
+    )
+
+
 def _dialog_with(cmd: _Cmd):
     _PYMOL.cmd = cmd
     dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
@@ -541,6 +575,8 @@ class GuiModelSwitchingTests(unittest.TestCase):
         msg.warnings.clear()
         msg.criticals.clear()
         msg.infos.clear()
+        msg.questions.clear()
+        msg.question_response = msg.Yes
         _PYMOL.Qt.QtCore.QSettings._store.clear()
 
     def _settings(self):
@@ -787,6 +823,21 @@ class GuiModelSwitchingTests(unittest.TestCase):
 
         self.assertEqual(dialog._obj_combo.currentText(), "target_model_0")
         self.assertEqual(dialog._pending_session_restore.target_name, "missing_target")
+
+    def test_refresh_objects_excludes_foldqc_colorbar(self) -> None:
+        dialog = self._session_dialog()
+        _PYMOL.cmd = _Cmd(
+            objects={"target_model_0", "foldqc_colorbar", "other_model"},
+            enabled={"target_model_0", "foldqc_colorbar", "other_model"},
+        )
+
+        dialog._refresh_objects()
+
+        names = [
+            dialog._obj_combo.itemText(row) for row in range(dialog._obj_combo.count())
+        ]
+        self.assertEqual(names, ["other_model", "target_model_0"])
+        self.assertNotIn("foldqc_colorbar", names)
 
     def test_restore_model_rank_ignores_missing_rank(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1639,6 +1690,116 @@ class GuiModelSwitchingTests(unittest.TestCase):
         dialog._apply_coloring()
 
         self.assertEqual(dialog._stats_browser.text, "Previous statistics")
+
+    def _coloring_dialog_for_overlap(self, obj_name: str = "other"):
+        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog._ensemble_members = None
+        dialog._ensemble_group_name = None
+        dialog._pred_data = types.SimpleNamespace(
+            structure_path=Path("/tmp/target_model_0.cif"),
+            structure_plddt=np.array([0.8, 0.9], dtype=np.float32),
+            plddt=None,
+        )
+        dialog._pred_files = object()
+        dialog._token_map = [_token(0, res_num=1), _token(1, res_num=2)]
+        dialog._get_obj_name = lambda: obj_name
+        dialog._prop_combo = types.SimpleNamespace(currentData=lambda: "plddt")
+        dialog._selected_palette = lambda: ("blue_white_red", False)
+        dialog._get_vmin_vmax = lambda: (None, None)
+        dialog._ref_edit = types.SimpleNamespace(text=lambda: "")
+        dialog._ensure_current_data_for_property = lambda _prop: None
+        dialog._build_token_map_if_needed = lambda _obj_name: None
+        dialog.setWindowTitle = lambda _title: None
+        dialog._update_statistics_for_single = lambda *_args, **_kwargs: None
+        return dialog
+
+    def test_coloring_mismatch_warning_cancel_stops_before_paint(self) -> None:
+        cmd = _Cmd(objects=("other",), enabled=("other",))
+        cmd.selection_models["other"] = types.SimpleNamespace(
+            atom=[_atom("B", 10, "GLY"), _atom("B", 11, "SER")]
+        )
+        _PYMOL.cmd = cmd
+        msg = _PYMOL.Qt.QtWidgets.QMessageBox
+        msg.question_response = msg.Cancel
+        dialog = self._coloring_dialog_for_overlap()
+
+        with (
+            mock.patch("FoldQC.painter.paint_property") as paint,
+            mock.patch("FoldQC.painter.show_colorbar"),
+        ):
+            dialog._apply_coloring()
+
+        self.assertEqual(len(msg.questions), 1)
+        self.assertIn("low overlap", msg.questions[0][1])
+        paint.assert_not_called()
+
+    def test_coloring_mismatch_continue_is_cached_for_same_target(self) -> None:
+        cmd = _Cmd(objects=("other",), enabled=("other",))
+        cmd.selection_models["other"] = types.SimpleNamespace(
+            atom=[_atom("B", 10, "GLY"), _atom("B", 11, "SER")]
+        )
+        _PYMOL.cmd = cmd
+        msg = _PYMOL.Qt.QtWidgets.QMessageBox
+        msg.question_response = msg.Yes
+        dialog = self._coloring_dialog_for_overlap()
+
+        with (
+            mock.patch("FoldQC.painter.paint_property") as paint,
+            mock.patch("FoldQC.painter.show_colorbar"),
+        ):
+            paint.return_value = (0.8, 0.9)
+            dialog._apply_coloring()
+            dialog._apply_coloring()
+
+        self.assertEqual(len(msg.questions), 1)
+        self.assertEqual(paint.call_count, 2)
+
+    def test_coloring_subset_target_does_not_warn(self) -> None:
+        cmd = _Cmd(objects=("partial",), enabled=("partial",))
+        cmd.selection_models["partial"] = types.SimpleNamespace(
+            atom=[_atom("A", 1, "ALA"), _atom("A", 1, "ALA", name="N")]
+        )
+        _PYMOL.cmd = cmd
+        msg = _PYMOL.Qt.QtWidgets.QMessageBox
+        dialog = self._coloring_dialog_for_overlap("partial")
+
+        with (
+            mock.patch("FoldQC.painter.paint_property") as paint,
+            mock.patch("FoldQC.painter.show_colorbar"),
+        ):
+            paint.return_value = (0.8, 0.9)
+            dialog._apply_coloring()
+
+        self.assertEqual(msg.questions, [])
+        paint.assert_called_once()
+
+    def test_plddt_class_coloring_uses_token_overlap_warning(self) -> None:
+        cmd = _Cmd(objects=("other",), enabled=("other",))
+        cmd.selection_models["other"] = types.SimpleNamespace(
+            atom=[_atom("B", 10, "GLY"), _atom("B", 11, "SER")]
+        )
+        _PYMOL.cmd = cmd
+        msg = _PYMOL.Qt.QtWidgets.QMessageBox
+        msg.question_response = msg.Cancel
+        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog._pred_data = types.SimpleNamespace(
+            structure_path=Path("/tmp/target_model_0.cif"),
+            structure_plddt=np.array([0.8, 0.9], dtype=np.float32),
+            plddt=None,
+        )
+        dialog._token_map = [_token(0, res_num=1), _token(1, res_num=2)]
+        dialog._build_token_map_if_needed = lambda _obj_name: None
+        dialog.setWindowTitle = lambda _title: None
+        dialog._update_statistics_for_single = lambda *_args, **_kwargs: None
+
+        with (
+            mock.patch("FoldQC.painter.paint_plddt_class_coloring") as paint,
+            mock.patch("FoldQC.painter.delete_colorbar"),
+        ):
+            dialog._apply_plddt_class_coloring("plddt_class", "other")
+
+        self.assertEqual(len(msg.questions), 1)
+        paint.assert_not_called()
 
     def test_selected_palette_uses_combo_data_and_reverse_checkbox(self) -> None:
         dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)

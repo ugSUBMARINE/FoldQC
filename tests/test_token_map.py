@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
 
@@ -12,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from FoldQC.token_map import (
     TokenInfo,
     build_token_map,
+    compare_token_map_to_pymol_object,
     compact_pymol_selection_expression,
     extract_structure_plddt,
     parse_structure_atoms,
@@ -79,6 +81,116 @@ class TokenMapTests(unittest.TestCase):
         self.assertEqual([tok.atom_name for tok in token_map], ["C1'", "O5'"])
         self.assertEqual(token_map[0].pymol_selection, "/obj//B/2/C1'")
         np.testing.assert_allclose(plddt, np.array([0.986, 0.9842], dtype=np.float32))
+
+    def _compare_overlap(self, token_map, atoms):
+        old_pymol = sys.modules.get("pymol")
+        cmd = types.SimpleNamespace(
+            get_model=lambda _obj_name: types.SimpleNamespace(atom=atoms)
+        )
+        sys.modules["pymol"] = types.SimpleNamespace(cmd=cmd)
+        try:
+            return compare_token_map_to_pymol_object(token_map, "target")
+        finally:
+            if old_pymol is None:
+                sys.modules.pop("pymol", None)
+            else:
+                sys.modules["pymol"] = old_pymol
+
+    @staticmethod
+    def _atom(
+        chain: str,
+        resi: int | str,
+        resn: str,
+        *,
+        hetatm: bool = False,
+        name: str = "CA",
+    ):
+        return types.SimpleNamespace(
+            chain=chain,
+            resi=str(resi),
+            resn=resn,
+            hetatm=hetatm,
+            name=name,
+        )
+
+    def test_token_overlap_full_match(self) -> None:
+        token_map = [
+            self._token(0, chain_id="A", res_num=1, res_name="ALA"),
+            self._token(1, chain_id="A", res_num=2, res_name="GLY"),
+        ]
+
+        overlap = self._compare_overlap(
+            token_map,
+            [
+                self._atom("A", 1, "ALA", name="N"),
+                self._atom("A", 1, "ALA", name="CA"),
+                self._atom("A", 2, "GLY", name="CA"),
+            ],
+        )
+
+        self.assertEqual(overlap.prediction_tokens, 2)
+        self.assertEqual(overlap.target_tokens, 2)
+        self.assertEqual(overlap.matched_prediction_tokens, 2)
+        self.assertEqual(overlap.matched_target_tokens, 2)
+        self.assertEqual(overlap.target_coverage, 1.0)
+        self.assertEqual(overlap.prediction_coverage, 1.0)
+
+    def test_token_overlap_target_subset_keeps_full_target_coverage(self) -> None:
+        token_map = [
+            self._token(0, chain_id="A", res_num=1, res_name="ALA"),
+            self._token(1, chain_id="A", res_num=2, res_name="GLY"),
+        ]
+
+        overlap = self._compare_overlap(
+            token_map,
+            [self._atom("A", 1, "ALA", name="CA")],
+        )
+
+        self.assertEqual(overlap.target_tokens, 1)
+        self.assertEqual(overlap.matched_target_tokens, 1)
+        self.assertEqual(overlap.target_coverage, 1.0)
+        self.assertEqual(overlap.prediction_coverage, 0.5)
+
+    def test_token_overlap_residue_name_mismatch_does_not_match(self) -> None:
+        token_map = [self._token(0, chain_id="A", res_num=1, res_name="ALA")]
+
+        overlap = self._compare_overlap(
+            token_map,
+            [self._atom("A", 1, "ASP", name="CA")],
+        )
+
+        self.assertEqual(overlap.target_tokens, 1)
+        self.assertEqual(overlap.matched_target_tokens, 0)
+        self.assertEqual(overlap.target_coverage, 0.0)
+
+    def test_token_overlap_hetatm_requires_residue_and_atom_name(self) -> None:
+        token_map = [
+            self._token(
+                0,
+                chain_id="L",
+                res_num=1,
+                res_name="LIG",
+                is_hetatm=True,
+                atom_name="C1",
+            )
+        ]
+
+        wrong_atom = self._compare_overlap(
+            token_map,
+            [self._atom("L", 1, "LIG", hetatm=True, name="C2")],
+        )
+        wrong_resn = self._compare_overlap(
+            token_map,
+            [self._atom("L", 1, "DRG", hetatm=True, name="C1")],
+        )
+        matched = self._compare_overlap(
+            token_map,
+            [self._atom("L", 1, "LIG", hetatm=True, name="C1")],
+        )
+
+        self.assertEqual(wrong_atom.matched_target_tokens, 0)
+        self.assertEqual(wrong_resn.matched_target_tokens, 0)
+        self.assertEqual(matched.matched_target_tokens, 1)
 
     def test_compact_selection_collapses_unordered_residue_ranges(self) -> None:
         token_map = [

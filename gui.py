@@ -30,6 +30,7 @@ from .compat import (
     FormFieldGrowthPolicy,
     ItemIsEnabled,
     QAction,
+    MessageBoxStandardButton,
     QSettings,
     QtWidgets,
 )
@@ -39,6 +40,7 @@ APP_TITLE = "FoldQC"
 PREDICTION_FILE_FILTER = (
     "Prediction files (*.cif *.pdb *.zip *.tar *.tar.gz *.tgz);;All files (*)"
 )
+NON_TARGET_OBJECT_NAMES = {"foldqc_colorbar"}
 
 
 @dataclass
@@ -105,6 +107,7 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
         self._ensemble_rmsd = None  # np.ndarray | None
         self._ensemble_plddt_mean = None  # np.ndarray | None
         self._ensemble_plddt_std = None  # np.ndarray | None
+        self._accepted_token_overlap_warnings: set[tuple[str, str]] = set()
         self._plot_windows = []  # Qt plot dialogs kept alive while visible
         self._guide_dialog = None  # Lightweight first-run guide dialog
         self._loading_prediction = False
@@ -773,6 +776,7 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
                 load_pde=False,
                 load_contact_probs=False,
             )
+            self._clear_token_map_cache()
         except Exception as exc:
             QtWidgets.QMessageBox.warning(self, APP_TITLE, str(exc))
             return
@@ -801,6 +805,7 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
             from pymol import cmd
 
             names = cmd.get_names("objects") or []
+            names = [name for name in names if name not in NON_TARGET_OBJECT_NAMES]
             if self._ensemble_group_name and self._ensemble_group_name not in names:
                 try:
                     all_names = set(cmd.get_names("all") or [])
@@ -954,6 +959,7 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
         self._token_map = None
         self._token_map_obj = None  # type: ignore[attr-defined]
         self._token_map_structure_path = None  # type: ignore[attr-defined]
+        self._accepted_token_overlap_warnings = set()
 
     def _property_combo_row(self, key: str, fallback: int = -1) -> int:
         """Return the combo row for a property key, allowing older tests to omit maps."""
@@ -1311,6 +1317,10 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
             if values is None:
                 return
             self._validate_token_count(values, self._token_map, obj_name)
+            if not self._confirm_token_overlap_for_coloring(
+                self._token_map, obj_name, self._pred_data
+            ):
+                return
             if metrics.is_domain_label_metric(key):
                 from .painter import delete_colorbar, paint_categorical_labels_bulk
 
@@ -1680,6 +1690,13 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
         member_values: list[tuple[object, np.ndarray]] = []
         for member in target_members:
             self._validate_token_count(values, member.token_map, member.obj_name)
+            if not self._confirm_token_overlap_for_coloring(
+                member.token_map, member.obj_name, member.data
+            ):
+                return
+            member_values.append((member, values))
+
+        for member, values in member_values:
             used_vmin, used_vmax = paint_property_bulk(
                 member.obj_name,
                 member.token_map,
@@ -1690,7 +1707,6 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
                 vmax=vmax,
                 rebuild=False,
             )
-            member_values.append((member, values))
         show_colorbar(
             palette,
             reverse_palette,
@@ -1733,6 +1749,12 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
                 return
             self._validate_token_count(values, member.token_map, member.obj_name)
             member_values.append((member, values))
+
+        for member, _values in member_values:
+            if not self._confirm_token_overlap_for_coloring(
+                member.token_map, member.obj_name, member.data
+            ):
+                return
 
         if metrics.is_domain_label_metric(key):
             used_ranges = []
@@ -1834,13 +1856,21 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
                 )
                 return
             self._validate_token_count(values, member.token_map, member.obj_name)
+            member_values.append((member, values))
+
+        for member, _values in member_values:
+            if not self._confirm_token_overlap_for_coloring(
+                member.token_map, member.obj_name, member.data
+            ):
+                return
+
+        for member, values in member_values:
             paint_plddt_class_coloring(
                 member.obj_name,
                 values=values,
                 token_map=member.token_map,
                 rebuild=False,
             )
-            member_values.append((member, values))
         delete_colorbar()
         label = (
             self._ensemble_group_name
@@ -1887,6 +1917,10 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
             return
         self._build_token_map_if_needed(obj_name)
         self._validate_token_count(values, self._token_map, obj_name)
+        if not self._confirm_token_overlap_for_coloring(
+            self._token_map, obj_name, self._pred_data
+        ):
+            return
         paint_plddt_class_coloring(
             obj_name,
             values=values,
@@ -2191,6 +2225,66 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
                 f"values, but the loaded structure maps to {len(token_map)} tokens. "
                 "Check that the PyMOL object belongs to the selected prediction model."
             )
+
+    def _confirm_token_overlap_for_coloring(
+        self,
+        token_map,
+        obj_name: str,
+        data=None,
+        *,
+        threshold: float = 0.50,
+    ) -> bool:
+        """Warn when the selected PyMOL object barely overlaps the token map."""
+        if token_map is None:
+            return True
+
+        structure_path = getattr(data, "structure_path", None)
+        if structure_path is None:
+            structure_path = getattr(
+                getattr(self, "_pred_data", None), "structure_path", ""
+            )
+        cache_key = (str(structure_path), str(obj_name))
+        accepted = getattr(self, "_accepted_token_overlap_warnings", set())
+        if cache_key in accepted:
+            return True
+
+        try:
+            from .token_map import compare_token_map_to_pymol_object
+
+            overlap = compare_token_map_to_pymol_object(token_map, obj_name)
+        except Exception:
+            return True
+
+        if overlap.target_tokens <= 0 or overlap.target_coverage >= threshold:
+            return True
+
+        pct = overlap.target_coverage * 100.0
+        pred_pct = overlap.prediction_coverage * 100.0
+        message = (
+            f"The selected PyMOL target '{obj_name}' has low overlap with the "
+            "loaded prediction token map.\n\n"
+            f"Matched target tokens: {overlap.matched_target_tokens} / "
+            f"{overlap.target_tokens} ({pct:.1f}%).\n"
+            f"Matched prediction tokens: {overlap.matched_prediction_tokens} / "
+            f"{overlap.prediction_tokens} ({pred_pct:.1f}%).\n\n"
+            "Coloring this target may be meaningless if it is unrelated to the "
+            "prediction, but it can be useful for deliberate copies or partial "
+            "models. Apply the coloring anyway?"
+        )
+        buttons = MessageBoxStandardButton.Yes | MessageBoxStandardButton.Cancel
+        result = QtWidgets.QMessageBox.question(
+            self,
+            APP_TITLE,
+            message,
+            buttons,
+            MessageBoxStandardButton.Cancel,
+        )
+        if result != MessageBoxStandardButton.Yes:
+            return False
+
+        accepted.add(cache_key)
+        self._accepted_token_overlap_warnings = accepted
+        return True
 
     def _binding_site_token_indices(
         self,

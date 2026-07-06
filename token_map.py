@@ -59,6 +59,18 @@ class TokenInfo:
     pymol_selection: str
 
 
+@dataclass(frozen=True)
+class TokenOverlapSummary:
+    """Identity overlap between a prediction token map and a PyMOL object."""
+
+    prediction_tokens: int
+    target_tokens: int
+    matched_prediction_tokens: int
+    matched_target_tokens: int
+    target_coverage: float
+    prediction_coverage: float
+
+
 def _compact_integer_ranges(values: Iterable[int]) -> str:
     """Return sorted integers as PyMOL ``resi`` ranges joined by ``+``."""
     ordered = sorted(set(int(value) for value in values))
@@ -464,6 +476,66 @@ def build_token_map(obj_name: str, structure_path: str | Path) -> list[TokenInfo
                 token_idx += 1
 
     return token_map
+
+
+def _token_identity(token: TokenInfo) -> tuple[str, int, str, str | None]:
+    """Return a residue/atom identity for comparing token maps to PyMOL models."""
+    if bool(token.is_hetatm):
+        return (
+            str(token.chain_id),
+            int(token.res_num),
+            str(token.res_name),
+            str(token.atom_name or ""),
+        )
+    return (str(token.chain_id), int(token.res_num), str(token.res_name), None)
+
+
+def _model_token_identities(model) -> set[tuple[str, int, str, str | None]]:
+    """Return token identities represented by a PyMOL model object."""
+    identities: set[tuple[str, int, str, str | None]] = set()
+    for atom in getattr(model, "atom", []) or []:
+        try:
+            resi = int(atom.resi)
+        except (TypeError, ValueError):
+            continue
+        chain = str(getattr(atom, "chain", ""))
+        resn = str(getattr(atom, "resn", ""))
+        if bool(getattr(atom, "hetatm", False)):
+            identities.add((chain, resi, resn, str(getattr(atom, "name", ""))))
+        else:
+            identities.add((chain, resi, resn, None))
+    return identities
+
+
+def compare_token_map_to_pymol_object(
+    token_map: list[TokenInfo],
+    obj_name: str,
+) -> TokenOverlapSummary:
+    """Compare prediction token identities with identities present in *obj_name*.
+
+    Polymer tokens are compared by ``chain + resi + resn``. HETATM tokens also
+    include atom name. PyMOL is imported lazily so this helper remains safe to
+    import outside PyMOL.
+    """
+    from pymol import cmd  # lazy import
+
+    prediction_identities = {_token_identity(token) for token in token_map}
+    model = cmd.get_model(obj_name)
+    target_identities = _model_token_identities(model)
+    matched = prediction_identities & target_identities
+    prediction_total = len(prediction_identities)
+    target_total = len(target_identities)
+    matched_total = len(matched)
+    return TokenOverlapSummary(
+        prediction_tokens=prediction_total,
+        target_tokens=target_total,
+        matched_prediction_tokens=matched_total,
+        matched_target_tokens=matched_total,
+        target_coverage=(matched_total / target_total if target_total else 1.0),
+        prediction_coverage=(
+            matched_total / prediction_total if prediction_total else 1.0
+        ),
+    )
 
 
 def selection_to_token_indices(

@@ -70,3 +70,10 @@ if QT_MAJOR >= 6:
     ItemIsEnabled = QtCore.Qt.ItemFlag.ItemIsEnabled
 else:
     ItemIsEnabled = QtCore.Qt.ItemIsEnabled
+
+# QMessageBox standard buttons
+# Qt5: QMessageBox.Yes / QMessageBox.Cancel
+# Qt6: QMessageBox.StandardButton.Yes / QMessageBox.StandardButton.Cancel
+MessageBoxStandardButton = getattr(
+    QtWidgets.QMessageBox, "StandardButton", QtWidgets.QMessageBox
+)
