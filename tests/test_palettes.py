@@ -4,7 +4,6 @@ import sys
 import unittest
 from pathlib import Path
 
-
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from FoldQC import palettes  # noqa: E402
@@ -67,11 +66,21 @@ class PaletteTests(unittest.TestCase):
     def test_plddt_class_colors_define_pymol_and_bar_order(self) -> None:
         self.assertEqual(
             [color.pymol_name for color in palettes.PLDDT_CLASS_COLORS],
-            ["plddt_very_high", "plddt_high", "plddt_low", "plddt_very_low"],
+            [
+                "plddt_very_high",
+                "plddt_high",
+                "plddt_low",
+                "plddt_very_low",
+                "plddt_nan",
+            ],
         )
         self.assertEqual(
             palettes.PLDDT_CLASS_BAR_COLORS,
-            tuple(color.rgb for color in reversed(palettes.PLDDT_CLASS_COLORS)),
+            tuple(
+                color.rgb
+                for color in reversed(palettes.PLDDT_CLASS_COLORS)
+                if color.key != "plddt_nan"
+            ),
         )
 
     def test_matplotlib_reverse_uses_reverse_colormap_name(self) -> None:

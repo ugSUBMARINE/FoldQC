@@ -32,3 +32,4 @@ htmlcov/
 examples/
 
 AGENTS.md
+uv.lock

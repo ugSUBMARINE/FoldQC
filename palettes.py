@@ -163,12 +163,23 @@ PLDDT_CLASS_COLORS: tuple[PlddtClassColor, ...] = (
         label="very low",
         pymol_name="plddt_very_low",
         rgb=(1.000, 0.494, 0.271),
-        bfactor_selection="(b<50)",
+        bfactor_selection="((b<50 and b>0) or b=0)",
+    ),
+    PlddtClassColor(
+        key="plddt_nan",
+        label="pLDDT NaN",
+        pymol_name="plddt_nan",
+        rgb=(0.700, 0.700, 0.700),
+        bfactor_selection="(b<0)",
     ),
 )
 
 PLDDT_CLASS_BAR_COLORS: tuple[ColorStop, ...] = tuple(
-    color.rgb for color in reversed(PLDDT_CLASS_COLORS)
+    # Use reversed order so that the bar chart legend is in the same order as the pLDDT colour definition
+    # Skip the nan colour
+    color.rgb
+    for color in reversed(PLDDT_CLASS_COLORS)
+    if color.key != "plddt_nan"
 )
 
 PALETTE_SPECS: tuple[PaletteSpec, ...] = (
