@@ -25,8 +25,6 @@ NAN_COLOR_DEFAULT = "grey70"
 # Single viewport legend object used for continuous spectrum colouring.
 COLORBAR_OBJECT_NAME = "foldqc_colorbar"
 
-_TOKEN_BFACTOR_KEY_CACHE: dict[int, tuple[int, list[tuple[str, str, str]]]] = {}
-
 
 def _resolve_color_range(
     values: np.ndarray,
@@ -49,17 +47,10 @@ def token_bfactor_keys(token_map) -> list[tuple[str, str, str]]:
     Polymer residue tokens are keyed by ``(chain, resi, "")`` so every atom in
     the residue receives the token value. HETATM tokens are keyed by atom name.
     """
-    cache_key = id(token_map)
-    cached = _TOKEN_BFACTOR_KEY_CACHE.get(cache_key)
-    if cached is not None and cached[0] == len(token_map):
-        return cached[1]
-
-    keys: list[tuple[str, str, str]] = []
-    for tok in token_map:
-        atom_name = tok.atom_name if tok.is_hetatm and tok.atom_name else ""
-        keys.append((tok.chain_id, str(tok.res_num), atom_name))
-    _TOKEN_BFACTOR_KEY_CACHE[cache_key] = (len(token_map), keys)
-    return keys
+    return [
+        (tok.chain_id, str(tok.res_num), tok.atom_name if tok.is_hetatm and tok.atom_name else "")
+        for tok in token_map
+    ]
 
 
 def _write_bfactors_bulk(
