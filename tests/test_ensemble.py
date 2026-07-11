@@ -287,7 +287,7 @@ def test_prepare_metrics_skip_alignment_uses_current_coordinates(monkeypatch) ->
     np.testing.assert_allclose(result.rmsd, rmsd)
     np.testing.assert_allclose(result.plddt_mean, np.array([0.7, 0.8, 0.9]))
     np.testing.assert_allclose(result.plddt_std, np.array([0.1, 0.1, 0.1]))
-    np.testing.assert_allclose(members[0].data.plddt, members[0].data.structure_plddt)
+    assert members[0].data.plddt is None  # prepare_metrics must not mutate data
 
 
 def test_prepare_metrics_aligns_to_rank_zero_or_first_member(monkeypatch) -> None:

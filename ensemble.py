@@ -129,13 +129,14 @@ def prepare_metrics(
     ref_member = next((m for m in members if m.rank == 0), members[0])
     aligned_coords = None
     if not skip_alignment:
-        if ref_member.data.plddt is None:
-            ref_member.data.plddt = ref_member.data.structure_plddt
-        if ref_member.data.plddt is None:
-            raise ValueError("Automatic ensemble alignment requires pLDDT data.")
-        core_indices = select_alignment_core(
-            ref_member.token_map, ref_member.data.plddt
+        plddt = (
+            ref_member.data.plddt
+            if ref_member.data.plddt is not None
+            else ref_member.data.structure_plddt
         )
+        if plddt is None:
+            raise ValueError("Automatic ensemble alignment requires pLDDT data.")
+        core_indices = select_alignment_core(ref_member.token_map, plddt)
         aligned_coords = align_objects_to_reference(
             members, core_indices, reference_rank=ref_member.rank
         )
@@ -147,11 +148,14 @@ def prepare_metrics(
     )
     plddt_arrays = []
     for member in members:
-        if member.data.plddt is None:
-            member.data.plddt = member.data.structure_plddt
-        if member.data.plddt is None:
+        plddt = (
+            member.data.plddt
+            if member.data.plddt is not None
+            else member.data.structure_plddt
+        )
+        if plddt is None:
             raise ValueError(f"pLDDT data are not available for model_{member.rank}.")
-        plddt_arrays.append(member.data.plddt)
+        plddt_arrays.append(plddt)
     plddt_mean, plddt_std = compute_metric_consensus(plddt_arrays)
     return EnsembleMetrics(
         aligned=not skip_alignment,
