@@ -7,6 +7,9 @@ selections, contact shells, cutoffs, and lazy-loaded inputs before dispatching.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from dataclasses import dataclass
+
 import numpy as np
 
 from . import properties as P
@@ -34,6 +37,95 @@ class MissingContactError(MetricComputationError):
 
 class UnsupportedMetricError(MetricComputationError):
     """The requested metric key is not supported by per-model dispatch."""
+
+
+@dataclass(frozen=True)
+class _Dispatch:
+    """Descriptor for one dispatchable metric in _DISPATCH."""
+
+    data_attr: str  # PredictionData attribute to extract
+    func: Callable  # properties.py function to call
+    data_label: str  # human label for MissingMetricDataError
+    needs_ref: bool = False  # append _required_ref(ref_indices) to args
+    needs_contact: bool = False  # append _required_contact(contact_indices)
+    needs_token_map: bool = False  # append token_map to args
+    cutoff_kwarg: str | None = None  # pass cutoff as this keyword arg
+    extra_kwargs: dict | None = None  # additional static keyword args
+
+
+_DISPATCH: dict[str, _Dispatch] = {
+    # PAE — simple
+    "pae_row_mean": _Dispatch("pae", P.pae_row_mean, "PAE data"),
+    "pae_col_mean": _Dispatch("pae", P.pae_col_mean, "PAE data"),
+    # PAE — needs reference
+    "pae_to_sel": _Dispatch("pae", P.pae_to_selection, "PAE data", needs_ref=True),
+    "pae_col_to_sel": _Dispatch(
+        "pae", P.pae_column_to_selection, "PAE data", needs_ref=True
+    ),
+    "pae_sym_sel": _Dispatch(
+        "pae", P.pae_symmetric_to_selection, "PAE data", needs_ref=True
+    ),
+    "pae_sym_within_sel": _Dispatch(
+        "pae", P.pae_symmetric_mean_within_selection, "PAE data", needs_ref=True
+    ),
+    # PAE — needs reference + contact indices
+    "pae_contact": _Dispatch(
+        "pae",
+        P.pae_symmetric_to_selection_for_contacts,
+        "PAE data",
+        needs_ref=True,
+        needs_contact=True,
+    ),
+    # PAE — domain labels (cutoff + method)
+    "pae_domain_complete": _Dispatch(
+        "pae",
+        P.pae_domain_labels,
+        "PAE data",
+        cutoff_kwarg="threshold",
+        extra_kwargs={"method": "complete_linkage"},
+    ),
+    "pae_domain_spectral": _Dispatch(
+        "pae",
+        P.pae_domain_labels,
+        "PAE data",
+        cutoff_kwarg="threshold",
+        extra_kwargs={"method": "spectral"},
+    ),
+    # PDE — simple
+    "pde_mean": _Dispatch("pde", P.pde_mean, "PDE data"),
+    # PDE — needs token map
+    "pde_chain_mean": _Dispatch(
+        "pde", P.pde_mean_within_chain, "PDE data", needs_token_map=True
+    ),
+    # PDE — needs reference
+    "pde_to_sel": _Dispatch("pde", P.pde_to_selection, "PDE data", needs_ref=True),
+    "pde_within_sel": _Dispatch(
+        "pde", P.pde_mean_within_selection, "PDE data", needs_ref=True
+    ),
+    # PDE — needs reference + contact indices
+    "pde_contact": _Dispatch(
+        "pde",
+        P.pde_to_selection_for_contacts,
+        "PDE data",
+        needs_ref=True,
+        needs_contact=True,
+    ),
+    # Interaction probability — simple
+    "contact_prob_mean": _Dispatch(
+        "contact_probs", P.contact_probability_mean, "Interaction probability data"
+    ),
+    # Interaction probability — needs reference
+    "contact_prob_to_sel": _Dispatch(
+        "contact_probs",
+        P.contact_probability_to_selection,
+        "Interaction probability data",
+        needs_ref=True,
+    ),
+    # Chain-level confidence — needs token map
+    "chain_iptm": _Dispatch(
+        "confidence", P.chain_iptm_values, "Confidence JSON", needs_token_map=True
+    ),
+}
 
 
 def plddt_values_for(data) -> tuple[np.ndarray | None, str]:
@@ -68,100 +160,34 @@ def compute_metric(
     cutoff: float | None = None,
 ) -> np.ndarray:
     """Compute a per-token metric array for one model."""
-    if key == "plddt":
+    # plddt_class uses the same continuous array as plddt; the GUI chooses
+    # the categorical painter based on the key, not on compute_metric's output.
+    if key in ("plddt", "plddt_class"):
         values, _source_label = plddt_values_for(data)
         if values is None:
             raise MissingMetricDataError("pLDDT data are not available.")
         return P.plddt_values(values)
 
-    if key == "pae_row_mean":
-        return P.pae_row_mean(_required_attr(data, "pae", "PAE data"))
+    entry = _DISPATCH.get(key)
+    if entry is None:
+        raise UnsupportedMetricError(f"Unknown property key: {key}")
 
-    if key == "pae_col_mean":
-        return P.pae_col_mean(_required_attr(data, "pae", "PAE data"))
+    data_value = _required_attr(data, entry.data_attr, entry.data_label)
+    args: list = [data_value]
+    kwargs: dict = dict(entry.extra_kwargs or {})
 
-    if key == "pae_to_sel":
-        return P.pae_to_selection(
-            _required_attr(data, "pae", "PAE data"), _required_ref(ref_indices)
-        )
-
-    if key == "pae_col_to_sel":
-        return P.pae_column_to_selection(
-            _required_attr(data, "pae", "PAE data"), _required_ref(ref_indices)
-        )
-
-    if key == "pae_sym_sel":
-        return P.pae_symmetric_to_selection(
-            _required_attr(data, "pae", "PAE data"), _required_ref(ref_indices)
-        )
-
-    if key == "pae_sym_within_sel":
-        return P.pae_symmetric_mean_within_selection(
-            _required_attr(data, "pae", "PAE data"), _required_ref(ref_indices)
-        )
-
-    if key == "pae_contact":
-        ref = _required_ref(ref_indices)
-        contact = _required_contact(contact_indices)
-        return P.pae_symmetric_to_selection_for_contacts(
-            _required_attr(data, "pae", "PAE data"),
-            ref,
-            contact,
-        )
-
-    if key in ("pae_domain_complete", "pae_domain_spectral"):
+    if entry.needs_ref:
+        args.append(_required_ref(ref_indices))
+    if entry.needs_contact:
+        args.append(_required_contact(contact_indices))
+    if entry.needs_token_map:
+        args.append(token_map)
+    if entry.cutoff_kwarg:
         if cutoff is None:
             raise MissingCutoffError("PAE domain labels require a cutoff.")
-        return P.pae_domain_labels(
-            _required_attr(data, "pae", "PAE data"),
-            threshold=float(cutoff),
-            method=pae_domain_method(key),
-        )
+        kwargs[entry.cutoff_kwarg] = float(cutoff)
 
-    if key == "pde_mean":
-        return P.pde_mean(_required_attr(data, "pde", "PDE data"))
-
-    if key == "pde_chain_mean":
-        return P.pde_mean_within_chain(
-            _required_attr(data, "pde", "PDE data"), token_map
-        )
-
-    if key == "pde_to_sel":
-        return P.pde_to_selection(
-            _required_attr(data, "pde", "PDE data"), _required_ref(ref_indices)
-        )
-
-    if key == "pde_within_sel":
-        return P.pde_mean_within_selection(
-            _required_attr(data, "pde", "PDE data"), _required_ref(ref_indices)
-        )
-
-    if key == "pde_contact":
-        ref = _required_ref(ref_indices)
-        contact = _required_contact(contact_indices)
-        return P.pde_to_selection_for_contacts(
-            _required_attr(data, "pde", "PDE data"),
-            ref,
-            contact,
-        )
-
-    if key == "contact_prob_mean":
-        return P.contact_probability_mean(
-            _required_attr(data, "contact_probs", "Interaction probability data")
-        )
-
-    if key == "contact_prob_to_sel":
-        return P.contact_probability_to_selection(
-            _required_attr(data, "contact_probs", "Interaction probability data"),
-            _required_ref(ref_indices),
-        )
-
-    if key == "chain_iptm":
-        return P.chain_iptm_values(
-            _required_attr(data, "confidence", "Confidence JSON"), token_map
-        )
-
-    raise UnsupportedMetricError(f"Unknown property key: {key}")
+    return entry.func(*args, **kwargs)
 
 
 def _required_attr(data, attr: str, label: str):

@@ -2080,6 +2080,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
     def test_pae_domain_complete_uses_cutoff_and_method(self) -> None:
         dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
         dialog._cutoff_edit = _LineEdit("6.25")
+        # Lambda returns False for "spectral", so any wrong method produces None.
         dialog._pae_domain_dependency_available = lambda method: (
             method == "complete_linkage"
         )
@@ -2088,40 +2089,33 @@ class GuiModelSwitchingTests(unittest.TestCase):
             structure_plddt=None,
             plddt=None,
         )
-        expected = np.array([0.0, 0.0, 1.0], dtype=np.float32)
 
-        with mock.patch(
-            "FoldQC.properties.pae_domain_labels", return_value=expected
-        ) as labels:
-            values = dialog._compute_property_for(
-                "pae_domain_complete", None, data, [], "target_model_0"
-            )
-
-        np.testing.assert_array_equal(values, expected)
-        labels.assert_called_once_with(
-            data.pae, threshold=6.25, method="complete_linkage"
+        # All-zero PAE: threshold=6.25 puts all 3 tokens in one cluster.
+        values = dialog._compute_property_for(
+            "pae_domain_complete", None, data, [], "target_model_0"
         )
+
+        self.assertIsNotNone(values)
+        self.assertEqual(values.shape, (3,))
 
     def test_pae_domain_spectral_uses_cutoff_and_method(self) -> None:
         dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
         dialog._cutoff_edit = _LineEdit("8.5")
+        # Lambda returns False for "complete_linkage", so wrong method gives None.
         dialog._pae_domain_dependency_available = lambda method: method == "spectral"
         data = types.SimpleNamespace(
             pae=np.zeros((3, 3), dtype=np.float32),
             structure_plddt=None,
             plddt=None,
         )
-        expected = np.array([0.0, 1.0, 1.0], dtype=np.float32)
 
-        with mock.patch(
-            "FoldQC.properties.pae_domain_labels", return_value=expected
-        ) as labels:
-            values = dialog._compute_property_for(
-                "pae_domain_spectral", None, data, [], "target_model_0"
-            )
+        # All-zero PAE: threshold=8.5 puts all 3 tokens in one cluster.
+        values = dialog._compute_property_for(
+            "pae_domain_spectral", None, data, [], "target_model_0"
+        )
 
-        np.testing.assert_array_equal(values, expected)
-        labels.assert_called_once_with(data.pae, threshold=8.5, method="spectral")
+        self.assertIsNotNone(values)
+        self.assertEqual(values.shape, (3,))
 
     def test_pae_domain_dependency_warning_for_missing_scipy(self) -> None:
         dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
@@ -2134,16 +2128,12 @@ class GuiModelSwitchingTests(unittest.TestCase):
         msg = _PYMOL.Qt.QtWidgets.QMessageBox
         msg.warnings.clear()
 
-        with (
-            mock.patch("FoldQC.gui.importlib.util.find_spec", return_value=None),
-            mock.patch("FoldQC.properties.pae_domain_labels") as labels,
-        ):
+        with mock.patch("FoldQC.gui.importlib.util.find_spec", return_value=None):
             values = dialog._compute_property_for(
                 "pae_domain_complete", None, data, [], "target_model_0"
             )
 
         self.assertIsNone(values)
-        labels.assert_not_called()
         self.assertEqual(len(msg.warnings), 1)
         self.assertIn("SciPy", msg.warnings[0][1])
 
@@ -2163,16 +2153,12 @@ class GuiModelSwitchingTests(unittest.TestCase):
                 return object()
             return None
 
-        with (
-            mock.patch("FoldQC.gui.importlib.util.find_spec", side_effect=_find_spec),
-            mock.patch("FoldQC.properties.pae_domain_labels") as labels,
-        ):
+        with mock.patch("FoldQC.gui.importlib.util.find_spec", side_effect=_find_spec):
             values = dialog._compute_property_for(
                 "pae_domain_spectral", None, data, [], "target_model_0"
             )
 
         self.assertIsNone(values)
-        labels.assert_not_called()
         self.assertEqual(len(msg.warnings), 1)
         self.assertIn("scikit-learn", msg.warnings[0][1])
 

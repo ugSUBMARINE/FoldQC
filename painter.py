@@ -48,7 +48,11 @@ def token_bfactor_keys(token_map) -> list[tuple[str, str, str]]:
     the residue receives the token value. HETATM tokens are keyed by atom name.
     """
     return [
-        (tok.chain_id, str(tok.res_num), tok.atom_name if tok.is_hetatm and tok.atom_name else "")
+        (
+            tok.chain_id,
+            str(tok.res_num),
+            tok.atom_name if tok.is_hetatm and tok.atom_name else "",
+        )
         for tok in token_map
     ]
 

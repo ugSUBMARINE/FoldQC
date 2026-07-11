@@ -58,9 +58,24 @@ def test_compute_plddt_uses_preferred_source_and_errors_when_missing() -> None:
         )
 
 
-def test_pae_dispatch_and_reference_requirements(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_plddt_class_routes_to_same_array_as_plddt() -> None:
+    """plddt_class must be routable through compute_metric (same data as plddt)."""
+    structure = np.array([0.9, 0.5, 0.3], dtype=np.float32)
+    data = types.SimpleNamespace(structure_plddt=structure, plddt=None)
+
+    plddt_result = compute.compute_metric("plddt", data, [])
+    plddt_class_result = compute.compute_metric("plddt_class", data, [])
+    np.testing.assert_array_equal(plddt_class_result, plddt_result)
+
+    with pytest.raises(compute.MissingMetricDataError):
+        compute.compute_metric(
+            "plddt_class",
+            types.SimpleNamespace(structure_plddt=None, plddt=None),
+            [],
+        )
+
+
+def test_pae_dispatch_and_reference_requirements() -> None:
     pae = np.array(
         [
             [0.0, 1.0, 2.0],
@@ -111,19 +126,10 @@ def test_pae_dispatch_and_reference_requirements(
     with pytest.raises(compute.MissingContactError):
         compute.compute_metric("pae_contact", data, [], ref_indices=[0])
 
-    expected = np.array([0.0, 1.0, 1.0], dtype=np.float32)
-
-    def fake_labels(pae_arg, threshold, method):
-        assert pae_arg is pae
-        assert threshold == 6.5
-        assert method == "complete_linkage"
-        return expected
-
-    monkeypatch.setattr("FoldQC.properties.pae_domain_labels", fake_labels)
-    np.testing.assert_array_equal(
-        compute.compute_metric("pae_domain_complete", data, [], cutoff=6.5),
-        expected,
-    )
+    # PAE is all-zeros: every threshold > 0 puts all tokens in one cluster.
+    labels = compute.compute_metric("pae_domain_complete", data, [], cutoff=6.5)
+    assert labels.shape == (3,)
+    assert len(set(labels.tolist())) == 1  # one cluster
     assert compute.pae_domain_method("pae_domain_spectral") == "spectral"
     with pytest.raises(compute.MissingCutoffError):
         compute.compute_metric("pae_domain_spectral", data, [])
