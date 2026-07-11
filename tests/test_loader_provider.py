@@ -19,7 +19,6 @@ from FoldQC.loader import (  # noqa: E402
     scan_prediction_path,
 )
 
-
 CIF_TEXT = """data_test
 loop_
 _atom_site.group_PDB

@@ -97,7 +97,7 @@ class PlotDialog(QtWidgets.QDialog):
         figure: Any,
         title: str,
         parent: QtWidgets.QWidget | None = None,
-        on_close: Callable[["PlotDialog"], None] | None = None,
+        on_close: Callable[[PlotDialog], None] | None = None,
     ) -> None:
         super().__init__(parent)
         self._figure = figure

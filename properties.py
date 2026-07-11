@@ -243,8 +243,8 @@ def _spectral_cluster_count_from_eigengap(
     if max_k < 2:
         return 1
 
-    from scipy.sparse.csgraph import laplacian
     from scipy.linalg import eigvalsh
+    from scipy.sparse.csgraph import laplacian
 
     lap = laplacian(affinity, normed=True)
     eigenvalues = eigvalsh(lap, subset_by_index=[0, max_k])

@@ -11,8 +11,8 @@ through this module.
 from __future__ import annotations
 
 import colorsys
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Sequence
 
 ColorStop = tuple[float, float, float]
 MplSpec = str | Sequence[str]

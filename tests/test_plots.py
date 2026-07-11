@@ -9,8 +9,10 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from FoldQC import plots  # noqa: E402
-from FoldQC import palettes  # noqa: E402
+from FoldQC import (
+    palettes,  # noqa: E402
+    plots,  # noqa: E402
+)
 
 
 class PlotTests(unittest.TestCase):

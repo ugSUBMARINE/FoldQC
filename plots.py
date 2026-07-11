@@ -21,7 +21,8 @@ import os
 import platform
 import subprocess
 import tempfile
-from typing import Any, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 # Force non-interactive Agg backend before any pyplot import.
 # Must happen before 'import matplotlib.pyplot'.

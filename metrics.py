@@ -8,8 +8,8 @@ units/semantics; numeric transformations remain in :mod:`properties`.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
-from typing import Mapping
 
 
 @dataclass(frozen=True)

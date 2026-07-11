@@ -4,11 +4,10 @@ import sys
 import tempfile
 import types
 import unittest
-from unittest import mock
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
-
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -232,8 +231,8 @@ _PYMOL = _install_fake_pymol()
 from FoldQC import metrics, session  # noqa: E402
 from FoldQC.gui import (  # noqa: E402
     APP_TITLE,
-    FoldQCPluginDialog,
     PREDICTION_FILE_FILTER,
+    FoldQCPluginDialog,
     _PlotTarget,
 )
 

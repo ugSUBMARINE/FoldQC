@@ -29,8 +29,8 @@ from .compat import (
     AlignVCenter,
     FormFieldGrowthPolicy,
     ItemIsEnabled,
-    QAction,
     MessageBoxStandardButton,
+    QAction,
     QSettings,
     QtWidgets,
 )

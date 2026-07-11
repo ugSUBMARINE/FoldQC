@@ -28,12 +28,16 @@ import shutil
 import stat
 import tarfile
 import tempfile
+import weakref
 import zipfile
+from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 import numpy as np
+
+from .token_map import extract_structure_plddt, parse_structure_atoms
 
 STRUCTURE_SUFFIXES = {".cif", ".pdb"}
 ARCHIVE_EXTENSIONS = (".tar.gz", ".zip", ".tgz", ".tar")
@@ -365,7 +369,7 @@ def load_prediction_data(
     )
 
     if load_structure_plddt:
-        data.structure_plddt = _extract_structure_plddt(model.structure_path)
+        data.structure_plddt = extract_structure_plddt(model.structure_path)
 
     if model.summary_path is not None:
         data.summary_confidence = _load_json(model.summary_path)
@@ -422,6 +426,56 @@ def load_prediction_data(
 # ---------------------------------------------------------------------------
 
 
+@dataclass
+class _AF3Sample:
+    """One AF3 seed/sample directory's discovered paths and metadata."""
+
+    model_path: Path
+    confidence_path: Path | None
+    summary_path: Path | None
+    summary: dict
+    ranking_score: float | None
+    seed: int | None
+    sample: int | None
+
+
+@dataclass
+class _BoltzSampleCandidate:
+    """One Boltz Lab / API prediction sample's discovered paths."""
+
+    sample_index: int
+    structure_path: Path
+    pae_path: Path | None
+    confidence: dict | None = None
+    structure_confidence: float | None = None
+
+
+@dataclass
+class _ChaiCandidate:
+    """One Chai-1 Discovery prediction candidate's discovered paths."""
+
+    structure_path: Path
+    model_idx: int | None
+    explicit_rank: int | None
+    confidence_path: Path | None
+    pae_path: Path | None
+    pde_path: Path | None
+    aggregate_score: float | None
+
+
+@dataclass
+class _ProtenixCandidate:
+    """One Protenix prediction sample's discovered paths."""
+
+    structure_path: Path
+    summary_path: Path
+    full_data_path: Path | None
+    source_prefix: str
+    sample_rank: int
+    seed: int | None
+    ranking_score: float | None
+
+
 def _prediction_dir_provider(pred_dir: Path) -> str | None:
     if _looks_like_af3_server(pred_dir):
         return "af3_server"
@@ -449,12 +503,7 @@ class _TemporaryExtraction:
 
     def __init__(self, root: Path) -> None:
         self.root = root
-
-    def cleanup(self) -> None:
-        shutil.rmtree(self.root, ignore_errors=True)
-
-    def __del__(self) -> None:
-        self.cleanup()
+        weakref.finalize(self, shutil.rmtree, root, ignore_errors=True)
 
 
 def _looks_like_boltz(pred_dir: Path) -> bool:
@@ -977,18 +1026,16 @@ def _scan_boltz_lab_dir(pred_dir: Path) -> PredictionFiles:
         capabilities={"structure_plddt"},
     )
 
-    for rank, item in enumerate(
-        sorted(candidates, key=lambda item: item["sample_index"])
-    ):
-        sample_index = int(item["sample_index"])
+    for rank, item in enumerate(sorted(candidates, key=lambda item: item.sample_index)):
+        sample_index = item.sample_index
         confidence = sample_results.get(f"sample_{sample_index}")
         files.models.append(
             ModelFiles(
                 rank=rank,
-                structure_path=item["structure_path"],
+                structure_path=item.structure_path,
                 display_label=f"sample {sample_index}",
                 object_name=f"{_safe_object_name(name)}_model_{rank}",
-                pae_path=item["pae_path"],
+                pae_path=item.pae_path,
                 metadata={
                     "sample_index": sample_index,
                     "confidence": confidence if isinstance(confidence, dict) else None,
@@ -1020,17 +1067,16 @@ def _scan_boltz_api_dir(pred_dir: Path) -> PredictionFiles:
 
     metrics_by_sample = _boltz_api_metrics_by_sample(pred_dir, prediction_dir)
     for item in candidates:
-        sample_index = int(item["sample_index"])
-        item["confidence"] = metrics_by_sample.get(sample_index)
-        item["structure_confidence"] = _float_or_none(
-            (item["confidence"] or {}).get("structure_confidence")
+        item.confidence = metrics_by_sample.get(item.sample_index)
+        item.structure_confidence = _float_or_none(
+            (item.confidence or {}).get("structure_confidence")
         )
 
     candidates.sort(
         key=lambda item: (
-            item["structure_confidence"] is None,
-            -float(item["structure_confidence"] or 0.0),
-            item["sample_index"],
+            item.structure_confidence is None,
+            -float(item.structure_confidence or 0.0),
+            item.sample_index,
         )
     )
 
@@ -1044,20 +1090,19 @@ def _scan_boltz_api_dir(pred_dir: Path) -> PredictionFiles:
     )
 
     for rank, item in enumerate(candidates):
-        sample_index = int(item["sample_index"])
-        metadata = {
-            "sample_index": sample_index,
-            "confidence": item["confidence"],
+        metadata: dict[str, Any] = {
+            "sample_index": item.sample_index,
+            "confidence": item.confidence,
         }
-        if item["structure_confidence"] is not None:
-            metadata["structure_confidence"] = item["structure_confidence"]
+        if item.structure_confidence is not None:
+            metadata["structure_confidence"] = item.structure_confidence
         files.models.append(
             ModelFiles(
                 rank=rank,
-                structure_path=item["structure_path"],
-                display_label=f"rank {rank} - sample {sample_index}",
+                structure_path=item.structure_path,
+                display_label=f"rank {rank} - sample {item.sample_index}",
                 object_name=f"{_safe_object_name(name)}_model_{rank}",
-                pae_path=item["pae_path"],
+                pae_path=item.pae_path,
                 metadata=metadata,
             )
         )
@@ -1078,7 +1123,7 @@ def _scan_af3_dir(pred_dir: Path) -> PredictionFiles:
     )
 
     ranking_scores = _load_af3_ranking_scores(pred_dir)
-    samples = []
+    samples: list[_AF3Sample] = []
     for sample_dir in sorted(pred_dir.glob("seed-*_sample-*")):
         if not sample_dir.is_dir():
             continue
@@ -1090,7 +1135,7 @@ def _scan_af3_dir(pred_dir: Path) -> PredictionFiles:
         summary = _load_json(summary_path) if summary_path is not None else {}
         seed, sample = _parse_af3_seed_sample(sample_dir.name)
         samples.append(
-            dict(
+            _AF3Sample(
                 model_path=model_path,
                 confidence_path=confidence_path,
                 summary_path=summary_path,
@@ -1104,24 +1149,24 @@ def _scan_af3_dir(pred_dir: Path) -> PredictionFiles:
     if samples:
         samples.sort(
             key=lambda item: (
-                _ranking_sort_key(item["summary"], item.get("ranking_score")),
-                item["seed"] if item["seed"] is not None else 0,
-                item["sample"] if item["sample"] is not None else 0,
+                _ranking_sort_key(item.summary, item.ranking_score),
+                item.seed if item.seed is not None else 0,
+                item.sample if item.sample is not None else 0,
             )
         )
         for rank, item in enumerate(samples):
             label = "rank " + str(rank)
-            if item["seed"] is not None and item["sample"] is not None:
-                label += f" - seed {item['seed']} sample {item['sample']}"
+            if item.seed is not None and item.sample is not None:
+                label += f" - seed {item.seed} sample {item.sample}"
             files.models.append(
                 ModelFiles(
                     rank=rank,
-                    structure_path=item["model_path"],
+                    structure_path=item.model_path,
                     display_label=label,
                     object_name=f"{_safe_object_name(name)}_model_{rank}",
-                    confidence_path=item["confidence_path"],
-                    summary_path=item["summary_path"],
-                    metadata={"seed": item["seed"], "sample": item["sample"]},
+                    confidence_path=item.confidence_path,
+                    summary_path=item.summary_path,
+                    metadata={"seed": item.seed, "sample": item.sample},
                 )
             )
     else:
@@ -1209,7 +1254,7 @@ def _scan_chai_dir(pred_dir: Path) -> PredictionFiles:
         capabilities={"structure_plddt"},
     )
 
-    candidates: list[dict[str, Any]] = []
+    candidates: list[_ChaiCandidate] = []
     for structure_path in _chai_structure_paths(pred_dir):
         parsed = _parse_chai_stem(structure_path.stem)
         if parsed is None:
@@ -1220,15 +1265,15 @@ def _scan_chai_dir(pred_dir: Path) -> PredictionFiles:
         pae_path = _chai_companion_path(pred_dir, "pae", suffix)
         pde_path = _chai_companion_path(pred_dir, "pde", suffix)
         candidates.append(
-            {
-                "structure_path": structure_path,
-                "model_idx": model_idx,
-                "explicit_rank": explicit_rank,
-                "confidence_path": confidence_path,
-                "pae_path": pae_path,
-                "pde_path": pde_path,
-                "aggregate_score": _chai_aggregate_score(confidence_path),
-            }
+            _ChaiCandidate(
+                structure_path=structure_path,
+                model_idx=model_idx,
+                explicit_rank=explicit_rank,
+                confidence_path=confidence_path,
+                pae_path=pae_path,
+                pde_path=pde_path,
+                aggregate_score=_chai_aggregate_score(confidence_path),
+            )
         )
 
     if not candidates:
@@ -1239,27 +1284,27 @@ def _scan_chai_dir(pred_dir: Path) -> PredictionFiles:
             "'pred.model_idx_<idx>.cif'."
         )
 
-    explicit = [item for item in candidates if item["explicit_rank"] is not None]
-    raw = [item for item in candidates if item["explicit_rank"] is None]
+    explicit = [item for item in candidates if item.explicit_rank is not None]
+    raw = [item for item in candidates if item.explicit_rank is None]
     explicit.sort(
         key=lambda item: (
-            item["explicit_rank"],
-            item["model_idx"] if item["model_idx"] is not None else -1,
-            item["structure_path"].name,
+            item.explicit_rank,
+            item.model_idx if item.model_idx is not None else -1,
+            item.structure_path.name,
         )
     )
     raw.sort(
         key=lambda item: (
-            item["aggregate_score"] is None,
-            -float(item["aggregate_score"] or 0.0),
-            item["model_idx"] if item["model_idx"] is not None else 0,
-            item["structure_path"].name,
+            item.aggregate_score is None,
+            -float(item.aggregate_score or 0.0),
+            item.model_idx if item.model_idx is not None else 0,
+            item.structure_path.name,
         )
     )
 
     used_ranks: set[int] = set()
     for item in explicit:
-        rank = int(item["explicit_rank"])
+        rank = int(item.explicit_rank)  # type: ignore[arg-type]  # explicit list is filtered
         if rank in used_ranks:
             continue
         used_ranks.add(rank)
@@ -1282,26 +1327,26 @@ def _scan_chai_dir(pred_dir: Path) -> PredictionFiles:
 
 def _append_chai_model(
     files: PredictionFiles,
-    item: dict[str, Any],
+    item: _ChaiCandidate,
     rank: int,
 ) -> None:
-    metadata = {}
-    if item["model_idx"] is not None:
-        metadata["model_idx"] = item["model_idx"]
-    if item["aggregate_score"] is not None:
-        metadata["aggregate_score"] = item["aggregate_score"]
+    metadata: dict[str, Any] = {}
+    if item.model_idx is not None:
+        metadata["model_idx"] = item.model_idx
+    if item.aggregate_score is not None:
+        metadata["aggregate_score"] = item.aggregate_score
     label = f"rank {rank}"
-    if item["model_idx"] is not None:
-        label += f" - model {item['model_idx']}"
+    if item.model_idx is not None:
+        label += f" - model {item.model_idx}"
     files.models.append(
         ModelFiles(
             rank=rank,
-            structure_path=item["structure_path"],
+            structure_path=item.structure_path,
             display_label=label,
             object_name=f"{_safe_object_name(files.name)}_model_{rank}",
-            confidence_path=item["confidence_path"],
-            pae_path=item["pae_path"],
-            pde_path=item["pde_path"],
+            confidence_path=item.confidence_path,
+            pae_path=item.pae_path,
+            pde_path=item.pde_path,
             metadata=metadata,
         )
     )
@@ -1329,35 +1374,35 @@ def _scan_protenix_dir(pred_dir: Path) -> PredictionFiles:
 
     candidates.sort(
         key=lambda item: (
-            item["ranking_score"] is None,
-            -float(item["ranking_score"] or 0.0),
-            item["seed"] if item["seed"] is not None else 0,
-            item["sample_rank"],
-            item["structure_path"].name,
+            item.ranking_score is None,
+            -float(item.ranking_score or 0.0),
+            item.seed if item.seed is not None else 0,
+            item.sample_rank,
+            item.structure_path.name,
         )
     )
 
     for rank, item in enumerate(candidates):
         label = f"rank {rank}"
-        if item["seed"] is not None:
-            label += f" - seed {item['seed']}"
-        label += f" sample {item['sample_rank']}"
-        metadata = {
-            "sample_rank": item["sample_rank"],
-            "source_prefix": item["source_prefix"],
+        if item.seed is not None:
+            label += f" - seed {item.seed}"
+        label += f" sample {item.sample_rank}"
+        metadata: dict[str, Any] = {
+            "sample_rank": item.sample_rank,
+            "source_prefix": item.source_prefix,
         }
-        if item["seed"] is not None:
-            metadata["seed"] = item["seed"]
-        if item["ranking_score"] is not None:
-            metadata["ranking_score"] = item["ranking_score"]
+        if item.seed is not None:
+            metadata["seed"] = item.seed
+        if item.ranking_score is not None:
+            metadata["ranking_score"] = item.ranking_score
         files.models.append(
             ModelFiles(
                 rank=rank,
-                structure_path=item["structure_path"],
+                structure_path=item.structure_path,
                 display_label=label,
                 object_name=f"{_safe_object_name(name)}_model_{rank}",
-                confidence_path=item["full_data_path"],
-                summary_path=item["summary_path"],
+                confidence_path=item.full_data_path,
+                summary_path=item.summary_path,
                 metadata=metadata,
             )
         )
@@ -1496,23 +1541,10 @@ def _load_protenix_model_data(
 # ---------------------------------------------------------------------------
 
 
-def _extract_structure_plddt(structure_path: Path) -> np.ndarray:
-    try:
-        from .token_map import extract_structure_plddt
-    except ImportError:  # allow direct ``from loader import ...`` during testing
-        from token_map import extract_structure_plddt
-
-    return extract_structure_plddt(structure_path)
-
-
 def _collapse_atom_plddts_to_tokens(
     structure_path: Path,
     atom_plddts: np.ndarray,
 ) -> np.ndarray:
-    try:
-        from .token_map import parse_structure_atoms
-    except ImportError:
-        from token_map import parse_structure_atoms
 
     atoms = parse_structure_atoms(structure_path)
     if len(atoms) != len(atom_plddts):
@@ -1526,31 +1558,26 @@ def _collapse_atom_plddts_to_tokens(
     if finite.size and float(np.nanmax(finite)) > 1.5:
         values = values / 100.0
 
-    out: list[float] = []
-    residue_values: dict[tuple[str, int, str], list[float]] = {}
-    residue_order: list[tuple[str, int, str]] = []
-    for atom, value in zip(atoms, values):
-        if atom["hetatm"]:
-            out.append(float(value))
-            continue
-        key = (atom["chain"], atom["resi"], atom["resn"])
-        if key not in residue_values:
-            residue_values[key] = []
-            residue_order.append(key)
-        residue_values[key].append(float(value))
+    # Group values by residue, then average over residues. This is necessary because
+    # AF3 atom_plddts are per-atom, but we want per-residue
+    residue_values: dict[tuple[str, int, str], list[float]] = defaultdict(list)
+    for atom, value in zip(atoms, values, strict=True):
+        # skip heterocomponents since they always have one token per atom
+        if not atom["hetatm"]:
+            key = (atom["chain"], atom["resi"], atom["resn"])
+            residue_values[key].append(float(value))
 
     # Rebuild in structure-token order rather than "all residues then ligands".
-    out = []
+    out: list[float] = []
     emitted: set[tuple[str, int, str]] = set()
-    for atom, value in zip(atoms, values):
+    for atom, value in zip(atoms, values, strict=True):
         if atom["hetatm"]:
             out.append(float(value))
-            continue
-        key = (atom["chain"], atom["resi"], atom["resn"])
-        if key in emitted:
-            continue
-        emitted.add(key)
-        out.append(float(np.nanmean(residue_values[key])))
+        else:
+            key = (atom["chain"], atom["resi"], atom["resn"])
+            if key not in emitted:
+                emitted.add(key)
+                out.append(float(np.nanmean(residue_values[key])))
 
     return np.asarray(out, dtype=np.float32)
 
@@ -1668,18 +1695,18 @@ def _parse_boltz_sample_structure_stem(stem: str) -> int | None:
     return int(match.group(1)) if match else None
 
 
-def _boltz_sample_candidates(pred_dir: Path) -> list[dict[str, Any]]:
+def _boltz_sample_candidates(pred_dir: Path) -> list[_BoltzSampleCandidate]:
     candidates = []
     for sample_index, structure_path in _boltz_sample_structure_paths(pred_dir).items():
         pae_path = pred_dir / f"sample_{sample_index}_pae.npz"
         candidates.append(
-            {
-                "sample_index": sample_index,
-                "structure_path": structure_path,
-                "pae_path": pae_path if pae_path.exists() else None,
-            }
+            _BoltzSampleCandidate(
+                sample_index=sample_index,
+                structure_path=structure_path,
+                pae_path=pae_path if pae_path.exists() else None,
+            )
         )
-    return sorted(candidates, key=lambda item: item["sample_index"])
+    return sorted(candidates, key=lambda item: item.sample_index)
 
 
 def _is_boltz_api_metrics(metrics: dict | None) -> bool:
@@ -1722,8 +1749,8 @@ def _boltz_api_metrics_by_sample(
     return by_sample
 
 
-def _protenix_prediction_candidates(pred_dir: Path) -> list[dict[str, Any]]:
-    candidates: list[dict[str, Any]] = []
+def _protenix_prediction_candidates(pred_dir: Path) -> list[_ProtenixCandidate]:
+    candidates: list[_ProtenixCandidate] = []
     for predictions_dir in _protenix_prediction_dirs(pred_dir):
         for structure_path in _protenix_structure_paths(predictions_dir):
             parsed = _parse_protenix_stem(structure_path.stem)
@@ -1741,17 +1768,15 @@ def _protenix_prediction_candidates(pred_dir: Path) -> list[dict[str, Any]]:
             )
             summary = _load_json(summary_path)
             candidates.append(
-                {
-                    "structure_path": structure_path,
-                    "summary_path": summary_path,
-                    "full_data_path": full_data_path
-                    if full_data_path.exists()
-                    else None,
-                    "source_prefix": prefix,
-                    "sample_rank": sample_rank,
-                    "seed": _parse_protenix_seed(predictions_dir),
-                    "ranking_score": _float_or_none(summary.get("ranking_score")),
-                }
+                _ProtenixCandidate(
+                    structure_path=structure_path,
+                    summary_path=summary_path,
+                    full_data_path=full_data_path if full_data_path.exists() else None,
+                    source_prefix=prefix,
+                    sample_rank=sample_rank,
+                    seed=_parse_protenix_seed(predictions_dir),
+                    ranking_score=_float_or_none(summary.get("ranking_score")),
+                )
             )
     return candidates
 
@@ -1797,8 +1822,10 @@ def _parse_protenix_seed(predictions_dir: Path) -> int | None:
     return None
 
 
-def _protenix_prediction_name(candidates: list[dict[str, Any]], pred_dir: Path) -> str:
-    prefixes = {str(item["source_prefix"]) for item in candidates}
+def _protenix_prediction_name(
+    candidates: list[_ProtenixCandidate], pred_dir: Path
+) -> str:
+    prefixes = {item.source_prefix for item in candidates}
     if len(prefixes) == 1:
         return next(iter(prefixes))
     return pred_dir.name
@@ -1901,9 +1928,7 @@ def _matrix_list_to_nested_dict(matrix: list) -> dict[str, dict[str, float]]:
     }
 
 
-def _load_json(path: Path | None) -> dict:
-    if path is None:
-        return {}
+def _load_json(path: Path) -> dict:
     with path.open() as fh:
         return json.load(fh)
 
@@ -2007,7 +2032,7 @@ def _ranked_json_path(
 def _ranking_sort_key(summary: dict, ranking_score: float | None = None) -> float:
     value = ranking_score if ranking_score is not None else summary.get("ranking_score")
     try:
-        return -float(value)
+        return -float(value)  # type: ignore[arg-type]  # None/invalid caught below
     except (TypeError, ValueError):
         return float("inf")
 

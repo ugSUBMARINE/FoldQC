@@ -13,12 +13,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from FoldQC.token_map import (
     TokenInfo,
     build_token_map,
-    compare_token_map_to_pymol_object,
     compact_pymol_selection_expression,
+    compare_token_map_to_pymol_object,
     extract_structure_plddt,
     parse_structure_atoms,
 )  # noqa: E402
-
 
 QUOTED_ATOM_CIF = """data_test
 loop_
