@@ -155,7 +155,7 @@ def pae_symmetric_to_selection(
 
     n = pae.shape[0]
     ref = np.array(ref_indices, dtype=int)
-    non_ref = np.array([i for i in range(n) if i not in set(ref_indices)], dtype=int)
+    non_ref = np.setdiff1d(np.arange(n, dtype=int), ref, assume_unique=True)
 
     out = np.full(n, np.nan, dtype=np.float32)
 
