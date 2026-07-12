@@ -194,3 +194,18 @@ def test_ensemble_aggregate_kind() -> None:
 )
 def test_metric_units_and_semantics(key: str, expected: tuple[str, str]) -> None:
     assert metrics.metric_units_and_semantics(key) == expected
+
+
+def test_all_metrics_have_non_empty_preview_template() -> None:
+    """Every MetricSpec must declare a preview_template so gui_rules has no gaps."""
+    missing = [spec.key for spec in metrics.METRICS if not spec.preview_template]
+    assert missing == [], f"Missing preview_template for: {missing}"
+
+
+def test_preview_templates_are_valid_format_strings() -> None:
+    """All templates must accept the three standard placeholders without error."""
+    for spec in metrics.METRICS:
+        rendered = spec.preview_template.format(
+            target_text="T", ref_sel="R", cutoff="5.0 \u00c5"
+        )
+        assert rendered, f"Empty rendered preview for {spec.key}"

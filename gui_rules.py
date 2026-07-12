@@ -230,26 +230,6 @@ def preview_cutoff_text(cutoff_text: str | None) -> str:
     return f"{value:g} Å"
 
 
-def domain_label_preview_text(
-    metric_key: str,
-    cutoff_text: str | None,
-    target_text: str = "the target",
-) -> str:
-    """Return a method-specific preview for PAE domain-label coloring."""
-    cutoff = preview_cutoff_text(cutoff_text)
-    if metric_key == "pae_domain_complete":
-        return (
-            f"Colors {target_text} with categorical rigid-domain labels by "
-            f"grouping tokens whose pairwise symmetric PAE stays within the "
-            f"{cutoff} threshold."
-        )
-    return (
-        f"Colors {target_text} with categorical heuristic PAE domain labels by "
-        f"spectral clustering of a symmetric PAE affinity graph using the "
-        f"{cutoff} threshold as a scale."
-    )
-
-
 def metric_preview_text(
     metric_key: str | None,
     target_kind: str,
@@ -261,17 +241,19 @@ def metric_preview_text(
     if not metric_key:
         return "Select a Color by metric."
 
-    prop = metrics.PROPERTY_BY_KEY.get(metric_key, {})
+    spec = metrics.METRIC_BY_KEY.get(metric_key)
     ref_sel = reference_selection.strip()
     target_text = (
         "all members of the ensemble"
         if target_kind == "ensemble_group"
         else "the target"
     )
-    if prop.get("ensemble_level", False) and not has_ensemble:
+
+    if spec is not None and spec.ensemble_level and not has_ensemble:
         preview = 'Load an ensemble with "Load Ensemble..." to use this metric.'
         return _append_reference_plot_guidance(preview, metric_key, ref_sel)
-    if prop.get("needs_ref", False) and not ref_sel:
+
+    if spec is not None and spec.needs_ref and not ref_sel:
         if metric_key in metrics.CONTACT_FILTERED_METRICS:
             return (
                 "Requires a reference selection and contact cutoff. Try "
@@ -281,87 +263,15 @@ def metric_preview_text(
             'Requires a reference selection. Try "chain B", "resname LIG", '
             'or "organic".'
         )
-    if metric_key in metrics.CONTACT_FILTERED_METRICS:
-        metric_name = "PAE" if metric_key == "pae_contact" else "PDE"
-        preview = (
-            f"Colors polymer binding-site residues in {target_text} within "
-            f'{preview_cutoff_text(cutoff_text)} of "{ref_sel}" by mean {metric_name} '
-            "to the reference."
-        )
-    elif metrics.is_domain_label_metric(metric_key):
-        preview = domain_label_preview_text(metric_key, cutoff_text, target_text)
-    else:
-        by_key = {
-            "plddt_class": (
-                f"Applies AlphaFold pLDDT confidence classes to {target_text}."
-            ),
-            "plddt": (f"Colors {target_text} by continuous local confidence (pLDDT)."),
-            "pae_row_mean": (
-                f"Colors each token in {target_text} by how well the rest of the model is positioned when aligned on that token."
-            ),
-            "pae_col_mean": (
-                f"Colors each token in {target_text} by its average positional uncertainty across all alignment frames."
-            ),
-            "pde_mean": (
-                f"Colors each token in {target_text} by its average predicted distance error to all other tokens."
-            ),
-            "pde_chain_mean": (
-                f"Colors each token in {target_text} by predicted distance error within its own chain."
-            ),
-            "contact_prob_mean": (
-                f"Colors each token in {target_text} by its average predicted interaction probability across the model."
-            ),
-            "chain_iptm": (
-                f"Colors chains in {target_text} by chain-level ipTM; use Plot > Matrix for pairwise chain ipTM."
-            ),
-            "ensemble_rmsd": (
-                f"Colors {target_text} by per-token coordinate variation in the loaded ensemble after alignment."
-            ),
-            "ensemble_plddt_mean": (
-                f"Colors {target_text} by the mean pLDDT at each token across models in the loaded ensemble."
-            ),
-            "ensemble_plddt_std": (
-                f"Colors {target_text} by how much pLDDT varies at each token across models in the loaded ensemble."
-            ),
-        }
-        preview = by_key.get(metric_key, "")
 
-    if not preview and metric_key == "pae_to_sel":
-        preview = (
-            f"Colors each token in {target_text} by directional PAE from that "
-            f'token to "{ref_sel}".'
+    template = spec.preview_template if spec is not None else ""
+    if template:
+        preview = template.format(
+            target_text=target_text,
+            ref_sel=ref_sel,
+            cutoff=preview_cutoff_text(cutoff_text),
         )
-    elif not preview and metric_key == "pae_col_to_sel":
-        preview = (
-            f"Colors each token in {target_text} by directional PAE from "
-            f'"{ref_sel}" to that token.'
-        )
-    elif not preview and metric_key == "pae_sym_sel":
-        preview = (
-            f"Colors {target_text} by bidirectional mean PAE between each token "
-            f'and "{ref_sel}".'
-        )
-    elif not preview and metric_key == "pae_sym_within_sel":
-        preview = (
-            f'Colors only tokens in "{ref_sel}" within {target_text} by their '
-            "internal symmetric PAE."
-        )
-    elif not preview and metric_key == "pde_to_sel":
-        preview = (
-            f"Colors each token in {target_text} by predicted distance error "
-            f'to "{ref_sel}".'
-        )
-    elif not preview and metric_key == "pde_within_sel":
-        preview = (
-            f'Colors only tokens in "{ref_sel}" within {target_text} by their '
-            "internal predicted distance error."
-        )
-    elif not preview and metric_key == "contact_prob_to_sel":
-        preview = (
-            f"Colors each token in {target_text} by predicted interaction "
-            f'probability with "{ref_sel}".'
-        )
-    elif not preview:
+    else:
         preview = f"Colors {target_text} by {metrics.metric_label(metric_key)}."
 
     preview = _append_ensemble_plot_guidance(preview, metric_key, target_kind)

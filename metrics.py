@@ -29,6 +29,9 @@ class MetricSpec:
     needs_contact_probs: bool = False
     needs_confidence: bool = False
     ensemble_level: bool = False
+    # Format string with optional named placeholders {target_text}, {ref_sel}, {cutoff}.
+    # Rendered by gui_rules.metric_preview_text into the combo-box preview label.
+    preview_template: str = ""
 
     def as_property_dict(self) -> dict[str, object]:
         """Return the legacy dict descriptor shape used by GUI code."""
@@ -41,24 +44,34 @@ METRICS: tuple[MetricSpec, ...] = (
         label="pLDDT — quality classes",
         group="pLDDT",
         needs_any_plddt=True,
+        preview_template="Applies AlphaFold pLDDT confidence classes to {target_text}.",
     ),
     MetricSpec(
         key="plddt",
         label="pLDDT — continuous",
         group="pLDDT",
         needs_any_plddt=True,
+        preview_template="Colors {target_text} by continuous local confidence (pLDDT).",
     ),
     MetricSpec(
         key="pae_row_mean",
         label="PAE — row mean",
         group="PAE",
         needs_pae=True,
+        preview_template=(
+            "Colors each token in {target_text} by how well the rest of the model"
+            " is positioned when aligned on that token."
+        ),
     ),
     MetricSpec(
         key="pae_col_mean",
         label="PAE — column mean",
         group="PAE",
         needs_pae=True,
+        preview_template=(
+            "Colors each token in {target_text} by its average positional uncertainty"
+            " across all alignment frames."
+        ),
     ),
     MetricSpec(
         key="pae_to_sel",
@@ -67,6 +80,9 @@ METRICS: tuple[MetricSpec, ...] = (
         tier="advanced",
         needs_ref=True,
         needs_pae=True,
+        preview_template=(
+            'Colors each token in {target_text} by directional PAE from that token to "{ref_sel}".'
+        ),
     ),
     MetricSpec(
         key="pae_col_to_sel",
@@ -75,6 +91,9 @@ METRICS: tuple[MetricSpec, ...] = (
         tier="advanced",
         needs_ref=True,
         needs_pae=True,
+        preview_template=(
+            'Colors each token in {target_text} by directional PAE from "{ref_sel}" to that token.'
+        ),
     ),
     MetricSpec(
         key="pae_sym_sel",
@@ -83,6 +102,10 @@ METRICS: tuple[MetricSpec, ...] = (
         tier="advanced",
         needs_ref=True,
         needs_pae=True,
+        preview_template=(
+            "Colors {target_text} by bidirectional mean PAE between each token and"
+            ' "{ref_sel}".'
+        ),
     ),
     MetricSpec(
         key="pae_sym_within_sel",
@@ -91,6 +114,10 @@ METRICS: tuple[MetricSpec, ...] = (
         tier="advanced",
         needs_ref=True,
         needs_pae=True,
+        preview_template=(
+            'Colors only tokens in "{ref_sel}" within {target_text} by their'
+            " internal symmetric PAE."
+        ),
     ),
     MetricSpec(
         key="pae_contact",
@@ -99,6 +126,10 @@ METRICS: tuple[MetricSpec, ...] = (
         tier="advanced",
         needs_ref=True,
         needs_pae=True,
+        preview_template=(
+            "Colors polymer binding-site residues in {target_text} within {cutoff} of"
+            ' "{ref_sel}" by mean PAE to the reference.'
+        ),
     ),
     MetricSpec(
         key="pae_domain_complete",
@@ -106,6 +137,10 @@ METRICS: tuple[MetricSpec, ...] = (
         group="PAE",
         tier="experimental",
         needs_pae=True,
+        preview_template=(
+            "Colors {target_text} with categorical rigid-domain labels by grouping"
+            " tokens whose pairwise symmetric PAE stays within the {cutoff} threshold."
+        ),
     ),
     MetricSpec(
         key="pae_domain_spectral",
@@ -113,18 +148,31 @@ METRICS: tuple[MetricSpec, ...] = (
         group="PAE",
         tier="experimental",
         needs_pae=True,
+        preview_template=(
+            "Colors {target_text} with categorical heuristic PAE domain labels by"
+            " spectral clustering of a symmetric PAE affinity graph using the"
+            " {cutoff} threshold as a scale."
+        ),
     ),
     MetricSpec(
         key="pde_mean",
         label="PDE — mean",
         group="PDE",
         needs_pde=True,
+        preview_template=(
+            "Colors each token in {target_text} by its average predicted distance"
+            " error to all other tokens."
+        ),
     ),
     MetricSpec(
         key="pde_chain_mean",
         label="PDE — within-chain mean",
         group="PDE",
         needs_pde=True,
+        preview_template=(
+            "Colors each token in {target_text} by predicted distance error within"
+            " its own chain."
+        ),
     ),
     MetricSpec(
         key="pde_to_sel",
@@ -133,6 +181,10 @@ METRICS: tuple[MetricSpec, ...] = (
         tier="advanced",
         needs_ref=True,
         needs_pde=True,
+        preview_template=(
+            "Colors each token in {target_text} by predicted distance error"
+            ' to "{ref_sel}".'
+        ),
     ),
     MetricSpec(
         key="pde_within_sel",
@@ -141,6 +193,10 @@ METRICS: tuple[MetricSpec, ...] = (
         tier="advanced",
         needs_ref=True,
         needs_pde=True,
+        preview_template=(
+            'Colors only tokens in "{ref_sel}" within {target_text} by their'
+            " internal predicted distance error."
+        ),
     ),
     MetricSpec(
         key="pde_contact",
@@ -149,12 +205,20 @@ METRICS: tuple[MetricSpec, ...] = (
         tier="advanced",
         needs_ref=True,
         needs_pde=True,
+        preview_template=(
+            "Colors polymer binding-site residues in {target_text} within {cutoff} of"
+            ' "{ref_sel}" by mean PDE to the reference.'
+        ),
     ),
     MetricSpec(
         key="contact_prob_mean",
         label="Interaction probability — mean",
         group="Interaction probability",
         needs_contact_probs=True,
+        preview_template=(
+            "Colors each token in {target_text} by its average predicted interaction"
+            " probability across the model."
+        ),
     ),
     MetricSpec(
         key="contact_prob_to_sel",
@@ -163,12 +227,20 @@ METRICS: tuple[MetricSpec, ...] = (
         tier="advanced",
         needs_ref=True,
         needs_contact_probs=True,
+        preview_template=(
+            "Colors each token in {target_text} by predicted interaction probability"
+            ' with "{ref_sel}".'
+        ),
     ),
     MetricSpec(
         key="ensemble_rmsd",
         label="Ensemble RMSD, aligned",
         group="Ensemble",
         ensemble_level=True,
+        preview_template=(
+            "Colors {target_text} by per-token coordinate variation in the loaded"
+            " ensemble after alignment."
+        ),
     ),
     MetricSpec(
         key="ensemble_plddt_mean",
@@ -176,6 +248,10 @@ METRICS: tuple[MetricSpec, ...] = (
         group="Ensemble",
         needs_any_plddt=True,
         ensemble_level=True,
+        preview_template=(
+            "Colors {target_text} by the mean pLDDT at each token across models in"
+            " the loaded ensemble."
+        ),
     ),
     MetricSpec(
         key="ensemble_plddt_std",
@@ -183,12 +259,20 @@ METRICS: tuple[MetricSpec, ...] = (
         group="Ensemble",
         needs_any_plddt=True,
         ensemble_level=True,
+        preview_template=(
+            "Colors {target_text} by how much pLDDT varies at each token across"
+            " models in the loaded ensemble."
+        ),
     ),
     MetricSpec(
         key="chain_iptm",
         label="Chain ipTM",
         group="Chain/interface",
         needs_confidence=True,
+        preview_template=(
+            "Colors chains in {target_text} by chain-level ipTM; use Plot >"
+            " Matrix for pairwise chain ipTM."
+        ),
     ),
 )
 
