@@ -11,6 +11,9 @@ FoldQC can color structures by pLDDT, PAE, PDE, contact probability, chain
 ipTM, and ensemble metrics. It also provides line plots, matrix plots, PAE/PDE
 summary plots, binding site fingerprints, and ensemble summaries.
 
+PyMOL commands and selection syntax are isolated in `mol_viewer.py`; loading,
+analysis, plotting, and GUI modules consume its viewer-neutral function facade.
+
 Development of FoldQC has included coding assistance from OpenAI's Codex.
 
 ## Installation

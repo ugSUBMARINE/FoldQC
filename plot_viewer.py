@@ -1,7 +1,7 @@
 """
 Qt plot viewer
 ==============
-Embeds Matplotlib figures in PyMOL's Qt event loop.
+Embeds Matplotlib figures in the host viewer's Qt event loop.
 
 Qt imports go through :mod:`compat`; Matplotlib's Qt backend is imported lazily
 so plugin startup and non-GUI tests do not depend on QtAgg availability.
@@ -15,7 +15,14 @@ from typing import Any
 import numpy as np
 
 from .compat import QAction, QtCore, QtGui, QtWidgets
-from .token_map import compact_pymol_selection_expression
+from .mol_viewer import (
+    clear_selections,
+    disable_object,
+    enable_object,
+    refresh,
+    show_token_groups,
+    update_token_selection,
+)
 
 MAX_INITIAL_CANVAS_DIMENSION = 900
 SELECTION_COLOR = "#ff8c00"
@@ -73,7 +80,7 @@ def _load_qt_backend() -> tuple[type, type]:
 
     ``backend_qtagg`` is version-agnostic across Qt5/Qt6 in newer Matplotlib
     releases.  ``backend_qt5agg`` remains useful for older installations and
-    works in PyMOL's Qt6 builds in the same way as the B-factor example plugin.
+    works across the supported Qt5/Qt6 host environments.
     """
     try:
         from matplotlib.backends.backend_qtagg import (  # type: ignore[import-not-found]
@@ -139,7 +146,7 @@ class PlotDialog(QtWidgets.QDialog):
         layout.addWidget(self._selection_hint)
 
         self._resize_to_figure_size()
-        self._install_pymol_selection_bridge()
+        self._install_viewer_selection_bridge()
         self._schedule_fit_figure_to_canvas()
 
     def _target_canvas_size(self) -> tuple[int, int]:
@@ -206,9 +213,9 @@ class PlotDialog(QtWidgets.QDialog):
         super().resizeEvent(event)
         self._schedule_fit_figure_to_canvas()
 
-    def _install_pymol_selection_bridge(self) -> None:
-        """Connect token-aware Matplotlib figures to PyMOL selections."""
-        metadata = getattr(self._figure, "_foldqc_pymol_selection", None)
+    def _install_viewer_selection_bridge(self) -> None:
+        """Connect token-aware Matplotlib figures to viewer selections."""
+        metadata = getattr(self._figure, "_foldqc_viewer_selection", None)
         if not isinstance(metadata, dict):
             return
         if metadata.get("kind") not in {
@@ -781,7 +788,7 @@ class PlotDialog(QtWidgets.QDialog):
             prefix = "foldqc_plot"
         return f"{prefix}_{suffix}"
 
-    def _selection_expr_for_tokens(self, token_indices: list[int]) -> str:
+    def _selection_object_token_maps(self) -> list[tuple[str, object]]:
         metadata = self._selection_metadata or {}
         token_maps = metadata.get("token_maps")
         if token_maps is not None:
@@ -810,9 +817,11 @@ class PlotDialog(QtWidgets.QDialog):
                     token_map,
                 )
             ]
-        return compact_pymol_selection_expression(token_indices, object_token_maps)
+        return object_token_maps
 
-    def _selection_expr_for_member_sites(self, member_indices: list[int]) -> str:
+    def _selection_groups_for_member_sites(
+        self, member_indices: list[int]
+    ) -> list[tuple[list[int], str, object]]:
         metadata = self._selection_metadata or {}
         object_names = metadata.get("member_obj_names") or []
         token_maps = metadata.get("member_token_maps") or []
@@ -827,19 +836,15 @@ class PlotDialog(QtWidgets.QDialog):
                 "Ensemble site member_site_indices must correspond one-to-one "
                 "with member_token_maps."
             )
-        parts: list[str] = []
+        groups: list[tuple[list[int], str, object]] = []
         for member_idx in member_indices:
             if member_idx < 0 or member_idx >= len(token_maps):
                 continue
             token_map = token_maps[member_idx]
             indices = site_indices[member_idx]
             object_name = object_names[member_idx]
-            expression = compact_pymol_selection_expression(
-                indices, [(object_name, token_map)]
-            )
-            if expression:
-                parts.append(expression)
-        return " or ".join(parts)
+            groups.append((indices, object_name, token_map))
+        return groups
 
     def _apply_ensemble_site_selection(
         self, member_indices: list[int], *, additive: bool = False
@@ -867,25 +872,18 @@ class PlotDialog(QtWidgets.QDialog):
         if not selection_name:
             selection_name = "foldqc_ensemble_site"
         try:
-            from pymol import cmd  # lazy import
-
             for idx, obj_name in enumerate(obj_names):
                 if idx in selected:
-                    cmd.enable(obj_name)
+                    enable_object(obj_name)
                 else:
-                    cmd.disable(obj_name)
-            expr = self._selection_expr_for_member_sites(sorted(selected))
-            # print(f"FoldQC PyMOL selection: {expr or 'none'}")
-            cmd.select(selection_name, expr or "none")
-            cmd.show("sticks", selection_name)
-            cmd.enable(selection_name)
-            cmd.zoom(selection_name)
-            cmd.refresh()
+                    disable_object(obj_name)
+            groups = self._selection_groups_for_member_sites(sorted(selected))
+            show_token_groups(selection_name, groups)
             self._set_clear_action_enabled(True)
         except Exception as exc:
             print(f"FoldQC ensemble site selection failed: {exc}")
 
-    def _apply_pymol_selection(
+    def _apply_viewer_selection(
         self,
         token_indices: list[int],
         row_indices: list[int] | None = None,
@@ -893,7 +891,7 @@ class PlotDialog(QtWidgets.QDialog):
         *,
         additive: bool = False,
     ) -> None:
-        """Create/update named PyMOL selections for the selected plot tokens."""
+        """Create or update named viewer selections for selected plot tokens."""
         if not token_indices:
             return
         if additive:
@@ -914,35 +912,33 @@ class PlotDialog(QtWidgets.QDialog):
         self._selected_row_indices = row_indices
         self._selected_col_indices = col_indices
         try:
-            from pymol import cmd  # lazy import
-
-            selection_expr = self._selection_expr_for_tokens(token_indices) or "none"
-            # print(f"FoldQC PyMOL selection: {selection_expr}")
-            cmd.select(
+            object_token_maps = self._selection_object_token_maps()
+            update_token_selection(
                 self._selection_name("selection"),
-                selection_expr,
+                token_indices,
+                object_token_maps,
+                refresh_view=False,
             )
             if (self._selection_metadata or {}).get("kind") == "matrix":
-                row_expr = self._selection_expr_for_tokens(row_indices) or "none"
-                col_expr = self._selection_expr_for_tokens(col_indices) or "none"
-                # print(f"FoldQC PyMOL row selection: {row_expr}")
-                cmd.select(
+                update_token_selection(
                     self._selection_name("rows"),
-                    row_expr,
+                    row_indices,
+                    object_token_maps,
+                    refresh_view=False,
                 )
-                # print(f"FoldQC PyMOL column selection: {col_expr}")
-                cmd.select(
+                update_token_selection(
                     self._selection_name("cols"),
-                    col_expr,
+                    col_indices,
+                    object_token_maps,
+                    refresh_view=False,
                 )
-            cmd.enable(self._selection_name("selection"))
-            cmd.refresh()
+            refresh()
             self._set_clear_action_enabled(True)
         except Exception as exc:
             print(f"FoldQC plot selection failed: {exc}")
 
     def _clear_plot_selection(self) -> None:
-        """Clear plot highlights, accumulated state, and named PyMOL selections."""
+        """Clear plot highlights, accumulated state, and named viewer selections."""
         self._remove_highlight_artists()
         self._restore_bar_styles()
         self._selected_token_indices = []
@@ -955,21 +951,21 @@ class PlotDialog(QtWidgets.QDialog):
             mask.fill(False)
         metadata = self._selection_metadata or {}
         try:
-            from pymol import cmd  # lazy import
-
             if metadata.get("kind") == "ensemble_site_summary":
                 selection_name = str(
                     metadata.get("selection_name") or "foldqc_ensemble_site"
                 )
-                cmd.select(selection_name, "none")
+                clear_selections([selection_name], refresh_view=False)
                 for obj_name in metadata.get("member_obj_names") or []:
-                    cmd.enable(str(obj_name))
+                    enable_object(str(obj_name))
+                refresh()
             else:
-                cmd.select(self._selection_name("selection"), "none")
+                names = [self._selection_name("selection")]
                 if metadata.get("kind") == "matrix":
-                    cmd.select(self._selection_name("rows"), "none")
-                    cmd.select(self._selection_name("cols"), "none")
-            cmd.refresh()
+                    names.extend(
+                        [self._selection_name("rows"), self._selection_name("cols")]
+                    )
+                clear_selections(names)
         except Exception as exc:
             print(f"FoldQC plot selection clear failed: {exc}")
         self._set_clear_action_enabled(False)
@@ -990,7 +986,7 @@ class PlotDialog(QtWidgets.QDialog):
                 self._update_click_highlight(event, additive=additive)
             return
         token_indices, rows, cols = self._tokens_for_click(event.xdata, event.ydata)
-        self._apply_pymol_selection(
+        self._apply_viewer_selection(
             token_indices,
             rows,
             cols,
@@ -1018,7 +1014,7 @@ class PlotDialog(QtWidgets.QDialog):
             erelease.xdata,
             erelease.ydata,
         )
-        self._apply_pymol_selection(
+        self._apply_viewer_selection(
             token_indices,
             rows,
             cols,

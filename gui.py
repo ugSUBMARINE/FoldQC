@@ -1,7 +1,7 @@
 """
 GUI
 ===
-Main Qt dialog for the FoldQC PyMOL plugin.
+Main Qt dialog for the FoldQC molecular-viewer plugin.
 
 All Qt imports go through :mod:`compat` to handle Qt5/Qt6 differences.
 """
@@ -34,18 +34,35 @@ from .compat import (
     QSettings,
     QtWidgets,
 )
+from .mol_viewer import (
+    compare_token_map_to_object,
+    delete_colorbar,
+    ensure_structure_object,
+    get_object_list,
+    get_selection_examples,
+    get_viewer_name,
+    paint_categorical_labels_bulk,
+    paint_plddt_class_coloring,
+    paint_property,
+    paint_property_bulk,
+    run_with_updates_suspended,
+    selection_to_token_indices,
+    show_colorbar,
+    tokens_within_distance,
+)
 from .palettes import iter_gui_palettes
 
 APP_TITLE = "FoldQC"
+VIEWER_NAME = get_viewer_name()
+SELECTION_EXAMPLES = get_selection_examples()
 PREDICTION_FILE_FILTER = (
     "Prediction files (*.cif *.pdb *.zip *.tar *.tar.gz *.tgz);;All files (*)"
 )
-NON_TARGET_OBJECT_NAMES = {"foldqc_colorbar"}
 
 
 @dataclass
 class _PlotTarget:
-    """Resolved plot target from the PyMOL target combo."""
+    """Resolved plot target from the molecular-viewer target combo."""
 
     kind: str
     label: str
@@ -185,18 +202,18 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
 
         self._obj_combo = QtWidgets.QComboBox()
         self._obj_combo.setToolTip(
-            "PyMOL object, ensemble group, or ensemble member that will be colored or plotted."
+            f"{VIEWER_NAME} object, ensemble group, or ensemble member that will be colored or plotted."
         )
         self._obj_refresh_btn = QtWidgets.QPushButton("\u21ba")
         self._disable_default_button(self._obj_refresh_btn)
         self._obj_refresh_btn.setFixedWidth(28)
         self._obj_refresh_btn.setToolTip(
-            "Refresh the list of PyMOL objects and ensemble targets."
+            f"Refresh the list of {VIEWER_NAME} objects and ensemble targets."
         )
         obj_row = QtWidgets.QHBoxLayout()
         obj_row.addWidget(self._obj_combo)
         obj_row.addWidget(self._obj_refresh_btn)
-        prop_form.addRow("PyMOL target:", obj_row)
+        prop_form.addRow(f"{VIEWER_NAME} target:", obj_row)
 
         self._prop_combo = QtWidgets.QComboBox()
         self._prop_combo_rows: dict[str, int] = {}
@@ -209,10 +226,10 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
         self._ref_label = QtWidgets.QLabel("Reference:")
         self._ref_edit = QtWidgets.QLineEdit()
         self._ref_edit.setPlaceholderText(
-            'PyMOL selection, e.g. "chain C" or "resname LIG"'
+            f"{VIEWER_NAME} selection, e.g. {SELECTION_EXAMPLES['general']}"
         )
         self._ref_edit.setToolTip(
-            "Optional PyMOL selection used by to-selection metrics, "
+            f"Optional {VIEWER_NAME} selection used by to-selection metrics, "
             "contact-filtered PAE/PDE, and binding-site fingerprints."
         )
         prop_form.addRow(self._ref_label, self._ref_edit)
@@ -325,7 +342,7 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
         self._close_btn = QtWidgets.QPushButton("Close")
 
         self._apply_btn.setToolTip(
-            "Apply the selected coloring metric to the PyMOL target."
+            f"Apply the selected coloring metric to the {VIEWER_NAME} target."
         )
         self._plot_btn.setToolTip(
             "Open an available plot for the current target and inputs."
@@ -418,12 +435,12 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
             "Use: pLDDT - quality classes\n"
             "Plot: Distribution or Line\n\n"
             "2. Ligand / binding-site confidence\n"
-            'Reference examples: "resname LIG", "organic"\n'
+            f"Reference examples: {SELECTION_EXAMPLES['ligand']}\n"
             "Use: PAE - contact-filtered to selection or "
             "PDE - contact-filtered to selection\n"
             "Plot: Binding-site fingerprint\n\n"
             "3. Chain or interface placement\n"
-            'Reference example: "chain B"\n'
+            f"Reference example: {SELECTION_EXAMPLES['chain']}\n"
             "Use: PAE - symmetric mean to selection\n"
             "Alternative: Chain ipTM with Plot > Matrix\n\n"
             "4. Domain placement\n"
@@ -687,7 +704,7 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
         return candidates[row]
 
     def _expected_object_name(self, rank: int) -> str:
-        """Return the canonical PyMOL object name for one model rank."""
+        """Return the canonical viewer object name for one model rank."""
         if self._pred_files is None:
             raise ValueError("No prediction output loaded.")
         try:
@@ -696,37 +713,18 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
             return f"{self._pred_files.name}_model_{rank}"
 
     def _ensure_model_object(self, rank: int, *, paint: bool = True) -> str | None:
-        """Load or enable the PyMOL object for *rank*, then select it."""
+        """Load or enable the viewer object for *rank*, then select it."""
         if self._pred_files is None or not self._pred_files.models:
             return None
-        try:
-            from pymol import cmd
-
-            current_objects = set(cmd.get_names("objects") or [])
-        except Exception:
-            return None
-
         obj_name = self._expected_object_name(rank)
-        did_load = False
-        if obj_name in current_objects:
-            if not self._is_object_enabled(cmd, obj_name):
-                try:
-                    cmd.enable(obj_name)
-                except Exception as exc:
-                    QtWidgets.QMessageBox.warning(
-                        self, APP_TITLE, f"Could not show {obj_name}:\n{exc}"
-                    )
-                    return None
-        else:
-            path = self._pred_files.structure_path(rank)
-            try:
-                cmd.load(str(path), obj_name, quiet=1, zoom=1)
-                did_load = True
-            except Exception as exc:
-                QtWidgets.QMessageBox.warning(
-                    self, APP_TITLE, f"Could not auto-load {path.name}:\n{exc}"
-                )
-                return None
+        path = self._pred_files.structure_path(rank)
+        try:
+            did_load = ensure_structure_object(path, obj_name, zoom=True)
+        except Exception as exc:
+            QtWidgets.QMessageBox.warning(
+                self, APP_TITLE, f"Could not load or show {path.name}:\n{exc}"
+            )
+            return None
 
         self._refresh_objects()
         self._select_object(obj_name)
@@ -736,16 +734,6 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
             except Exception:
                 pass  # coloring failure must not abort model selection
         return obj_name
-
-    def _is_object_enabled(self, cmd, obj_name: str) -> bool:
-        """Return whether *obj_name* is currently enabled in PyMOL."""
-        try:
-            enabled = set(cmd.get_names("objects", enabled_only=1) or [])
-        except TypeError:
-            enabled = set(cmd.get_names("objects", 1) or [])
-        except Exception:
-            return True
-        return obj_name in enabled
 
     def _auto_select_matching_object(self) -> None:
         """Select the first combo-box entry whose name matches the prediction."""
@@ -800,19 +788,12 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
         self._refresh_contextual_ui()
 
     def _refresh_objects(self) -> None:
-        """Re-populate the PyMOL target dropdown."""
+        """Re-populate the molecular-viewer target dropdown."""
         try:
-            from pymol import cmd
-
-            names = cmd.get_names("objects") or []
-            names = [name for name in names if name not in NON_TARGET_OBJECT_NAMES]
-            if self._ensemble_group_name and self._ensemble_group_name not in names:
-                try:
-                    all_names = set(cmd.get_names("all") or [])
-                except Exception:
-                    all_names = set()
-                if not all_names or self._ensemble_group_name in all_names:
-                    names = [self._ensemble_group_name] + list(names)
+            additional = (
+                [self._ensemble_group_name] if self._ensemble_group_name else []
+            )
+            names = get_object_list(additional_names=additional)
             names = self._ordered_target_names(names)
         except Exception:
             names = []
@@ -1267,7 +1248,9 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
         """Compute the selected property and paint the structure."""
         obj_name = self._get_obj_name()
         if obj_name is None:
-            QtWidgets.QMessageBox.warning(self, APP_TITLE, "No PyMOL target selected.")
+            QtWidgets.QMessageBox.warning(
+                self, APP_TITLE, f"No {VIEWER_NAME} target selected."
+            )
             return
 
         if self._ensemble_members and obj_name == self._ensemble_group_name:
@@ -1291,7 +1274,7 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
                 APP_TITLE,
                 "This property requires an active ensemble.\n"
                 "Use the Ensemble… button, then choose the ensemble group "
-                "or one of its model objects as the PyMOL target.",
+                f"or one of its model objects as the {VIEWER_NAME} target.",
             )
             return
 
@@ -1322,8 +1305,6 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
             ):
                 return
             if metrics.is_domain_label_metric(key):
-                from .painter import delete_colorbar, paint_categorical_labels_bulk
-
                 used_vmin, used_vmax = paint_categorical_labels_bulk(
                     obj_name,
                     self._token_map,
@@ -1331,8 +1312,6 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
                 )
                 delete_colorbar()
             else:
-                from .painter import paint_property, show_colorbar
-
                 used_vmin, used_vmax = paint_property(
                     obj_name,
                     self._token_map,
@@ -1624,7 +1603,7 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
         member,
         aggregate_kind: str,
     ) -> list[dict[str, object]]:
-        """Delegate row assembly to the PyMOL-independent exporter."""
+        """Delegate row assembly to the viewer-independent exporter."""
         from .export import build_token_rows
 
         member_rank = getattr(member, "rank", None) if member is not None else None
@@ -1661,7 +1640,7 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
             return
 
         try:
-            self._with_pymol_updates_suspended(
+            self._with_viewer_updates_suspended(
                 lambda: self._dispatch_ensemble_coloring(key, prop, target_members)
             )
         except Exception as exc:
@@ -1670,7 +1649,7 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
     def _dispatch_ensemble_coloring(
         self, key: str, prop: dict, target_members: list
     ) -> None:
-        """Route ensemble coloring while PyMOL updates are suspended."""
+        """Route ensemble coloring while viewer updates are suspended."""
         if prop.get("ensemble_level", False):
             self._apply_ensemble_level_property(key, target_members)
         elif key == "plddt_class":
@@ -1681,8 +1660,6 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
     def _apply_ensemble_level_property(self, key: str, target_members: list) -> None:
         """Compute one ensemble-level array and paint it onto selected targets."""
         values = self._compute_ensemble_property(key)
-
-        from .painter import paint_property_bulk, show_colorbar
 
         palette, reverse_palette = self._selected_palette()
         vmin, vmax = self._get_vmin_vmax()
@@ -1728,13 +1705,6 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
         self, key: str, prop: dict, target_members: list
     ) -> None:
         """Compute selected per-model properties for selected ensemble targets."""
-        from .painter import (
-            delete_colorbar,
-            paint_categorical_labels_bulk,
-            paint_property_bulk,
-            show_colorbar,
-        )
-
         palette, reverse_palette = self._selected_palette()
         user_vmin, user_vmax = self._get_vmin_vmax()
         ref_sel = self._ref_edit.text().strip() or None
@@ -1840,8 +1810,6 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
         self, key: str, target_members: list
     ) -> None:
         """Apply quality-class pLDDT coloring to selected ensemble targets."""
-        from .painter import delete_colorbar, paint_plddt_class_coloring
-
         member_values: list[tuple[object, np.ndarray]] = []
         for member in target_members:
             self._ensure_member_data_for_property(
@@ -1882,22 +1850,9 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
             key, label, member_values, include_plddt_classes=True
         )
 
-    def _with_pymol_updates_suspended(self, func):
-        """Run *func* with PyMOL viewport updates suspended, then rebuild once."""
-        from pymol import cmd
-
-        try:
-            cmd.set("suspend_updates", "on")
-        except Exception:
-            pass
-        try:
-            return func()
-        finally:
-            try:
-                cmd.set("suspend_updates", "off")
-                cmd.rebuild()
-            except Exception:
-                pass
+    def _with_viewer_updates_suspended(self, func):
+        """Run *func* with viewer updates suspended, then rebuild once."""
+        return run_with_updates_suspended(func)
 
     def _apply_plddt_class_coloring(self, key: str, obj_name: str) -> None:
         """Apply the 4-class AlphaFold pLDDT colour scheme.
@@ -1905,8 +1860,6 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
         Writes preferred pLDDT values to B-factors before colouring, so previous
         plugin visualisations cannot corrupt the result.
         """
-        from .painter import delete_colorbar, paint_plddt_class_coloring
-
         values, _source_label = compute.plddt_values_for(self._pred_data)
         if values is None:
             QtWidgets.QMessageBox.warning(
@@ -1938,7 +1891,7 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
 
         The structure path from the loaded prediction data is passed to
         ``build_token_map`` so that HETATM atom order is read from the file
-        rather than from PyMOL's internal (alphabetically sorted) model.
+        rather than from a viewer's potentially reordered internal model.
         """
         current_obj = getattr(self, "_token_map_obj", None)
         current_path = getattr(self, "_token_map_structure_path", None)
@@ -1954,7 +1907,7 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
                 raise ValueError("No prediction data loaded; cannot build token map.")
             from .token_map import build_token_map
 
-            self._token_map = build_token_map(obj_name, self._pred_data.structure_path)
+            self._token_map = build_token_map(self._pred_data.structure_path)
             self._token_map_obj = obj_name  # type: ignore[attr-defined]
             self._token_map_structure_path = self._pred_data.structure_path
 
@@ -1976,8 +1929,7 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
         tm,
         obj_name: str,
     ):
-        """Resolve GUI/PyMOL context and dispatch one per-model metric."""
-        from .token_map import selection_to_token_indices
+        """Resolve GUI/viewer context and dispatch one per-model metric."""
 
         def _need_ref():
             if not ref_sel:
@@ -1985,7 +1937,7 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
                     self,
                     APP_TITLE,
                     "This property requires a reference selection.\n"
-                    "Enter a PyMOL selection in the Reference field.",
+                    "Enter a viewer selection in the Reference field.",
                 )
                 return None
             indices = selection_to_token_indices(tm, ref_sel, obj_name=obj_name)
@@ -2130,7 +2082,7 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
                 self,
                 APP_TITLE,
                 "This property requires a reference selection.\n"
-                "Enter a PyMOL selection in the Reference field.",
+                f"Enter a {VIEWER_NAME} selection in the Reference field.",
             )
             return None
         except compute.MissingContactError:
@@ -2166,7 +2118,7 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
                     self,
                     APP_TITLE,
                     "PAE domain labels (complete linkage) require SciPy. "
-                    "Install scipy in the Python environment used by PyMOL.",
+                    f"Install scipy in the Python environment used by {VIEWER_NAME}.",
                 )
                 return False
             return True
@@ -2182,7 +2134,7 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
                     APP_TITLE,
                     "PAE domain labels (spectral clustering) require "
                     f"{' and '.join(missing)}. Install the missing package(s) "
-                    "in the Python environment used by PyMOL.",
+                    f"in the Python environment used by {VIEWER_NAME}.",
                 )
                 return False
             return True
@@ -2223,7 +2175,7 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
             raise ValueError(
                 f"Token count mismatch for {obj_name}: property has {len(values)} "
                 f"values, but the loaded structure maps to {len(token_map)} tokens. "
-                "Check that the PyMOL object belongs to the selected prediction model."
+                f"Check that the {VIEWER_NAME} object belongs to the selected prediction model."
             )
 
     def _confirm_token_overlap_for_coloring(
@@ -2234,7 +2186,7 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
         *,
         threshold: float = 0.50,
     ) -> bool:
-        """Warn when the selected PyMOL object barely overlaps the token map."""
+        """Warn when the selected viewer object barely overlaps the token map."""
         if token_map is None:
             return True
 
@@ -2249,9 +2201,7 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
             return True
 
         try:
-            from .token_map import compare_token_map_to_pymol_object
-
-            overlap = compare_token_map_to_pymol_object(token_map, obj_name)
+            overlap = compare_token_map_to_object(token_map, obj_name)
         except Exception:
             return True
 
@@ -2261,7 +2211,7 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
         pct = overlap.target_coverage * 100.0
         pred_pct = overlap.prediction_coverage * 100.0
         message = (
-            f"The selected PyMOL target '{obj_name}' has low overlap with the "
+            f"The selected viewer target '{obj_name}' has low overlap with the "
             "loaded prediction token map.\n\n"
             f"Matched target tokens: {overlap.matched_target_tokens} / "
             f"{overlap.target_tokens} ({pct:.1f}%).\n"
@@ -2295,15 +2245,8 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
         cutoff: float,
     ) -> list[int]:
         """Return polymer tokens with any atom within *cutoff* Å of reference."""
-        from .token_map import selection_to_token_indices
-
-        scoped_ref_sel = f"(({ref_sel}) and ({obj_name}))"
-        binding_sel = (
-            f"byres (({obj_name}) within {cutoff:g} of {scoped_ref_sel}) "
-            f"and not {scoped_ref_sel}"
-        )
-        raw_binding_indices = selection_to_token_indices(
-            token_map, binding_sel, obj_name=obj_name
+        raw_binding_indices = tokens_within_distance(
+            token_map, obj_name, ref_sel, cutoff
         )
         ref_set = set(ref_indices)
         return [
@@ -2445,10 +2388,12 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
         )
 
     def _resolve_plot_target(self) -> _PlotTarget | None:
-        """Resolve the current PyMOL target into data and token-map context."""
+        """Resolve the current viewer target into data and token-map context."""
         obj_name = self._get_obj_name()
         if obj_name is None:
-            QtWidgets.QMessageBox.warning(self, APP_TITLE, "No PyMOL target selected.")
+            QtWidgets.QMessageBox.warning(
+                self, APP_TITLE, f"No {VIEWER_NAME} target selected."
+            )
             return None
 
         ensemble_group_name = getattr(self, "_ensemble_group_name", None)
@@ -2511,12 +2456,10 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
                     self,
                     APP_TITLE,
                     "This plot requires a reference selection.\n"
-                    "Enter a PyMOL selection in the Reference field.",
+                    "Enter a viewer selection in the Reference field.",
                 )
                 return None
             return []
-
-        from .token_map import selection_to_token_indices
 
         indices = selection_to_token_indices(token_map, ref_sel, obj_name=obj_name)
         if not indices:
@@ -2812,8 +2755,6 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
         cutoff: float,
     ) -> dict:
         """Compute local ligand-site summary values for one ensemble member."""
-        from .token_map import selection_to_token_indices
-
         self._ensure_member_data_for_plot(
             member,
             load_pae=getattr(self._pred_files, "has_pae", False)
@@ -3056,7 +2997,7 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
                 chain_boundaries=boundaries,
                 chain_labels=labels,
             )
-            plots.attach_pymol_selection_metadata(
+            plots.attach_viewer_selection_metadata(
                 fig,
                 kind="line",
                 token_map=target.token_map,
@@ -3132,7 +3073,7 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
                 chain_labels=labels,
                 show_legend=True,
             )
-            plots.attach_pymol_selection_metadata(
+            plots.attach_viewer_selection_metadata(
                 fig,
                 kind="line",
                 token_map=target.token_map,
@@ -3234,7 +3175,7 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
                     bin_edges=edges,
                 )
 
-            plots.attach_pymol_selection_metadata(
+            plots.attach_viewer_selection_metadata(
                 fig,
                 kind="bars",
                 token_map=target.token_map,
@@ -3257,7 +3198,7 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
                 self,
                 APP_TITLE,
                 "Ensemble site summary requires a reference selection.\n"
-                "Enter a ligand or other PyMOL selection in the Reference field.",
+                f"Enter a ligand or other {VIEWER_NAME} selection in the Reference field.",
             )
             return
         cutoff = self._get_contact_cutoff()
@@ -3377,7 +3318,7 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
                 colorbar_label=label,
             )
             if attr != "chain_iptm":
-                plots.attach_pymol_selection_metadata(
+                plots.attach_viewer_selection_metadata(
                     fig,
                     kind="matrix",
                     token_map=target.token_map,
@@ -3404,7 +3345,7 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
                 self,
                 APP_TITLE,
                 "Fingerprint requires a reference selection.\n"
-                "Enter a ligand or other PyMOL selection in the Reference field.",
+                f"Enter a ligand or other {VIEWER_NAME} selection in the Reference field.",
             )
             return
 
@@ -3480,7 +3421,7 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
             displayed_binding_indices = binding_indices[
                 : plots.MAX_BINDING_SITE_RESIDUES
             ]
-            plots.attach_pymol_selection_metadata(
+            plots.attach_viewer_selection_metadata(
                 fig,
                 kind="bars",
                 token_map=target.token_map,
@@ -3607,10 +3548,12 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
         label.setWordWrap(True)
         layout.addWidget(label)
 
-        checkbox = QtWidgets.QCheckBox("Use current PyMOL coordinates; do not align")
+        checkbox = QtWidgets.QCheckBox(
+            f"Use current {VIEWER_NAME} coordinates; do not align"
+        )
         checkbox.setToolTip(
             "Skip automatic core alignment and compute ensemble RMSD from the current "
-            "PyMOL object coordinates."
+            f"{VIEWER_NAME} object coordinates."
         )
         layout.addWidget(checkbox)
 

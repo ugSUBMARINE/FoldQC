@@ -26,7 +26,7 @@ class PlotTests(unittest.TestCase):
                 types.SimpleNamespace(chain_id="A", res_num=1, is_hetatm=False),
                 types.SimpleNamespace(chain_id="A", res_num=2, is_hetatm=False),
             ]
-            plots.attach_pymol_selection_metadata(
+            plots.attach_viewer_selection_metadata(
                 fig,
                 kind="line",
                 token_map=token_map,
@@ -36,11 +36,11 @@ class PlotTests(unittest.TestCase):
                 token_indices=[0, 1],
             )
             self.assertEqual(
-                fig._foldqc_pymol_selection["selection_prefix"],
+                fig._foldqc_viewer_selection["selection_prefix"],
                 "foldqc_plot",
             )
             self.assertEqual(
-                fig._foldqc_pymol_selection["token_map_obj_names"],
+                fig._foldqc_viewer_selection["token_map_obj_names"],
                 ["obj"],
             )
         finally:
@@ -53,7 +53,7 @@ class PlotTests(unittest.TestCase):
         )
         try:
             with self.assertRaisesRegex(ValueError, "one-to-one"):
-                plots.attach_pymol_selection_metadata(
+                plots.attach_viewer_selection_metadata(
                     fig,
                     kind="line",
                     token_map=[object()],
@@ -72,7 +72,7 @@ class PlotTests(unittest.TestCase):
         )
         try:
             with self.assertRaisesRegex(ValueError, "provided together"):
-                plots.attach_pymol_selection_metadata(
+                plots.attach_viewer_selection_metadata(
                     fig,
                     kind="line",
                     token_map=[object()],

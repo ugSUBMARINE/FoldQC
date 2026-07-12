@@ -21,11 +21,13 @@ class PaletteTests(unittest.TestCase):
         self.assertNotIn("red_white_blue", keys)
         self.assertNotIn("magenta_white_cyan", keys)
 
-    def test_native_reverse_palette_uses_pymol_name(self) -> None:
-        resolved = palettes.resolve_pymol_palette("blue_white_red", reverse=True)
+    def test_palette_specs_do_not_expose_viewer_encodings(self) -> None:
+        spec = next(
+            spec for spec in palettes.PALETTE_SPECS if spec.key == "blue_white_red"
+        )
 
-        self.assertEqual(resolved.palette, "red_white_blue")
-        self.assertEqual(resolved.custom_colors, ())
+        self.assertFalse(hasattr(spec, "pymol"))
+        self.assertEqual(spec.mpl, "coolwarm")
 
     def test_palette_keys_return_curated_base_keys_only(self) -> None:
         keys = palettes.palette_keys()
@@ -33,22 +35,10 @@ class PaletteTests(unittest.TestCase):
         self.assertIn("blue_white_red", keys)
         self.assertNotIn("red_white_blue", keys)
 
-    def test_native_green_palette_uses_pymol_reverse_name(self) -> None:
-        forward = palettes.resolve_pymol_palette("white_green")
-        reverse = palettes.resolve_pymol_palette("white_green", reverse=True)
+    def test_viridis_keeps_generic_rgb_stops(self) -> None:
+        spec = next(spec for spec in palettes.PALETTE_SPECS if spec.key == "viridis")
 
-        self.assertEqual(forward.palette, "white_green")
-        self.assertEqual(reverse.palette, "green_white")
-
-    def test_viridis_resolves_to_custom_color_list(self) -> None:
-        resolved = palettes.resolve_pymol_palette("viridis", reverse=True)
-
-        self.assertEqual(len(resolved.custom_colors), len(palettes.VIRIDIS_STOPS))
-        self.assertEqual(
-            resolved.palette,
-            " ".join(color.name for color in resolved.custom_colors),
-        )
-        self.assertTrue(resolved.custom_colors[0].name.startswith("foldqc_viridis_r_"))
+        self.assertEqual(spec.rgb_stops, palettes.VIRIDIS_STOPS)
 
     def test_categorical_color_uses_shared_palette_and_deterministic_fallback(
         self,
@@ -63,16 +53,10 @@ class PaletteTests(unittest.TestCase):
         )
         self.assertEqual(palettes.categorical_color(99), palettes.categorical_color(99))
 
-    def test_plddt_class_colors_define_pymol_and_bar_order(self) -> None:
+    def test_plddt_class_colors_define_thresholds_and_bar_order(self) -> None:
         self.assertEqual(
-            [color.pymol_name for color in palettes.PLDDT_CLASS_COLORS],
-            [
-                "plddt_very_high",
-                "plddt_high",
-                "plddt_low",
-                "plddt_very_low",
-                "plddt_nan",
-            ],
+            [color.minimum for color in palettes.PLDDT_CLASS_COLORS],
+            [90.0, 70.0, 50.0, 0.0, None],
         )
         self.assertEqual(
             palettes.PLDDT_CLASS_BAR_COLORS,

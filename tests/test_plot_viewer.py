@@ -77,7 +77,6 @@ class PlotViewerSelectionTests(unittest.TestCase):
             res_name="ALA",
             is_hetatm=False,
             atom_name=None,
-            pymol_selection=f"/{obj_name}//{chain_id}/{token_idx + 1}/",
         )
 
     def test_grouped_bar_click_selects_all_tokens_for_bar(self) -> None:
@@ -139,7 +138,7 @@ class PlotViewerSelectionTests(unittest.TestCase):
         dialog._selection_axes = [top_ax, bottom_ax]
         dialog._toolbar_is_active = lambda: False
         selected = []
-        dialog._apply_pymol_selection = lambda tokens, rows, cols, additive=False: (
+        dialog._apply_viewer_selection = lambda tokens, rows, cols, additive=False: (
             selected.append((tokens, rows, cols, additive))
         )
         dialog._update_click_highlight = lambda *_args, **_kwargs: None
@@ -397,8 +396,8 @@ class PlotViewerSelectionTests(unittest.TestCase):
         dialog._selected_row_indices = []
         dialog._selected_col_indices = []
 
-        dialog._apply_pymol_selection([0, 1], [0], [1])
-        dialog._apply_pymol_selection([2, 3], [2], [3], additive=True)
+        dialog._apply_viewer_selection([0, 1], [0], [1])
+        dialog._apply_viewer_selection([2, 3], [2], [3], additive=True)
 
         self.assertEqual(dialog._selected_token_indices, [0, 1, 2, 3])
         self.assertEqual(dialog._selected_row_indices, [0, 2])
@@ -427,7 +426,6 @@ class PlotViewerSelectionTests(unittest.TestCase):
                         res_name="ALA",
                         is_hetatm=False,
                         atom_name=None,
-                        pymol_selection=f"/{obj_name}//A/{idx + 1}/",
                     )
                     for idx in range(3)
                 ]
@@ -440,11 +438,9 @@ class PlotViewerSelectionTests(unittest.TestCase):
             }
         )
 
-        expression = dialog._selection_expr_for_tokens([0, 1, 2])
-
         self.assertEqual(
-            expression,
-            "(%model_0 and polymer and chain A) or (%model_1 and polymer and chain A)",
+            dialog._selection_object_token_maps(),
+            [("model_0", token_maps[0]), ("model_1", token_maps[1])],
         )
 
     def test_ensemble_token_selection_without_object_metadata_raises(self) -> None:
@@ -456,7 +452,6 @@ class PlotViewerSelectionTests(unittest.TestCase):
                 res_name="ALA",
                 is_hetatm=False,
                 atom_name=None,
-                pymol_selection="/model_0//A/1/",
             )
         ]
         dialog = self._dialog_with_metadata(
@@ -467,7 +462,7 @@ class PlotViewerSelectionTests(unittest.TestCase):
         )
 
         with self.assertRaisesRegex(ValueError, "requires token_map_obj_names"):
-            dialog._selection_expr_for_tokens([0])
+            dialog._selection_object_token_maps()
 
     def test_toolbar_navigation_has_no_axis_limit_selection_callbacks(self) -> None:
         class FakeCallbacks:
@@ -481,7 +476,7 @@ class PlotViewerSelectionTests(unittest.TestCase):
         axis = types.SimpleNamespace(callbacks=FakeCallbacks())
         figure = types.SimpleNamespace(
             axes=[axis],
-            _foldqc_pymol_selection={
+            _foldqc_viewer_selection={
                 "kind": "line",
                 "token_map": [object()],
                 "obj_name": "model",
@@ -498,7 +493,7 @@ class PlotViewerSelectionTests(unittest.TestCase):
         dialog._mpl_cids = []
         dialog._install_selection_controls = lambda: None
 
-        dialog._install_pymol_selection_bridge()
+        dialog._install_viewer_selection_bridge()
 
         self.assertEqual(axis.callbacks.connected, [])
 

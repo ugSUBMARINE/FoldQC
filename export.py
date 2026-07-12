@@ -1,7 +1,7 @@
 """
 CSV export helpers for FoldQC.
 
-This module is intentionally PyMOL-independent. GUI code resolves selections,
+This module is intentionally viewer-independent. GUI code resolves selections,
 computes metric arrays, and passes token maps plus provenance here for CSV row
 assembly and writing.
 """

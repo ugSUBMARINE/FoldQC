@@ -1,11 +1,11 @@
 """
 Palette registry
 ================
-Shared palette definitions for PyMOL colouring and Matplotlib plots.
+Viewer-neutral palette definitions shared by molecular viewers and plots.
 
 The GUI intentionally exposes a curated subset.  Add a palette by appending a
-single :class:`PaletteSpec` to ``PALETTE_SPECS``; painter and plots resolve it
-through this module.
+single :class:`PaletteSpec` to ``PALETTE_SPECS``; viewer and plot adapters
+resolve it through this module.
 """
 
 from __future__ import annotations
@@ -19,31 +19,13 @@ MplSpec = str | Sequence[str]
 
 
 @dataclass(frozen=True)
-class ColorDef:
-    """One custom PyMOL colour that must be registered before ``spectrum``."""
-
-    name: str
-    rgb: ColorStop
-
-
-@dataclass(frozen=True)
-class PaletteResolution:
-    """Resolved PyMOL palette string plus optional custom colour definitions."""
-
-    palette: str
-    custom_colors: tuple[ColorDef, ...] = ()
-
-
-@dataclass(frozen=True)
 class PaletteSpec:
     """Declarative palette definition."""
 
     key: str
     label: str
-    pymol: str
-    pymol_reverse: str | None = None
     mpl: MplSpec | None = None
-    pymol_rgb_stops: tuple[ColorStop, ...] = ()
+    rgb_stops: tuple[ColorStop, ...] = ()
     curated: bool = True
 
 
@@ -53,9 +35,10 @@ class PlddtClassColor:
 
     key: str
     label: str
-    pymol_name: str
     rgb: ColorStop
-    bfactor_selection: str
+    minimum: float | None = None
+    maximum: float | None = None
+    is_nan: bool = False
 
 
 VIRIDIS_STOPS: tuple[ColorStop, ...] = (
@@ -140,37 +123,35 @@ PLDDT_CLASS_COLORS: tuple[PlddtClassColor, ...] = (
     PlddtClassColor(
         key="very_high",
         label="very high",
-        pymol_name="plddt_very_high",
         rgb=(0.000, 0.326, 0.843),
-        bfactor_selection="(b>90 or b=90)",
+        minimum=90.0,
     ),
     PlddtClassColor(
         key="high",
         label="high",
-        pymol_name="plddt_high",
         rgb=(0.341, 0.792, 0.976),
-        bfactor_selection="((b<90 and b>70) or b=70)",
+        minimum=70.0,
+        maximum=90.0,
     ),
     PlddtClassColor(
         key="low",
         label="low",
-        pymol_name="plddt_low",
         rgb=(1.000, 0.859, 0.071),
-        bfactor_selection="((b<70 and b>50) or b=50)",
+        minimum=50.0,
+        maximum=70.0,
     ),
     PlddtClassColor(
         key="very_low",
         label="very low",
-        pymol_name="plddt_very_low",
         rgb=(1.000, 0.494, 0.271),
-        bfactor_selection="((b<50 and b>0) or b=0)",
+        minimum=0.0,
+        maximum=50.0,
     ),
     PlddtClassColor(
         key="plddt_nan",
         label="pLDDT NaN",
-        pymol_name="plddt_nan",
         rgb=(0.700, 0.700, 0.700),
-        bfactor_selection="(b<0)",
+        is_nan=True,
     ),
 )
 
@@ -186,108 +167,85 @@ PALETTE_SPECS: tuple[PaletteSpec, ...] = (
     PaletteSpec(
         key="viridis",
         label="Viridis",
-        pymol="",
         mpl="viridis",
-        pymol_rgb_stops=VIRIDIS_STOPS,
+        rgb_stops=VIRIDIS_STOPS,
         curated=True,
     ),
     PaletteSpec(
         key="magma",
         label="Magma",
-        pymol="",
         mpl="magma",
-        pymol_rgb_stops=MAGMA_STOPS,
+        rgb_stops=MAGMA_STOPS,
         curated=False,  # The dark end of Magma is too dark for GUI display
     ),
     PaletteSpec(
         key="plasma",
         label="Plasma",
-        pymol="",
         mpl="plasma",
-        pymol_rgb_stops=PLASMA_STOPS,
+        rgb_stops=PLASMA_STOPS,
         curated=True,
     ),
     PaletteSpec(
         key="inferno",
         label="Inferno",
-        pymol="",
         mpl="inferno",
-        pymol_rgb_stops=INFERNO_STOPS,
+        rgb_stops=INFERNO_STOPS,
         curated=False,  # The dark end of Inferno is too dark for GUI display
     ),
     PaletteSpec(
         key="cividis",
         label="Cividis",
-        pymol="",
         mpl="cividis",
-        pymol_rgb_stops=CIVIDIS_STOPS,
+        rgb_stops=CIVIDIS_STOPS,
         curated=True,
     ),
     PaletteSpec(
         key="white_blue",
         label="Blues",
-        pymol="white_blue",
-        pymol_reverse="blue_white",
         mpl="Blues",
     ),
     PaletteSpec(
         key="white_red",
         label="Reds",
-        pymol="white_red",
-        pymol_reverse="red_white",
         mpl="Reds",
     ),
     PaletteSpec(
         key="white_green",
         label="Greens",
-        pymol="white_green",
-        pymol_reverse="green_white",
         mpl="Greens",
     ),
     PaletteSpec(
         key="blue_white_red",
         label="Blue-white-red",
-        pymol="blue_white_red",
-        pymol_reverse="red_white_blue",
         mpl="coolwarm",
     ),
     PaletteSpec(
         key="green_white_red",
         label="Green-white-red",
-        pymol="green_white_red",
-        pymol_reverse="red_white_green",
         mpl=("green", "white", "red"),
         curated=False,
     ),
     PaletteSpec(
         key="cyan_white_magenta",
         label="Cyan-white-magenta",
-        pymol="cyan_white_magenta",
-        pymol_reverse="magenta_white_cyan",
         mpl=("cyan", "white", "magenta"),
         curated=False,
     ),
     PaletteSpec(
         key="yellow_white_magenta",
         label="Yellow-white-magenta",
-        pymol="yellow_white_magenta",
-        pymol_reverse="magenta_white_yellow",
         mpl=("yellow", "white", "magenta"),
         curated=False,
     ),
     PaletteSpec(
         key="rainbow",
         label="Rainbow",
-        pymol="rainbow",
-        pymol_reverse="rainbow_rev",
         mpl="rainbow",
         curated=False,  # Rainbow is not perceptually uniform, so not in the GUI
     ),
     PaletteSpec(
         key="rainbow2",
         label="Rainbow 2",
-        pymol="rainbow2",
-        pymol_reverse="rainbow2_rev",
         mpl="turbo",
         curated=False,  # Rainbow is not perceptually uniform, so not in the GUI
     ),
@@ -325,53 +283,11 @@ def _resolve_spec(key: str, reverse: bool) -> tuple[PaletteSpec | None, bool]:
     return None, reverse
 
 
-def _reverse_color_list(colors: str) -> str:
-    """Reverse a space or underscore separated colour list."""
-    sep = " " if " " in colors else "_"
-    parts = [part for part in colors.split(sep) if part]
-    return " ".join(reversed(parts))
-
-
-def _custom_color_defs(
-    key: str,
-    stops: tuple[ColorStop, ...],
-    reverse: bool,
-) -> tuple[ColorDef, ...]:
-    ordered = tuple(reversed(stops)) if reverse else stops
-    direction = "r" if reverse else "f"
-    return tuple(
-        ColorDef(name=f"foldqc_{key}_{direction}_{idx:02d}", rgb=rgb)
-        for idx, rgb in enumerate(ordered)
-    )
-
-
-def resolve_pymol_palette(key: str, reverse: bool = False) -> PaletteResolution:
-    """Resolve a palette key to a PyMOL ``cmd.spectrum`` palette string."""
-    spec, effective_reverse = _resolve_spec(key, reverse)
-    if spec is None:
-        return PaletteResolution(_reverse_color_list(key) if reverse else key)
-
-    if spec.pymol_rgb_stops:
-        custom_colors = _custom_color_defs(
-            spec.key, spec.pymol_rgb_stops, effective_reverse
-        )
-        return PaletteResolution(
-            palette=" ".join(color.name for color in custom_colors),
-            custom_colors=custom_colors,
-        )
-
-    if effective_reverse and spec.pymol_reverse:
-        return PaletteResolution(spec.pymol_reverse)
-    if effective_reverse:
-        return PaletteResolution(_reverse_color_list(spec.pymol))
-    return PaletteResolution(spec.pymol)
-
-
 def resolve_matplotlib_cmap(key: str, reverse: bool = False):
     """Return ``(cmap, used_fallback)`` for a palette key.
 
-    Matplotlib is imported lazily so PyMOL startup and painter usage do not
-    acquire a plotting dependency.
+    Matplotlib is imported lazily so viewer startup does not acquire a plotting
+    dependency.
     """
     import matplotlib.pyplot as plt
     from matplotlib.colors import LinearSegmentedColormap
@@ -386,7 +302,7 @@ def resolve_matplotlib_cmap(key: str, reverse: bool = False):
 
     mpl_spec = spec.mpl
     if mpl_spec is None:
-        mpl_spec = tuple(spec.pymol.replace("_", " ").split())
+        mpl_spec = tuple(spec.rgb_stops)
 
     if isinstance(mpl_spec, str):
         cmap_name = f"{mpl_spec}_r" if effective_reverse else mpl_spec

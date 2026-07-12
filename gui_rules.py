@@ -1,7 +1,7 @@
 """
 Pure GUI decision rules for FoldQC.
 
-This module contains UI state decisions that do not need Qt widgets or PyMOL.
+This module contains UI state decisions that do not need Qt or a molecular viewer.
 The dialog gathers current widget/session state, calls these helpers, and then
 applies the returned text/enabled state to widgets.
 """
@@ -53,7 +53,7 @@ def plot_action_state(
     prop = metrics.PROPERTY_BY_KEY.get(metric_key, {})
     has_target = target_kind != "none"
     if plot_type != "ensemble_site_summary" and not has_target:
-        return PlotActionState(False, "Select a PyMOL target before plotting.")
+        return PlotActionState(False, "Select a viewer target before plotting.")
 
     if plot_type == "line":
         if metrics.is_domain_label_metric(metric_key):
@@ -169,13 +169,13 @@ def field_context(
     needs_metric_ref = bool(prop.get("needs_ref", False))
     if needs_metric_ref:
         ref_tooltip = (
-            "PyMOL selection used by this to-selection metric, mapped back "
+            "Viewer selection used by this to-selection metric, mapped back "
             "to FoldQC tokens."
         )
         ref_enabled = True
     elif supports_site_plot or supports_ensemble_site:
         ref_tooltip = (
-            "Optional PyMOL selection used by binding-site fingerprint and "
+            "Optional viewer selection used by binding-site fingerprint and "
             "ensemble site summary plots."
         )
         ref_enabled = True
@@ -256,12 +256,11 @@ def metric_preview_text(
     if spec is not None and spec.needs_ref and not ref_sel:
         if metric_key in metrics.CONTACT_FILTERED_METRICS:
             return (
-                "Requires a reference selection and contact cutoff. Try "
-                '"chain B", "resname LIG", or "organic".'
+                "Requires a reference selection and contact cutoff, such as a "
+                "chain, ligand, or residue set."
             )
         return (
-            'Requires a reference selection. Try "chain B", "resname LIG", '
-            'or "organic".'
+            "Requires a reference selection, such as a chain, ligand, or residue set."
         )
 
     template = spec.preview_template if spec is not None else ""

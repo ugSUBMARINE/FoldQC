@@ -1,7 +1,7 @@
 """
 Metric metadata for FoldQC.
 
-This module is intentionally independent of Qt and PyMOL.  It owns metric
+This module is intentionally independent of Qt and molecular viewers. It owns metric
 labels, grouping metadata, data requirements, plot metadata, and export
 units/semantics; numeric transformations remain in :mod:`properties`.
 """

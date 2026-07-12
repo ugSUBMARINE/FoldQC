@@ -1,7 +1,7 @@
 """
 Metric computation dispatch for FoldQC.
 
-This module is intentionally Qt- and PyMOL-independent. Callers resolve PyMOL
+This module is intentionally Qt- and viewer-independent. Callers resolve viewer
 selections, contact shells, cutoffs, and lazy-loaded inputs before dispatching.
 """
 
@@ -166,7 +166,7 @@ def compute_metric(
 ) -> np.ndarray:
     """Compute a per-token metric array for one model."""
     # plddt_class uses the same continuous array as plddt; the GUI chooses
-    # the categorical painter based on the key, not on compute_metric's output.
+    # categorical viewer coloring based on the key, not on this output.
     if key in ("plddt", "plddt_class"):
         values, _source_label = plddt_values_for(data)
         if values is None:

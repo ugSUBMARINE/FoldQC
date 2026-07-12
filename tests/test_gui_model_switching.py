@@ -540,7 +540,6 @@ def _token(
         res_name="LIG" if is_hetatm else "ALA",
         is_hetatm=is_hetatm,
         atom_name=f"C{idx}" if is_hetatm else None,
-        pymol_selection=f"sel_{idx}",
     )
 
 
@@ -1330,7 +1329,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         self.assertTrue(guide.visible)
         text = guide._foldqc_guide_text
         self.assertIn("pLDDT - quality classes", text)
-        self.assertIn('"resname LIG", "organic"', text)
+        self.assertIn('"resname LIG" or "organic"', text)
         self.assertIn("PDE - contact-filtered to selection", text)
         self.assertIn('"chain B"', text)
         self.assertIn("Chain ipTM with Plot > Matrix", text)
@@ -1444,7 +1443,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
 
         self.assertEqual(
             dialog._preview_label.text,
-            'Requires a reference selection. Try "chain B", "resname LIG", or "organic".',
+            "Requires a reference selection, such as a chain, ligand, or residue set.",
         )
 
     def test_metric_preview_gives_contact_hint_when_reference_missing(self) -> None:
@@ -1455,8 +1454,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         self.assertIn(
             "reference selection and contact cutoff", dialog._preview_label.text
         )
-        self.assertIn('"resname LIG"', dialog._preview_label.text)
-        self.assertIn('"organic"', dialog._preview_label.text)
+        self.assertIn("chain, ligand, or residue set", dialog._preview_label.text)
 
     def test_metric_preview_gives_actionable_missing_ensemble_hint(self) -> None:
         dialog = self._context_dialog("ensemble_rmsd")
@@ -1643,8 +1641,8 @@ class GuiModelSwitchingTests(unittest.TestCase):
         dialog._update_statistics_for_single = lambda *_args, **_kwargs: None
 
         with (
-            mock.patch("FoldQC.painter.paint_plddt_class_coloring") as paint,
-            mock.patch("FoldQC.painter.delete_colorbar"),
+            mock.patch("FoldQC.gui.paint_plddt_class_coloring") as paint,
+            mock.patch("FoldQC.gui.delete_colorbar"),
         ):
             dialog._apply_plddt_class_coloring("plddt_class", "target_model_0")
 
@@ -1657,8 +1655,8 @@ class GuiModelSwitchingTests(unittest.TestCase):
             plddt=provider_values,
         )
         with (
-            mock.patch("FoldQC.painter.paint_plddt_class_coloring") as paint,
-            mock.patch("FoldQC.painter.delete_colorbar"),
+            mock.patch("FoldQC.gui.paint_plddt_class_coloring") as paint,
+            mock.patch("FoldQC.gui.delete_colorbar"),
         ):
             dialog._apply_plddt_class_coloring("plddt_class", "target_model_0")
 
@@ -1731,8 +1729,8 @@ class GuiModelSwitchingTests(unittest.TestCase):
         dialog = self._coloring_dialog_for_overlap()
 
         with (
-            mock.patch("FoldQC.painter.paint_property") as paint,
-            mock.patch("FoldQC.painter.show_colorbar"),
+            mock.patch("FoldQC.gui.paint_property") as paint,
+            mock.patch("FoldQC.gui.show_colorbar"),
         ):
             dialog._apply_coloring()
 
@@ -1751,8 +1749,8 @@ class GuiModelSwitchingTests(unittest.TestCase):
         dialog = self._coloring_dialog_for_overlap()
 
         with (
-            mock.patch("FoldQC.painter.paint_property") as paint,
-            mock.patch("FoldQC.painter.show_colorbar"),
+            mock.patch("FoldQC.gui.paint_property") as paint,
+            mock.patch("FoldQC.gui.show_colorbar"),
         ):
             paint.return_value = (0.8, 0.9)
             dialog._apply_coloring()
@@ -1771,8 +1769,8 @@ class GuiModelSwitchingTests(unittest.TestCase):
         dialog = self._coloring_dialog_for_overlap("partial")
 
         with (
-            mock.patch("FoldQC.painter.paint_property") as paint,
-            mock.patch("FoldQC.painter.show_colorbar"),
+            mock.patch("FoldQC.gui.paint_property") as paint,
+            mock.patch("FoldQC.gui.show_colorbar"),
         ):
             paint.return_value = (0.8, 0.9)
             dialog._apply_coloring()
@@ -1800,8 +1798,8 @@ class GuiModelSwitchingTests(unittest.TestCase):
         dialog._update_statistics_for_single = lambda *_args, **_kwargs: None
 
         with (
-            mock.patch("FoldQC.painter.paint_plddt_class_coloring") as paint,
-            mock.patch("FoldQC.painter.delete_colorbar"),
+            mock.patch("FoldQC.gui.paint_plddt_class_coloring") as paint,
+            mock.patch("FoldQC.gui.delete_colorbar"),
         ):
             dialog._apply_plddt_class_coloring("plddt_class", "other")
 
@@ -2214,12 +2212,12 @@ class GuiModelSwitchingTests(unittest.TestCase):
 
         with (
             mock.patch(
-                "FoldQC.painter.paint_categorical_labels_bulk",
+                "FoldQC.gui.paint_categorical_labels_bulk",
                 side_effect=[(0.0, 1.0), (0.0, 1.0)],
             ) as categorical,
-            mock.patch("FoldQC.painter.paint_property_bulk") as continuous,
-            mock.patch("FoldQC.painter.show_colorbar") as show_colorbar,
-            mock.patch("FoldQC.painter.delete_colorbar") as delete_colorbar,
+            mock.patch("FoldQC.gui.paint_property_bulk") as continuous,
+            mock.patch("FoldQC.gui.show_colorbar") as show_colorbar,
+            mock.patch("FoldQC.gui.delete_colorbar") as delete_colorbar,
         ):
             dialog._apply_individual_property_to_ensemble(
                 "pae_domain_complete",
@@ -2345,18 +2343,19 @@ class GuiModelSwitchingTests(unittest.TestCase):
             token_map=[_token(0), _token(1), _token(2)],
         )
 
-        import FoldQC.token_map as token_map_module
+        import FoldQC.gui as gui_module
 
-        old_selection = token_map_module.selection_to_token_indices
+        old_selection = gui_module.selection_to_token_indices
         try:
-            token_map_module.selection_to_token_indices = (
-                lambda _tm, _sel, obj_name="all": [0, 2]
-            )
+            gui_module.selection_to_token_indices = lambda _tm, _sel, obj_name="all": [
+                0,
+                2,
+            ]
             x_values, series, _ylabel = dialog._compute_line_plot_data(
                 "contact_prob_to_sel", target, [0, 2]
             )
         finally:
-            token_map_module.selection_to_token_indices = old_selection
+            gui_module.selection_to_token_indices = old_selection
 
         np.testing.assert_array_equal(x_values, np.array([0, 1, 2], dtype=np.int32))
         np.testing.assert_allclose(
@@ -2455,10 +2454,11 @@ class GuiModelSwitchingTests(unittest.TestCase):
         dialog._cutoff_edit = _LineEdit("7.5")
         dialog._resolve_plot_target = lambda: target
         dialog._ensure_current_data_for_property = lambda _prop: None
+        dialog._binding_site_token_indices = lambda *_args: [1, 2]
 
-        import FoldQC.token_map as token_map_module
+        import FoldQC.gui as gui_module
 
-        old_selection = token_map_module.selection_to_token_indices
+        old_selection = gui_module.selection_to_token_indices
 
         def fake_selection_to_token_indices(_tm, selection, obj_name="all"):
             if selection == "resname LIG":
@@ -2466,12 +2466,10 @@ class GuiModelSwitchingTests(unittest.TestCase):
             return [0, 1, 2]
 
         try:
-            token_map_module.selection_to_token_indices = (
-                fake_selection_to_token_indices
-            )
+            gui_module.selection_to_token_indices = fake_selection_to_token_indices
             rows = dialog._build_csv_export_rows()
         finally:
-            token_map_module.selection_to_token_indices = old_selection
+            gui_module.selection_to_token_indices = old_selection
 
         self.assertEqual(rows[0]["reference_selection"], "resname LIG")
         self.assertEqual(rows[0]["cutoff_angstrom"], 7.5)
@@ -2527,10 +2525,11 @@ class GuiModelSwitchingTests(unittest.TestCase):
         dialog._cutoff_edit = _LineEdit("7.5")
         dialog._resolve_plot_target = lambda: target
         dialog._ensure_current_data_for_property = lambda _prop: None
+        dialog._binding_site_token_indices = lambda *_args: [1, 2]
 
-        import FoldQC.token_map as token_map_module
+        import FoldQC.gui as gui_module
 
-        old_selection = token_map_module.selection_to_token_indices
+        old_selection = gui_module.selection_to_token_indices
 
         def fake_selection_to_token_indices(_tm, selection, obj_name="all"):
             if selection == "resname LIG":
@@ -2538,12 +2537,10 @@ class GuiModelSwitchingTests(unittest.TestCase):
             return [0, 1, 2]
 
         try:
-            token_map_module.selection_to_token_indices = (
-                fake_selection_to_token_indices
-            )
+            gui_module.selection_to_token_indices = fake_selection_to_token_indices
             rows = dialog._build_csv_export_rows()
         finally:
-            token_map_module.selection_to_token_indices = old_selection
+            gui_module.selection_to_token_indices = old_selection
 
         self.assertEqual(rows[0]["cutoff_angstrom"], 7.5)
         self.assertEqual(rows[0]["is_reference_token"], "true")
@@ -2753,7 +2750,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
             make_plddt_class_bar_plot=lambda *args, **kwargs: (
                 bar_calls.append((args, kwargs)) or "class-figure"
             ),
-            attach_pymol_selection_metadata=lambda *args, **kwargs: (
+            attach_viewer_selection_metadata=lambda *args, **kwargs: (
                 metadata_calls.append((args, kwargs)) or args[0]
             ),
         )
@@ -2809,7 +2806,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
             make_histogram_plot=lambda *args, **kwargs: (
                 hist_calls.append((args, kwargs)) or "hist-figure"
             ),
-            attach_pymol_selection_metadata=lambda *args, **kwargs: (
+            attach_viewer_selection_metadata=lambda *args, **kwargs: (
                 metadata_calls.append((args, kwargs)) or args[0]
             ),
         )
@@ -2865,7 +2862,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
             make_categorical_bar_plot=lambda *args, **kwargs: (
                 cat_calls.append((args, kwargs)) or "category-figure"
             ),
-            attach_pymol_selection_metadata=lambda *args, **kwargs: (
+            attach_viewer_selection_metadata=lambda *args, **kwargs: (
                 metadata_calls.append((args, kwargs)) or args[0]
             ),
         )
@@ -3155,7 +3152,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
             make_line_plot=lambda *args, **kwargs: (
                 plot_calls.append((args, kwargs)) or "summary-figure"
             ),
-            attach_pymol_selection_metadata=lambda *args, **kwargs: (
+            attach_viewer_selection_metadata=lambda *args, **kwargs: (
                 metadata_calls.append((args, kwargs)) or args[0]
             ),
         )
@@ -3218,7 +3215,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         metadata_calls = []
         fake_plots = types.SimpleNamespace(
             make_line_plot=lambda *args, **kwargs: "ensemble-summary-figure",
-            attach_pymol_selection_metadata=lambda *args, **kwargs: (
+            attach_viewer_selection_metadata=lambda *args, **kwargs: (
                 metadata_calls.append((args, kwargs)) or args[0]
             ),
         )
@@ -3270,7 +3267,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
                 np.array([0.0, 0.5, 1.5], dtype=np.float64),
             ),
             make_histogram_plot=lambda *args, **kwargs: "hist-figure",
-            attach_pymol_selection_metadata=lambda *args, **kwargs: (
+            attach_viewer_selection_metadata=lambda *args, **kwargs: (
                 metadata_calls.append((args, kwargs)) or args[0]
             ),
         )
@@ -3780,7 +3777,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
             make_binding_site_fingerprint=lambda *args, **kwargs: (
                 plot_calls.append((args, kwargs)) or "fingerprint-figure"
             ),
-            attach_pymol_selection_metadata=lambda *args, **kwargs: (
+            attach_viewer_selection_metadata=lambda *args, **kwargs: (
                 metadata_calls.append((args, kwargs)) or args[0]
             ),
             save_and_show=lambda _fig: None,
@@ -3793,9 +3790,11 @@ class GuiModelSwitchingTests(unittest.TestCase):
         )
 
         import FoldQC
-        import FoldQC.token_map as token_map_module
+        import FoldQC.gui as gui_module
 
-        old_selection = token_map_module.selection_to_token_indices
+        old_selection = gui_module.selection_to_token_indices
+        old_nearby = gui_module.tokens_within_distance
+        nearby_calls = []
         old_plots = sys.modules.get("FoldQC.plots")
         old_plots_attr = getattr(FoldQC, "plots", None)
         old_plot_viewer = sys.modules.get("FoldQC.plot_viewer")
@@ -3805,13 +3804,15 @@ class GuiModelSwitchingTests(unittest.TestCase):
         sys.modules["FoldQC.plot_viewer"] = fake_plot_viewer
         FoldQC.plot_viewer = fake_plot_viewer
         try:
-            token_map_module.selection_to_token_indices = (
-                fake_selection_to_token_indices
+            gui_module.selection_to_token_indices = fake_selection_to_token_indices
+            gui_module.tokens_within_distance = lambda *args: (
+                nearby_calls.append(args) or [0, 1, 2, 3]
             )
 
             dialog._show_binding_site_fingerprint()
         finally:
-            token_map_module.selection_to_token_indices = old_selection
+            gui_module.selection_to_token_indices = old_selection
+            gui_module.tokens_within_distance = old_nearby
             if old_plots_attr is None:
                 try:
                     delattr(FoldQC, "plots")
@@ -3836,16 +3837,9 @@ class GuiModelSwitchingTests(unittest.TestCase):
                 sys.modules["FoldQC.plot_viewer"] = old_plot_viewer
 
         self.assertEqual(calls[0], (token_map, "resname LIG", "target_model_0"))
-        self.assertEqual(calls[1][0], token_map)
-        self.assertIn(
-            "within 7.5 of ((resname LIG) and (target_model_0))",
-            calls[1][1],
+        self.assertEqual(
+            nearby_calls[0], (token_map, "target_model_0", "resname LIG", 7.5)
         )
-        self.assertIn(
-            "not ((resname LIG) and (target_model_0))",
-            calls[1][1],
-        )
-        self.assertEqual(calls[1][2], "target_model_0")
         self.assertEqual(len(plot_calls), 1)
         args, kwargs = plot_calls[0]
         self.assertIs(args[0], token_map)
@@ -3908,7 +3902,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
             make_binding_site_fingerprint=lambda *args, **kwargs: (
                 plot_calls.append((args, kwargs)) or "fingerprint-figure"
             ),
-            attach_pymol_selection_metadata=lambda *args, **kwargs: (
+            attach_viewer_selection_metadata=lambda *args, **kwargs: (
                 metadata_calls.append((args, kwargs)) or args[0]
             ),
             save_and_show=lambda _fig: None,
@@ -3921,9 +3915,10 @@ class GuiModelSwitchingTests(unittest.TestCase):
         )
 
         import FoldQC
-        import FoldQC.token_map as token_map_module
+        import FoldQC.gui as gui_module
 
-        old_selection = token_map_module.selection_to_token_indices
+        old_selection = gui_module.selection_to_token_indices
+        old_nearby = gui_module.tokens_within_distance
         old_plots = sys.modules.get("FoldQC.plots")
         old_plots_attr = getattr(FoldQC, "plots", None)
         old_plot_viewer = sys.modules.get("FoldQC.plot_viewer")
@@ -3933,13 +3928,13 @@ class GuiModelSwitchingTests(unittest.TestCase):
         sys.modules["FoldQC.plot_viewer"] = fake_plot_viewer
         FoldQC.plot_viewer = fake_plot_viewer
         try:
-            token_map_module.selection_to_token_indices = (
-                fake_selection_to_token_indices
-            )
+            gui_module.selection_to_token_indices = fake_selection_to_token_indices
+            gui_module.tokens_within_distance = lambda *_args: [1, 2, 3, 4]
 
             dialog._show_binding_site_fingerprint()
         finally:
-            token_map_module.selection_to_token_indices = old_selection
+            gui_module.selection_to_token_indices = old_selection
+            gui_module.tokens_within_distance = old_nearby
             if old_plots_attr is None:
                 try:
                     delattr(FoldQC, "plots")
@@ -4095,10 +4090,12 @@ class GuiModelSwitchingTests(unittest.TestCase):
             _token(3, chain_id="A"),
         ]
 
-        import FoldQC.token_map as token_map_module
+        import FoldQC.gui as gui_module
 
-        old_selection = token_map_module.selection_to_token_indices
+        old_selection = gui_module.selection_to_token_indices
+        old_nearby = gui_module.tokens_within_distance
         calls = []
+        nearby_calls = []
 
         def fake_selection_to_token_indices(tm, selection, obj_name="all"):
             calls.append((tm, selection, obj_name))
@@ -4107,27 +4104,22 @@ class GuiModelSwitchingTests(unittest.TestCase):
             return [0, 1, 2, 3]
 
         try:
-            token_map_module.selection_to_token_indices = (
-                fake_selection_to_token_indices
+            gui_module.selection_to_token_indices = fake_selection_to_token_indices
+            gui_module.tokens_within_distance = lambda *args: (
+                nearby_calls.append(args) or [0, 1, 2, 3]
             )
 
             values = dialog._compute_property_for(
                 "pde_contact", "resname LIG", data, token_map, "target_model_0"
             )
         finally:
-            token_map_module.selection_to_token_indices = old_selection
+            gui_module.selection_to_token_indices = old_selection
+            gui_module.tokens_within_distance = old_nearby
 
         self.assertEqual(calls[0], (token_map, "resname LIG", "target_model_0"))
-        self.assertEqual(calls[1][0], token_map)
-        self.assertIn(
-            "within 8.25 of ((resname LIG) and (target_model_0))",
-            calls[1][1],
+        self.assertEqual(
+            nearby_calls[0], (token_map, "target_model_0", "resname LIG", 8.25)
         )
-        self.assertIn(
-            "not ((resname LIG) and (target_model_0))",
-            calls[1][1],
-        )
-        self.assertEqual(calls[1][2], "target_model_0")
         self.assertTrue(np.isnan(values[0]))
         self.assertTrue(np.isnan(values[2]))
         np.testing.assert_allclose(values[[1, 3]], np.array([2.5, 4.5]))
@@ -4159,10 +4151,12 @@ class GuiModelSwitchingTests(unittest.TestCase):
             _token(3, chain_id="A"),
         ]
 
-        import FoldQC.token_map as token_map_module
+        import FoldQC.gui as gui_module
 
-        old_selection = token_map_module.selection_to_token_indices
+        old_selection = gui_module.selection_to_token_indices
+        old_nearby = gui_module.tokens_within_distance
         calls = []
+        nearby_calls = []
 
         def fake_selection_to_token_indices(tm, selection, obj_name="all"):
             calls.append((tm, selection, obj_name))
@@ -4171,20 +4165,21 @@ class GuiModelSwitchingTests(unittest.TestCase):
             return [0, 1, 2, 3]
 
         try:
-            token_map_module.selection_to_token_indices = (
-                fake_selection_to_token_indices
+            gui_module.selection_to_token_indices = fake_selection_to_token_indices
+            gui_module.tokens_within_distance = lambda *args: (
+                nearby_calls.append(args) or [0, 1, 2, 3]
             )
 
             values = dialog._compute_property_for(
                 "pae_contact", "resname LIG", data, token_map, "target_model_0"
             )
         finally:
-            token_map_module.selection_to_token_indices = old_selection
+            gui_module.selection_to_token_indices = old_selection
+            gui_module.tokens_within_distance = old_nearby
 
         self.assertEqual(calls[0], (token_map, "resname LIG", "target_model_0"))
-        self.assertIn(
-            "within 8.25 of ((resname LIG) and (target_model_0))",
-            calls[1][1],
+        self.assertEqual(
+            nearby_calls[0], (token_map, "target_model_0", "resname LIG", 8.25)
         )
         self.assertTrue(np.isnan(values[0]))
         self.assertTrue(np.isnan(values[2]))
@@ -4203,18 +4198,19 @@ class GuiModelSwitchingTests(unittest.TestCase):
         data = types.SimpleNamespace(contact_probs=contact_probs)
         token_map = [_token(0), _token(1), _token(2)]
 
-        import FoldQC.token_map as token_map_module
+        import FoldQC.gui as gui_module
 
-        old_selection = token_map_module.selection_to_token_indices
+        old_selection = gui_module.selection_to_token_indices
         try:
-            token_map_module.selection_to_token_indices = (
-                lambda _tm, _sel, obj_name="all": [0, 2]
-            )
+            gui_module.selection_to_token_indices = lambda _tm, _sel, obj_name="all": [
+                0,
+                2,
+            ]
             values = dialog._compute_property_for(
                 "contact_prob_to_sel", "chain L", data, token_map, "target_model_0"
             )
         finally:
-            token_map_module.selection_to_token_indices = old_selection
+            gui_module.selection_to_token_indices = old_selection
 
         np.testing.assert_allclose(
             values,

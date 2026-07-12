@@ -14,23 +14,23 @@ import FoldQC.ensemble as ensemble  # noqa: E402
 from FoldQC.ensemble import (  # noqa: E402
     EnsembleMember,
     build_members,
-    clone_token_map_for_object,
     compute_metric_consensus,
     compute_per_token_rmsd,
     default_group_name,
     kabsch_transform,
-    load_as_objects,
-    load_as_states,
     prepare_metrics,
     select_alignment_core,
     validate_members,
+)
+from FoldQC.mol_viewer import (  # noqa: E402
+    load_models_as_objects,
+    load_models_as_states,
 )
 from FoldQC.token_map import TokenInfo  # noqa: E402
 
 
 def _token(idx: int, is_hetatm: bool = False) -> TokenInfo:
     atom_name = f"C{idx}" if is_hetatm else None
-    suffix = f"/{atom_name}" if atom_name else "/"
     return TokenInfo(
         token_idx=idx,
         chain_id="L" if is_hetatm else "A",
@@ -38,7 +38,6 @@ def _token(idx: int, is_hetatm: bool = False) -> TokenInfo:
         res_name="LIG" if is_hetatm else "ALA",
         is_hetatm=is_hetatm,
         atom_name=atom_name,
-        pymol_selection=f"/obj//A/{idx + 1}{suffix}",
     )
 
 
@@ -66,8 +65,8 @@ class EnsembleTests(unittest.TestCase):
         cmd = _Cmd()
         sys.modules["pymol"] = type("FakePymol", (), {"cmd": cmd})()
         try:
-            state_obj = load_as_states([(0, Path("/tmp/a.cif"))])
-            object_loads = load_as_objects([(0, Path("/tmp/a.cif"))])
+            state_obj = load_models_as_states([(0, Path("/tmp/a.cif"))])
+            object_loads = load_models_as_objects([(0, Path("/tmp/a.cif"))])
         finally:
             if old_pymol is None:
                 sys.modules.pop("pymol", None)
@@ -120,15 +119,6 @@ class EnsembleTests(unittest.TestCase):
         np.testing.assert_allclose(mean, np.array([0.9, 0.4], dtype=np.float32))
         np.testing.assert_allclose(std, np.array([0.1, 0.2], dtype=np.float32))
 
-    def test_clone_token_map_for_object_reuses_topology(self) -> None:
-        token_map = [_token(0), _token(1, is_hetatm=True)]
-
-        cloned = clone_token_map_for_object(token_map, "other")
-
-        self.assertEqual([tok.token_idx for tok in cloned], [0, 1])
-        self.assertEqual(cloned[0].pymol_selection, "/other//A/1/")
-        self.assertEqual(cloned[1].pymol_selection, "/other//L/2/C1")
-
     def test_kabsch_transform_maps_mobile_to_target(self) -> None:
         mobile = np.array(
             [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
@@ -176,7 +166,7 @@ def test_default_group_name_derives_current_gui_name() -> None:
     assert default_group_name(pred_files) == "target_model_ensemble"
 
 
-def test_build_members_loads_data_and_clones_reference_token_map(monkeypatch) -> None:
+def test_build_members_loads_data_and_reuses_reference_token_map(monkeypatch) -> None:
     pred_files = types.SimpleNamespace(
         models=[
             types.SimpleNamespace(
@@ -194,7 +184,7 @@ def test_build_members_loads_data_and_clones_reference_token_map(monkeypatch) ->
     loaded_calls = []
     load_data_calls = []
 
-    def fake_load_as_objects(model_paths, *, obj_prefix, group_name):
+    def fake_load_models_as_objects(model_paths, *, obj_prefix, group_name):
         loaded_calls.append((model_paths, obj_prefix, group_name))
         return [(0, "target_model_0"), (1, "target_model_1")]
 
@@ -207,21 +197,18 @@ def test_build_members_loads_data_and_clones_reference_token_map(monkeypatch) ->
             structure_plddt=np.array([0.8, 0.9], dtype=np.float32),
         )
 
-    def fake_build_token_map(obj_name, structure_path):
-        assert obj_name == "target_model_0"
+    def fake_build_token_map(structure_path):
         assert structure_path == Path("/tmp/target_model_0.cif")
         return [_token(0), _token(1, is_hetatm=True)]
 
-    monkeypatch.setattr(ensemble, "load_as_objects", fake_load_as_objects)
+    monkeypatch.setattr(ensemble, "load_models_as_objects", fake_load_models_as_objects)
     monkeypatch.setattr("FoldQC.loader.load_prediction_data", fake_load_prediction_data)
     monkeypatch.setattr("FoldQC.token_map.build_token_map", fake_build_token_map)
 
     group_name, members = build_members(pred_files)
 
     assert group_name == "target_model_ensemble"
-    expected_model_paths = [
-        (m.rank, m.structure_path) for m in pred_files.models
-    ]
+    expected_model_paths = [(m.rank, m.structure_path) for m in pred_files.models]
     assert loaded_calls == [
         (
             expected_model_paths,
@@ -235,9 +222,7 @@ def test_build_members_loads_data_and_clones_reference_token_map(monkeypatch) ->
         "load_pde": False,
         "load_structure_plddt": True,
     }
-    assert members[0].token_map[0].pymol_selection == "/obj//A/1/"
-    assert members[1].token_map[0].pymol_selection == "/target_model_1//A/1/"
-    assert members[1].token_map[1].pymol_selection == "/target_model_1//L/2/C1"
+    assert members[0].token_map is members[1].token_map
 
 
 def test_validate_members_accepts_compatible_members() -> None:

@@ -5,18 +5,24 @@ Utilities for working with multiple ranked prediction models.
 
 When a provider produces N models, N structure files can be loaded as one
 object-based ensemble ordered by rank. This module provides tools to:
-- Load all models as separate PyMOL objects grouped as one ensemble.
+- Coordinate viewer-neutral ensemble loading through :mod:`mol_viewer`.
 - Compute per-token RMSD across all samples.
 - Compute per-metric consensus (mean ± std) across samples.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
-from pathlib import Path
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
+
+from .mol_viewer import (
+    get_representative_coords,
+    load_models_as_objects,
+    rebuild,
+    transform_object,
+)
 
 if TYPE_CHECKING:
     from .token_map import TokenInfo
@@ -44,7 +50,7 @@ class EnsembleMetrics:
 
 
 def default_group_name(pred_files) -> str:
-    """Return the default PyMOL group name for a prediction ensemble."""
+    """Return the default viewer group name for a prediction ensemble."""
     first_obj = pred_files.models[0].object_name
     obj_prefix = first_obj.rsplit("_", 1)[0]
     return f"{obj_prefix}_ensemble"
@@ -62,7 +68,7 @@ def build_members(
     first_obj = pred_files.models[0].object_name
     obj_prefix = first_obj.rsplit("_", 1)[0]
     group_name = group_name or default_group_name(pred_files)
-    loaded = load_as_objects(
+    loaded = load_models_as_objects(
         [(m.rank, m.structure_path) for m in pred_files.models],
         obj_prefix=obj_prefix,
         group_name=group_name,
@@ -79,10 +85,10 @@ def build_members(
             load_structure_plddt=True,
         )
         if reference_token_map is None:
-            reference_token_map = build_token_map(obj_name, data.structure_path)
+            reference_token_map = build_token_map(data.structure_path)
             token_map = reference_token_map
         else:
-            token_map = clone_token_map_for_object(reference_token_map, obj_name)
+            token_map = reference_token_map
         members.append(
             EnsembleMember(
                 rank=rank,
@@ -171,83 +177,6 @@ def prepare_metrics(
     )
 
 
-def load_as_states(
-    model_paths: list[tuple[int, Path]],
-    obj_name: str = "foldqc_ensemble",
-) -> str:
-    """Load all models as consecutive states of one PyMOL object.
-
-    Parameters
-    ----------
-    model_paths:
-        List of ``(rank, path)`` pairs, e.g. from
-        ``[(m.rank, m.structure_path) for m in pred_files.models]``.
-    obj_name:
-        Target PyMOL object name.
-
-    Returns
-    -------
-    str
-        The PyMOL object name (same as *obj_name*).
-    """
-    from pymol import cmd
-
-    for state_idx, (rank, path) in enumerate(sorted(model_paths), start=1):
-        cmd.load(str(path), obj_name, state=state_idx)
-
-    return obj_name
-
-
-def load_as_objects(
-    model_paths: list[tuple[int, Path]],
-    obj_prefix: str = "foldqc_model",
-    group_name: str | None = None,
-) -> list[tuple[int, str]]:
-    """Load each model as a separate named PyMOL object and optionally group it.
-
-    Existing objects with the target names are reused. Missing objects are
-    loaded from *model_paths*.
-
-    Returns a list of ``(rank, obj_name)`` pairs.
-    """
-    from pymol import cmd
-
-    current_objects = set(cmd.get_names("objects") or [])
-    result: list[tuple[int, str]] = []
-    try:
-        try:
-            cmd.set("suspend_updates", "on")
-        except Exception:
-            pass
-        for rank, path in sorted(model_paths):
-            obj_name = f"{obj_prefix}_{rank}"
-            if obj_name not in current_objects:
-                cmd.load(str(path), obj_name, quiet=1, zoom=0)
-                current_objects.add(obj_name)
-            if group_name:
-                cmd.group(group_name, obj_name, "add")
-            result.append((rank, obj_name))
-    finally:
-        try:
-            cmd.set("suspend_updates", "off")
-            cmd.rebuild()
-        except Exception:
-            pass
-    return result
-
-
-def clone_token_map_for_object(token_map: list[TokenInfo], obj_name: str) -> list[TokenInfo]:
-    """Reuse a token topology with PyMOL selections targeting *obj_name*."""
-    cloned = []
-    for tok in token_map:
-        if tok.is_hetatm and tok.atom_name is not None:
-            sel = f"/{obj_name}//{tok.chain_id}/{tok.res_num}/{tok.atom_name}"
-        else:
-            sel = f"/{obj_name}//{tok.chain_id}/{tok.res_num}/"
-        cloned.append(replace(tok, pymol_selection=sel))
-    return cloned
-
-
 def select_alignment_core(
     token_map: list[TokenInfo],
     plddt: np.ndarray,
@@ -303,34 +232,6 @@ def kabsch_transform(
     return rotation.astype(np.float64), translation.astype(np.float64)
 
 
-def apply_transform_to_object(
-    obj_name: str,
-    rotation: np.ndarray,
-    translation: np.ndarray,
-) -> None:
-    """Apply a rigid transform to every atom in a PyMOL object."""
-    from pymol import cmd, stored
-
-    stored.foldqc_ensemble_rotation = rotation.tolist()
-    stored.foldqc_ensemble_translation = translation.tolist()
-    expr = (
-        "x, y, z = ("
-        "stored.foldqc_ensemble_rotation[0][0]*x + "
-        "stored.foldqc_ensemble_rotation[0][1]*y + "
-        "stored.foldqc_ensemble_rotation[0][2]*z + "
-        "stored.foldqc_ensemble_translation[0], "
-        "stored.foldqc_ensemble_rotation[1][0]*x + "
-        "stored.foldqc_ensemble_rotation[1][1]*y + "
-        "stored.foldqc_ensemble_rotation[1][2]*z + "
-        "stored.foldqc_ensemble_translation[1], "
-        "stored.foldqc_ensemble_rotation[2][0]*x + "
-        "stored.foldqc_ensemble_rotation[2][1]*y + "
-        "stored.foldqc_ensemble_rotation[2][2]*z + "
-        "stored.foldqc_ensemble_translation[2])"
-    )
-    cmd.alter_state(1, obj_name, expr)
-
-
 def align_objects_to_reference(
     members: list[EnsembleMember],
     core_indices: list[int],
@@ -349,24 +250,22 @@ def align_objects_to_reference(
     if ref is None:
         raise ValueError(f"Reference rank {reference_rank} is not loaded.")
 
-    target_all_coords = get_token_coords(ref.obj_name, ref.token_map)
+    target_all_coords = get_representative_coords(ref.obj_name, ref.token_map)
     target_coords = target_all_coords[core_indices]
     aligned_coords: list[np.ndarray] = []
     for member in members:
         if member.rank == reference_rank:
             aligned_coords.append(target_all_coords)
             continue
-        mobile_all_coords = get_token_coords(member.obj_name, member.token_map)
+        mobile_all_coords = get_representative_coords(member.obj_name, member.token_map)
         mobile_coords = mobile_all_coords[core_indices]
         rotation, translation = kabsch_transform(mobile_coords, target_coords)
-        apply_transform_to_object(member.obj_name, rotation, translation)
+        transform_object(member.obj_name, rotation, translation)
         aligned_coords.append(
             (mobile_all_coords @ rotation.T + translation).astype(np.float32)
         )
 
-    from pymol import cmd
-
-    cmd.rebuild()
+    rebuild()
     return aligned_coords
 
 
@@ -374,22 +273,8 @@ def compute_aligned_per_token_rmsd(
     members: list[EnsembleMember],
 ) -> np.ndarray:
     """Compute per-token RMSD from the current coordinates of ensemble objects."""
-    coords_list = [get_token_coords(m.obj_name, m.token_map) for m in members]
+    coords_list = [get_representative_coords(m.obj_name, m.token_map) for m in members]
     return compute_per_token_rmsd(coords_list)
-
-
-def get_token_coords(
-    obj_name: str,
-    token_map: list[TokenInfo],
-) -> np.ndarray:
-    """Return representative-atom coordinates for a loaded object.
-
-    Thin wrapper around :func:`painter.get_representative_coords`.
-    Shape: ``(N_tokens, 3)``.
-    """
-    from .painter import get_representative_coords
-
-    return get_representative_coords(obj_name, token_map)
 
 
 def compute_per_token_rmsd(

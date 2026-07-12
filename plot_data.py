@@ -1,8 +1,8 @@
 """
 Pure plot-data preparation helpers for FoldQC.
 
-This module intentionally has no Qt, PyMOL, or Matplotlib imports. GUI code
-handles lazy loading, PyMOL selections, and figure construction.
+This module intentionally has no Qt, molecular-viewer, or Matplotlib imports.
+GUI code handles lazy loading, viewer selections, and figure construction.
 """
 
 from __future__ import annotations

@@ -1,7 +1,7 @@
 """
 Session-state helpers for FoldQC.
 
-This module is intentionally Qt- and PyMOL-independent. Callers provide a
+This module is intentionally Qt- and viewer-independent. Callers provide a
 settings-like object with ``value`` and ``setValue`` methods, such as QSettings.
 """
 

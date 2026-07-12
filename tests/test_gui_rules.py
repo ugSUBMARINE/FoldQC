@@ -100,7 +100,7 @@ def test_plot_action_state_for_representative_metrics() -> None:
             "line",
             "plddt",
             {"target_kind": "none"},
-            "Select a PyMOL target before plotting.",
+            "Select a viewer target before plotting.",
         ),
         (
             "line",
@@ -312,7 +312,7 @@ def test_preview_cutoff_text(cutoff_text: str, expected: str) -> None:
             False,
             "how well the rest of the model",
         ),
-        ("pae_to_sel", "", "5.0", False, 'Try "chain B"'),
+        ("pae_to_sel", "", "5.0", False, "such as a chain"),
         (
             "pae_col_to_sel",
             "chain B",

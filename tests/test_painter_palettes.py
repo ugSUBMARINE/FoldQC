@@ -10,7 +10,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from FoldQC import (
-    painter,  # noqa: E402
+    mol_viewer,  # noqa: E402
     palettes,  # noqa: E402
 )
 
@@ -73,7 +73,7 @@ class PainterPaletteTests(unittest.TestCase):
     def test_native_reverse_palette_uses_spectrum_name_without_custom_colors(
         self,
     ) -> None:
-        painter.paint_property_bulk(
+        mol_viewer.paint_property_bulk(
             "obj",
             [_token(0), _token(1)],
             np.array([1.0, 2.0], dtype=np.float32),
@@ -89,7 +89,7 @@ class PainterPaletteTests(unittest.TestCase):
         self.assertEqual(kwargs["maximum"], 2.0)
 
     def test_viridis_registers_custom_colors_before_spectrum(self) -> None:
-        painter.paint_property_bulk(
+        mol_viewer.paint_property_bulk(
             "obj",
             [_token(0), _token(1)],
             np.array([1.0, 2.0], dtype=np.float32),
@@ -104,7 +104,7 @@ class PainterPaletteTests(unittest.TestCase):
         self.assertEqual(len(palette.split()), len(self.cmd.set_color_calls))
 
     def test_categorical_labels_color_exact_integer_b_factors(self) -> None:
-        painter.paint_categorical_labels_bulk(
+        mol_viewer.paint_categorical_labels_bulk(
             "obj",
             [_token(0), _token(1), _token(2)],
             np.array([0.0, 1.0, np.nan], dtype=np.float32),
@@ -125,41 +125,47 @@ class PainterPaletteTests(unittest.TestCase):
         self.assertIn(("grey70", "obj and b < 0"), self.cmd.color_calls)
 
     def test_plddt_class_coloring_uses_shared_palette_definitions(self) -> None:
-        painter.paint_plddt_class_coloring("obj", rebuild=False)
+        mol_viewer.paint_plddt_class_coloring("obj", rebuild=False)
 
         self.assertEqual(
             [name for name, _rgb in self.cmd.set_color_calls],
-            [color.pymol_name for color in palettes.PLDDT_CLASS_COLORS],
+            [
+                color.key if color.key == "plddt_nan" else f"plddt_{color.key}"
+                for color in palettes.PLDDT_CLASS_COLORS
+            ],
         )
         self.assertEqual(
             self.cmd.set_color_calls[0][1],
             list(palettes.PLDDT_CLASS_COLORS[0].rgb),
         )
-        self.assertIn(
-            (
-                palettes.PLDDT_CLASS_COLORS[0].pymol_name,
-                f"obj and {palettes.PLDDT_CLASS_COLORS[0].bfactor_selection}",
-            ),
+        self.assertEqual(
             self.cmd.color_calls,
+            [
+                ("plddt_very_high", "obj and (b>90 or b=90)"),
+                ("plddt_high", "obj and ((b<90 and b>70) or b=70)"),
+                ("plddt_low", "obj and ((b<70 and b>50) or b=50)"),
+                ("plddt_very_low", "obj and ((b<50 and b>0) or b=0)"),
+                ("plddt_nan", "obj and (b<0)"),
+            ],
         )
 
     def test_show_colorbar_replaces_single_named_ramp_object(self) -> None:
-        self.assertEqual(painter.COLORBAR_OBJECT_NAME, "foldqc_colorbar")
+        self.assertEqual(mol_viewer.COLORBAR_OBJECT_NAME, "foldqc_colorbar")
 
-        painter.show_colorbar(
+        mol_viewer.show_colorbar(
             "blue_white_red",
             False,
             0.0,
             1.0,
         )
 
-        self.assertEqual(self.cmd.delete_calls, [painter.COLORBAR_OBJECT_NAME])
+        self.assertEqual(self.cmd.delete_calls, [mol_viewer.COLORBAR_OBJECT_NAME])
         self.assertEqual(len(self.cmd.ramp_new_calls), 1)
         args, kwargs = self.cmd.ramp_new_calls[0]
         self.assertEqual(
             args,
             (
-                painter.COLORBAR_OBJECT_NAME,
+                mol_viewer.COLORBAR_OBJECT_NAME,
                 None,
                 [0.0, 0.5, 1.0],
                 ["blue", "white", "red"],
@@ -168,13 +174,13 @@ class PainterPaletteTests(unittest.TestCase):
         self.assertEqual(kwargs, {"quiet": 1})
 
     def test_show_colorbar_uses_reversed_palette_order(self) -> None:
-        painter.show_colorbar("blue_white_red", True, 2.0, 8.0)
+        mol_viewer.show_colorbar("blue_white_red", True, 2.0, 8.0)
 
         args, kwargs = self.cmd.ramp_new_calls[0]
         self.assertEqual(
             args,
             (
-                painter.COLORBAR_OBJECT_NAME,
+                mol_viewer.COLORBAR_OBJECT_NAME,
                 None,
                 [2.0, 5.0, 8.0],
                 ["red", "white", "blue"],
@@ -183,10 +189,10 @@ class PainterPaletteTests(unittest.TestCase):
         self.assertEqual(kwargs, {"quiet": 1})
 
     def test_show_colorbar_passes_custom_palette_rgb_stops(self) -> None:
-        painter.show_colorbar("viridis", False, 0.0, 7.0)
+        mol_viewer.show_colorbar("viridis", False, 0.0, 7.0)
 
         args, _kwargs = self.cmd.ramp_new_calls[0]
-        self.assertEqual(args[0], painter.COLORBAR_OBJECT_NAME)
+        self.assertEqual(args[0], mol_viewer.COLORBAR_OBJECT_NAME)
         self.assertIsNone(args[1])
         self.assertEqual(args[2], list(np.linspace(0.0, 7.0, 8)))
         self.assertEqual(len(args[3]), 8)

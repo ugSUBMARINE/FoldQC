@@ -1,7 +1,7 @@
 """
 Report text builders for FoldQC.
 
-This module is intentionally independent of Qt and PyMOL.  GUI code passes in
+This module is intentionally independent of Qt and molecular viewers. GUI code passes in
 loaded data and computed arrays, then writes the returned text to widgets.
 """
 
@@ -153,11 +153,12 @@ def format_numeric_statistics(values: np.ndarray) -> list[str]:
     arr = np.asarray(values, dtype=np.float64).ravel()
     finite = arr[np.isfinite(arr)]
     ignored = int(arr.size - finite.size)
-    lines = [
-        f"tokens        : {arr.size} (finite: {finite.size})",
-    ]
     if ignored:
-        lines.append(f"ignored       : {ignored}")
+        lines = [
+            f"tokens        : {arr.size} (finite: {finite.size}, ignored: {ignored})",
+        ]
+    else:
+        lines = [f"tokens        : {arr.size}"]
     if finite.size == 0:
         lines.append("No finite values.")
         return lines

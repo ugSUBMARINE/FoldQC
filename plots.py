@@ -4,8 +4,8 @@ Plots
 Matplotlib-based figures for token-indexed line plots, PAE/PDE-style matrices,
 and binding-site fingerprints.
 
-Figure-building functions in this module are PyMOL- and Qt-independent.  The
-GUI embeds their figures in a PyMOL Qt dialog when Matplotlib's Qt canvas is
+Figure-building functions in this module are viewer- and Qt-independent. The
+GUI embeds their figures in a host Qt dialog when Matplotlib's Qt canvas is
 available.  If Qt embedding fails, the GUI can pass a figure to
 ``save_and_show()`` to write a temporary PNG and open it with the system
 viewer.
@@ -86,7 +86,7 @@ def _token_label(tok) -> str:
     return prefix
 
 
-def attach_pymol_selection_metadata(
+def attach_viewer_selection_metadata(
     fig: plt.Figure,
     *,
     kind: str,
@@ -105,11 +105,11 @@ def attach_pymol_selection_metadata(
 ) -> plt.Figure:
     """Attach token-selection metadata for :mod:`plot_viewer`.
 
-    This module stays PyMOL-independent: the metadata is plain Python data, and
-    the embedded Qt viewer decides whether/how to turn it into PyMOL selections.
+    The metadata is plain Python data; the embedded Qt dialog delegates viewer
+    selection behavior through :mod:`mol_viewer`.
     """
     if kind not in {"line", "bars", "matrix"}:
-        raise ValueError(f"Unsupported PyMOL plot-selection kind: {kind!r}")
+        raise ValueError(f"Unsupported viewer plot-selection kind: {kind!r}")
 
     metadata: dict[str, Any] = {
         "kind": kind,
@@ -145,7 +145,7 @@ def attach_pymol_selection_metadata(
     if bar_widths is not None:
         metadata["bar_widths"] = [float(w) for w in bar_widths]
 
-    setattr(fig, "_foldqc_pymol_selection", metadata)
+    setattr(fig, "_foldqc_viewer_selection", metadata)
     return fig
 
 
@@ -169,7 +169,7 @@ def attach_ensemble_site_summary_metadata(
         "member_widths": [0.9 for _member in member_list],
         "selection_name": selection_name,
     }
-    setattr(fig, "_foldqc_pymol_selection", metadata)
+    setattr(fig, "_foldqc_viewer_selection", metadata)
     return fig
 
 

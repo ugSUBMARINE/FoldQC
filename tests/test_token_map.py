@@ -10,14 +10,16 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from FoldQC.token_map import (
+from FoldQC.mol_viewer import (  # noqa: E402
+    compact_selection_expression,
+    compare_token_map_to_object,
+)
+from FoldQC.token_map import (  # noqa: E402
     TokenInfo,
     build_token_map,
-    compact_pymol_selection_expression,
-    compare_token_map_to_pymol_object,
     extract_structure_plddt,
     parse_structure_atoms,
-)  # noqa: E402
+)
 
 QUOTED_ATOM_CIF = """data_test
 loop_
@@ -53,10 +55,7 @@ class TokenMapTests(unittest.TestCase):
         atom_name: str | None = None,
         obj_name: str = "model",
     ) -> TokenInfo:
-        if is_hetatm:
-            selection = f"/{obj_name}//{chain_id}/{res_num}/{atom_name}"
-        else:
-            selection = f"/{obj_name}//{chain_id}/{res_num}/"
+        del obj_name
         return TokenInfo(
             token_idx=token_idx,
             chain_id=chain_id,
@@ -64,7 +63,6 @@ class TokenMapTests(unittest.TestCase):
             res_name=res_name,
             is_hetatm=is_hetatm,
             atom_name=atom_name,
-            pymol_selection=selection,
         )
 
     def test_cif_parser_unquotes_atom_names_with_apostrophes(self) -> None:
@@ -73,12 +71,12 @@ class TokenMapTests(unittest.TestCase):
             path.write_text(QUOTED_ATOM_CIF)
 
             atoms = parse_structure_atoms(path)
-            token_map = build_token_map("obj", path)
+            token_map = build_token_map(path)
             plddt = extract_structure_plddt(path)
 
         self.assertEqual([atom["name"] for atom in atoms], ["C1'", "O5'"])
         self.assertEqual([tok.atom_name for tok in token_map], ["C1'", "O5'"])
-        self.assertEqual(token_map[0].pymol_selection, "/obj//B/2/C1'")
+        self.assertFalse(hasattr(token_map[0], "pymol_selection"))
         np.testing.assert_allclose(plddt, np.array([0.986, 0.9842], dtype=np.float32))
 
     def _compare_overlap(self, token_map, atoms):
@@ -88,7 +86,7 @@ class TokenMapTests(unittest.TestCase):
         )
         sys.modules["pymol"] = types.SimpleNamespace(cmd=cmd)
         try:
-            return compare_token_map_to_pymol_object(token_map, "target")
+            return compare_token_map_to_object(token_map, "target")
         finally:
             if old_pymol is None:
                 sys.modules.pop("pymol", None)
@@ -201,7 +199,7 @@ class TokenMapTests(unittest.TestCase):
             self._token(5, res_num=5),
         ]
 
-        expression = compact_pymol_selection_expression(
+        expression = compact_selection_expression(
             [5, 3, 0, 4, 2, 1, 3, -1, 99],
             [("model", token_map)],
         )
@@ -261,7 +259,7 @@ class TokenMapTests(unittest.TestCase):
             ),
         ]
 
-        expression = compact_pymol_selection_expression(
+        expression = compact_selection_expression(
             [0, 1, 2, 3, 4],
             [("model_0", first_map), ("model_1", second_map)],
         )
@@ -299,9 +297,7 @@ class TokenMapTests(unittest.TestCase):
             ),
         ]
 
-        expression = compact_pymol_selection_expression(
-            [0, 1, 2], [("model", token_map)]
-        )
+        expression = compact_selection_expression([0, 1, 2], [("model", token_map)])
 
         self.assertEqual(
             expression,
@@ -332,9 +328,7 @@ class TokenMapTests(unittest.TestCase):
             ),
         ]
 
-        expression = compact_pymol_selection_expression(
-            [0, 1, 3], [("model", token_map)]
-        )
+        expression = compact_selection_expression([0, 1, 3], [("model", token_map)])
 
         self.assertEqual(
             expression,
@@ -355,23 +349,23 @@ class TokenMapTests(unittest.TestCase):
             ),
         ]
 
-        expression = compact_pymol_selection_expression(
+        expression = compact_selection_expression(
             [0, 1], [("unsafe-object", token_map)]
         )
 
         self.assertEqual(
             expression,
-            "(/model//A/1/) or (/model//X/2/C,1)",
+            "(/unsafe-object//A/1/) or (/unsafe-object//X/2/C,1)",
         )
 
     def test_compact_selection_requires_object_name_and_tokeninfo_fields(self) -> None:
         token_map = [self._token(0)]
 
         with self.assertRaisesRegex(ValueError, "non-empty object name"):
-            compact_pymol_selection_expression([0], [(None, token_map)])
+            compact_selection_expression([0], [(None, token_map)])
 
         with self.assertRaisesRegex(ValueError, "required TokenInfo fields"):
-            compact_pymol_selection_expression(
+            compact_selection_expression(
                 [0],
                 [("model", [type("IncompleteToken", (), {"token_idx": 0})()])],
             )
@@ -381,7 +375,7 @@ class TokenMapTests(unittest.TestCase):
         token.res_num = "not-a-residue-number"
 
         with self.assertRaisesRegex(ValueError, "invalid res_num"):
-            compact_pymol_selection_expression([0], [("model", [token])])
+            compact_selection_expression([0], [("model", [token])])
 
 
 if __name__ == "__main__":

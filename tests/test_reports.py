@@ -16,7 +16,7 @@ def test_numeric_statistics_basic_summary() -> None:
         np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32)
     )
 
-    assert "tokens        : 4 (finite: 4)" in lines
+    assert "tokens        : 4" in lines
     assert "mean          : 2.5" in lines
     assert "median        : 2.5" in lines
     assert "max           : 4" in lines
@@ -27,8 +27,7 @@ def test_numeric_statistics_ignores_nonfinite_values() -> None:
         np.array([1.0, np.nan, np.inf, 3.0], dtype=np.float32)
     )
 
-    assert "tokens        : 4 (finite: 2)" in lines
-    assert "ignored       : 2" in lines
+    assert "tokens        : 4 (finite: 2, ignored: 2)" in lines
     assert "mean          : 2" in lines
 
 
@@ -36,8 +35,7 @@ def test_numeric_statistics_reports_no_finite_values() -> None:
     lines = reports.format_numeric_statistics(np.array([np.nan, np.inf]))
 
     assert lines == [
-        "tokens        : 2 (finite: 0)",
-        "ignored       : 2",
+        "tokens        : 2 (finite: 0, ignored: 2)",
         "No finite values.",
     ]
 
@@ -87,8 +85,8 @@ def test_chain_statistics_groups_values_by_chain_order() -> None:
     assert (
         lines.index("Chain A") < lines.index("Chain (blank)") < lines.index("Chain B")
     )
-    assert "tokens        : 2 (finite: 2)" in lines
-    assert "tokens        : 1 (finite: 1)" in lines
+    assert "tokens        : 2" in lines
+    assert "tokens        : 1" in lines
 
 
 def test_domain_label_statistics_counts_clusters() -> None:
@@ -149,7 +147,7 @@ def test_statistics_report_ensemble_level_single_array() -> None:
 
     assert "Target: target_ensemble" in report
     assert "Overall (pooled)" not in report
-    assert "tokens        : 2 (finite: 2)" in report
+    assert "tokens        : 2" in report
 
 
 def test_statistics_report_includes_chain_statistics() -> None:

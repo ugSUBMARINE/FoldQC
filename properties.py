@@ -2,7 +2,7 @@
 Properties
 ==========
 Collapse PAE/PDE matrices and other prediction outputs into per-token scalar arrays
-that can be painted onto a structure via :mod:`painter`.
+that can be painted onto a structure through :mod:`mol_viewer`.
 
 All functions return a 1-D ``float32`` numpy array of shape ``(N_tokens,)``
 unless otherwise noted.  Values of ``np.nan`` indicate tokens for which the
@@ -206,7 +206,7 @@ def pae_symmetric_to_selection_for_contacts(
 ) -> np.ndarray:
     """Symmetric mean PAE to reference, defined only for contact tokens.
 
-    ``contact_indices`` is supplied by the caller so PyMOL-dependent contact
+    ``contact_indices`` is supplied by the caller so viewer-dependent contact
     shell construction stays outside this pure numeric module.
     """
     if not ref_indices:
@@ -482,9 +482,9 @@ def pde_to_selection_for_contacts(
 ) -> np.ndarray:
     """Mean PDE to reference, defined only for explicit contact tokens.
 
-    ``contact_indices`` is supplied by the caller, allowing GUI/PyMOL code to
+    ``contact_indices`` is supplied by the caller, allowing viewer adapter code to
     define residue contacts with all-atom selections while this module remains
-    PyMOL-independent. Tokens outside ``contact_indices`` receive ``np.nan``.
+    viewer-independent. Tokens outside ``contact_indices`` receive ``np.nan``.
     """
     if not ref_indices:
         raise ValueError("ref_indices must not be empty.")
@@ -652,7 +652,7 @@ def chain_iptm_values(
         else:
             chain_scores = {int(k): v for k, v in scores.items()}
 
-    # Map chain_idx (0-based in JSON) → PyMOL chain ID via token_map
+    # Map chain_idx (0-based in JSON) to structure chain ID via token_map.
     # Build chain_id → chain_idx mapping from token_map
     chain_id_to_idx: dict[str, int] = {}
     current_idx = 0
