@@ -178,10 +178,17 @@ def test_default_group_name_derives_current_gui_name() -> None:
 
 def test_build_members_loads_data_and_clones_reference_token_map(monkeypatch) -> None:
     pred_files = types.SimpleNamespace(
-        models=[types.SimpleNamespace(object_name="target_model_0")],
-        structure_files=[
-            (0, Path("/tmp/target_model_0.cif")),
-            (1, Path("/tmp/target_model_1.cif")),
+        models=[
+            types.SimpleNamespace(
+                object_name="target_model_0",
+                rank=0,
+                structure_path=Path("/tmp/target_model_0.cif"),
+            ),
+            types.SimpleNamespace(
+                object_name="target_model_1",
+                rank=1,
+                structure_path=Path("/tmp/target_model_1.cif"),
+            ),
         ],
     )
     loaded_calls = []
@@ -212,9 +219,12 @@ def test_build_members_loads_data_and_clones_reference_token_map(monkeypatch) ->
     group_name, members = build_members(pred_files)
 
     assert group_name == "target_model_ensemble"
+    expected_model_paths = [
+        (m.rank, m.structure_path) for m in pred_files.models
+    ]
     assert loaded_calls == [
         (
-            pred_files.structure_files,
+            expected_model_paths,
             "target_model",
             "target_model_ensemble",
         )

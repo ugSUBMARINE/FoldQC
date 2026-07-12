@@ -60,7 +60,7 @@ def build_members(
     obj_prefix = first_obj.rsplit("_", 1)[0]
     group_name = group_name or default_group_name(pred_files)
     loaded = load_as_objects(
-        pred_files.structure_files,
+        [(m.rank, m.structure_path) for m in pred_files.models],
         obj_prefix=obj_prefix,
         group_name=group_name,
     )
@@ -177,8 +177,8 @@ def load_as_states(
     Parameters
     ----------
     model_paths:
-        List of ``(rank, path)`` pairs from
-        :attr:`loader.PredictionFiles.structure_files`.
+        List of ``(rank, path)`` pairs, e.g. from
+        ``[(m.rank, m.structure_path) for m in pred_files.models]``.
     obj_name:
         Target PyMOL object name.
 

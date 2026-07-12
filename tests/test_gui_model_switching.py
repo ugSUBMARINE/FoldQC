@@ -251,17 +251,28 @@ SETTINGS_KEY_TARGET = session.SETTINGS_KEY_TARGET
 
 class _PredictionFiles:
     name = "target"
-    structure_files = [
-        (0, Path("/tmp/target_model_0.cif")),
-        (1, Path("/tmp/target_model_1.cif")),
+    models = [
+        types.SimpleNamespace(
+            rank=0,
+            object_name="target_model_0",
+            structure_path=Path("/tmp/target_model_0.cif"),
+            display_label="model_0",
+        ),
+        types.SimpleNamespace(
+            rank=1,
+            object_name="target_model_1",
+            structure_path=Path("/tmp/target_model_1.cif"),
+            display_label="model_1",
+        ),
     ]
 
     def structure_path(self, rank: int) -> Path:
-        return dict(self.structure_files)[rank]
+        return Path(f"/tmp/target_model_{rank}.cif")
 
 
 class _SessionPredictionFiles:
     def __init__(self, root: Path, ranks=(0, 1)) -> None:
+        self._root = root
         self.name = "target"
         self.models = [
             types.SimpleNamespace(
@@ -271,9 +282,6 @@ class _SessionPredictionFiles:
             )
             for rank in ranks
         ]
-        self.structure_files = [
-            (rank, root / f"target_model_{rank}.cif") for rank in ranks
-        ]
         self.has_pae = False
         self.has_pde = False
         self.has_contact_probs = False
@@ -282,7 +290,7 @@ class _SessionPredictionFiles:
         self.supports_ensemble = len(ranks) > 1
 
     def structure_path(self, rank: int) -> Path:
-        return dict(self.structure_files)[rank]
+        return self._root / f"target_model_{rank}.cif"
 
     def model(self, rank: int):
         return next(model for model in self.models if model.rank == rank)

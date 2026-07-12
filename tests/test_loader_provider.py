@@ -114,7 +114,7 @@ class LoaderProviderTests(unittest.TestCase):
             data = load_prediction_data(files)
 
         self.assertEqual(files.provider, "boltz")
-        self.assertEqual(files.structure_files[0][0], 0)
+        self.assertEqual(files.models[0].rank, 0)
         self.assertTrue(files.has_plddt)
         np.testing.assert_allclose(data.plddt, np.array([0.7, 0.6]))
 

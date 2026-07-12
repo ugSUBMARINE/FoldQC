@@ -697,7 +697,7 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
 
     def _ensure_model_object(self, rank: int, *, paint: bool = True) -> str | None:
         """Load or enable the PyMOL object for *rank*, then select it."""
-        if self._pred_files is None or not self._pred_files.structure_files:
+        if self._pred_files is None or not self._pred_files.models:
             return None
         try:
             from pymol import cmd
