@@ -131,7 +131,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         else:
             from matplotlib import cm
 
-            cmap = cm.get_cmap(args.cmap)
+            cmap = cm.get_cmap(args.cmap)  # type: ignore[attr-defined]
     except (KeyError, ValueError) as exc:
         parser.exit(2, f"error: unknown Matplotlib colormap {args.cmap!r}: {exc}\n")
 

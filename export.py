@@ -11,10 +11,15 @@ from __future__ import annotations
 import csv
 from collections.abc import Iterable
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 
 from . import metrics
+
+if TYPE_CHECKING:
+    from .loader import PredictionData
+    from .token_map import TokenInfo
 
 SCHEMA_VERSION = "1"
 
@@ -86,8 +91,8 @@ def model_label_for_rank(pred_files, rank: int, *, fallback: str = "") -> str:
 def build_token_rows(
     *,
     pred_files,
-    data,
-    token_map,
+    data: PredictionData,
+    token_map: list[TokenInfo],
     values,
     metric_key: str,
     metric_label: str | None = None,

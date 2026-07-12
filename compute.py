@@ -9,10 +9,15 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import numpy as np
 
 from . import properties as P
+
+if TYPE_CHECKING:
+    from .loader import PredictionData
+    from .token_map import TokenInfo
 
 
 class MetricComputationError(Exception):
@@ -128,7 +133,7 @@ _DISPATCH: dict[str, _Dispatch] = {
 }
 
 
-def plddt_values_for(data) -> tuple[np.ndarray | None, str]:
+def plddt_values_for(data: PredictionData | None) -> tuple[np.ndarray | None, str]:
     """Return preferred pLDDT values and a short source label."""
     if data is None:
         return None, ""
@@ -152,8 +157,8 @@ def pae_domain_method(key: str) -> str:
 
 def compute_metric(
     key: str,
-    data,
-    token_map,
+    data: PredictionData,
+    token_map: list[TokenInfo],
     *,
     ref_indices: list[int] | None = None,
     contact_indices: list[int] | None = None,

@@ -11,7 +11,12 @@ metric is undefined (e.g. no predicted contact within the cutoff distance).
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import numpy as np
+
+if TYPE_CHECKING:
+    from .token_map import TokenInfo
 
 # ---------------------------------------------------------------------------
 # pLDDT
@@ -49,7 +54,7 @@ def pae_col_mean(pae: np.ndarray) -> np.ndarray:
 
 
 def _chain_index_groups(
-    matrix: np.ndarray, token_map
+    matrix: np.ndarray, token_map: list[TokenInfo]
 ) -> tuple[np.ndarray, dict[str, list[int]]]:
     """Validate a token matrix and return token indices grouped by chain."""
     arr = np.asarray(matrix, dtype=np.float32)
@@ -72,7 +77,7 @@ def _chain_index_groups(
 
 def pae_chain_summary(
     pae: np.ndarray,
-    token_map,
+    token_map: list[TokenInfo],
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Return per-token PAE row/column means within and outside each chain.
 
@@ -347,7 +352,7 @@ def pde_mean(pde: np.ndarray) -> np.ndarray:
 
 def pde_mean_within_chain(
     pde: np.ndarray,
-    token_map,  # list[TokenInfo]
+    token_map: list[TokenInfo],
 ) -> np.ndarray:
     """Mean PDE for each token against tokens from the same chain.
 
@@ -375,7 +380,7 @@ def pde_mean_within_chain(
 
 def pde_chain_summary(
     pde: np.ndarray,
-    token_map,
+    token_map: list[TokenInfo],
 ) -> tuple[np.ndarray, np.ndarray]:
     """Return per-token PDE means against same-chain and other-chain tokens."""
     arr, chain_to_indices = _chain_index_groups(pde, token_map)
@@ -527,7 +532,7 @@ def contact_probability_to_selection(
 # ---------------------------------------------------------------------------
 
 
-def _chain_order_from_token_map(token_map) -> list[str]:
+def _chain_order_from_token_map(token_map: list[TokenInfo]) -> list[str]:
     """Return chain IDs in token-map order, collapsing contiguous runs."""
     labels: list[str] = []
     last_chain: str | None = None
@@ -540,7 +545,7 @@ def _chain_order_from_token_map(token_map) -> list[str]:
 
 
 def pair_chains_iptm_matrix(
-    confidence: dict, token_map
+    confidence: dict, token_map: list[TokenInfo]
 ) -> tuple[np.ndarray, list[str]]:
     """Return the pairwise chain ipTM matrix and chain labels.
 
@@ -574,7 +579,7 @@ def pair_chains_iptm_matrix(
         for j in range(len(labels)):
             value = row.get(str(j), row.get(j, np.nan))
             try:
-                matrix[i, j] = float(value)
+                matrix[i, j] = float(value)  # type: ignore[arg-type]  # None caught below
             except (TypeError, ValueError):
                 matrix[i, j] = np.nan
     _fill_pair_iptm_diagonal_from_chain_ptm(matrix, confidence)
@@ -585,6 +590,7 @@ def _fill_pair_iptm_diagonal_from_chain_ptm(
     matrix: np.ndarray, confidence: dict
 ) -> None:
     scores = confidence.get("chains_ptm", confidence.get("chain_ptm", {}))
+    chain_scores: dict  # keys may be int (from list branch) or str (from dict branch)
     if isinstance(scores, list):
         chain_scores = {idx: value for idx, value in enumerate(scores)}
     elif isinstance(scores, dict):
@@ -593,7 +599,9 @@ def _fill_pair_iptm_diagonal_from_chain_ptm(
         return
 
     for idx in range(matrix.shape[0]):
-        value = chain_scores.get(str(idx), chain_scores.get(idx))
+        value = chain_scores.get(str(idx))
+        if value is None:
+            value = chain_scores.get(idx)
         if value is None:
             continue
         try:
@@ -606,7 +614,7 @@ def _fill_pair_iptm_diagonal_from_chain_ptm(
 
 def chain_iptm_values(
     confidence: dict,
-    token_map,  # list[TokenInfo]
+    token_map: list[TokenInfo],
     ref_chain_key: str | None = None,
 ) -> np.ndarray:
     """Assign each token its chain's ipTM score.

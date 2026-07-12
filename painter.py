@@ -7,7 +7,12 @@ colouring.  All functions operate on a loaded PyMOL object via ``cmd``.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import numpy as np
+
+if TYPE_CHECKING:
+    from .token_map import TokenInfo
 
 from .palettes import (
     BUILTIN_PALETTE_KEYS,
@@ -41,7 +46,7 @@ def _resolve_color_range(
     return vmin, vmax
 
 
-def token_bfactor_keys(token_map) -> list[tuple[str, str, str]]:
+def token_bfactor_keys(token_map: list[TokenInfo]) -> list[tuple[str, str, str]]:
     """Return stable atom-property keys for a token map.
 
     Polymer residue tokens are keyed by ``(chain, resi, "")`` so every atom in
@@ -59,7 +64,7 @@ def token_bfactor_keys(token_map) -> list[tuple[str, str, str]]:
 
 def _write_bfactors_bulk(
     obj_name: str,
-    token_map,
+    token_map: list[TokenInfo],
     values: np.ndarray,
     *,
     scale: float = 1.0,
@@ -88,7 +93,7 @@ def _write_bfactors_bulk(
 
 def paint_property(
     obj_name: str,
-    token_map,  # list[TokenInfo]
+    token_map: list[TokenInfo],
     values: np.ndarray,
     palette: str = "blue_white_red",
     reverse_palette: bool = False,
@@ -138,7 +143,7 @@ def paint_property(
 
 def paint_property_bulk(
     obj_name: str,
-    token_map,
+    token_map: list[TokenInfo],
     values: np.ndarray,
     palette: str = "blue_white_red",
     reverse_palette: bool = False,
@@ -176,7 +181,7 @@ def category_rgb(label: int) -> tuple[float, float, float]:
 
 def paint_categorical_labels_bulk(
     obj_name: str,
-    token_map,
+    token_map: list[TokenInfo],
     values: np.ndarray,
     nan_color: str = NAN_COLOR_DEFAULT,
     rebuild: bool = True,
@@ -207,7 +212,7 @@ def delete_colorbar(name: str = COLORBAR_OBJECT_NAME) -> None:
     cmd.delete(name)
 
 
-def _split_palette_names(palette: str) -> list[str]:
+def _split_palette_names(palette: str) -> list[str | list[float]]:
     """Split a PyMOL spectrum palette into colour names."""
     if " " in palette:
         return [part for part in palette.split() if part]
@@ -261,7 +266,7 @@ def reset_bfactors(obj_name: str, value: float = 100.0) -> None:
 
 def get_representative_coords(
     obj_name: str,
-    token_map,  # list[TokenInfo]
+    token_map: list[TokenInfo],
 ) -> np.ndarray:
     """Return representative-atom coordinates for each token, shape ``(N, 3)``.
 
@@ -314,7 +319,7 @@ def get_representative_coords(
 def paint_plddt_class_coloring(
     obj_name: str,
     values: np.ndarray | None = None,
-    token_map=None,
+    token_map: list[TokenInfo] | None = None,
     rebuild: bool = True,
 ) -> None:
     """Apply the 4-class AlphaFold pLDDT colour scheme to *obj_name*.

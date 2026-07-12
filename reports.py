@@ -7,9 +7,14 @@ loaded data and computed arrays, then writes the returned text to widgets.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import numpy as np
 
 from . import metrics
+
+if TYPE_CHECKING:
+    from .token_map import TokenInfo
 
 
 def provider_display_label(provider: str) -> str:
@@ -192,7 +197,9 @@ def format_plddt_class_statistics(values: np.ndarray) -> list[str]:
     return lines
 
 
-def format_chain_statistics(values: np.ndarray, token_map) -> list[str]:
+def format_chain_statistics(
+    values: np.ndarray, token_map: list[TokenInfo] | None
+) -> list[str]:
     """Return per-chain numeric summaries for a token-indexed array."""
     if token_map is None:
         return []

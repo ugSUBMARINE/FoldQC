@@ -14,9 +14,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from .token_map import TokenInfo
 
 
 @dataclass
@@ -26,7 +29,7 @@ class EnsembleMember:
     rank: int
     obj_name: str
     data: Any
-    token_map: list[Any]
+    token_map: list[TokenInfo]
 
 
 @dataclass(frozen=True)
@@ -233,7 +236,7 @@ def load_as_objects(
     return result
 
 
-def clone_token_map_for_object(token_map, obj_name: str) -> list[Any]:
+def clone_token_map_for_object(token_map: list[TokenInfo], obj_name: str) -> list[TokenInfo]:
     """Reuse a token topology with PyMOL selections targeting *obj_name*."""
     cloned = []
     for tok in token_map:
@@ -246,7 +249,7 @@ def clone_token_map_for_object(token_map, obj_name: str) -> list[Any]:
 
 
 def select_alignment_core(
-    token_map,
+    token_map: list[TokenInfo],
     plddt: np.ndarray,
     threshold: float = 0.8,
     min_tokens: int = 3,
@@ -377,7 +380,7 @@ def compute_aligned_per_token_rmsd(
 
 def get_token_coords(
     obj_name: str,
-    token_map,  # list[TokenInfo]
+    token_map: list[TokenInfo],
 ) -> np.ndarray:
     """Return representative-atom coordinates for a loaded object.
 
