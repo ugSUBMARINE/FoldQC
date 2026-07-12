@@ -232,7 +232,7 @@ class ExportController:
             reference_selection = self._ref_edit.text().strip()
 
         if key in metrics.CONTACT_FILTERED_METRICS:
-            cutoff = self._get_contact_cutoff()
+            cutoff = self._get_cutoff_threshold()
             if cutoff is None:
                 return None
             contact_indices = self._binding_site_token_indices(

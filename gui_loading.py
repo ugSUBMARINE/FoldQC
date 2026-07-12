@@ -174,17 +174,6 @@ class GuiLoadingController:
                 pass  # coloring failure must not abort model selection
         return obj_name
 
-    def _auto_select_matching_object(self) -> None:
-        """Select the first combo-box entry whose name matches the prediction."""
-        if self._pred_files is None:
-            return
-        name = self._pred_files.name
-        for i in range(self._obj_combo.count()):
-            obj = self._obj_combo.itemText(i)
-            if obj == name or obj.startswith(name + "_model_"):
-                self._obj_combo.setCurrentIndex(i)
-                return
-
     def _on_model_changed(self) -> None:
         """Load data for the newly selected rank and update the summary."""
         if self._pred_files is None:
@@ -319,7 +308,9 @@ class GuiLoadingController:
 
         model = self._prop_combo.model()
         for row, prop in enumerate(metrics.PROPERTIES):
-            combo_row = self._property_combo_row(prop["key"], row)
+            combo_row = self._property_combo_row(prop["key"])
+            if combo_row is None:
+                continue
             available = True
             if prop["needs_pae"] and not has_pae:
                 available = False
@@ -366,8 +357,8 @@ class GuiLoadingController:
             if item is not None and item.flags() & ItemIsEnabled:
                 return
         for prop in metrics.PROPERTIES:
-            row = self._property_combo_row(prop["key"], -1)
-            if row < 0:
+            row = self._property_combo_row(prop["key"])
+            if row is None:
                 continue
             item = model.item(row)
             if item is not None and item.flags() & ItemIsEnabled:
@@ -381,12 +372,9 @@ class GuiLoadingController:
         self._token_map_structure_path = None  # type: ignore[attr-defined]
         self._accepted_token_overlap_warnings = set()
 
-    def _property_combo_row(self, key: str, fallback: int = -1) -> int:
-        """Return the combo row for a property key, allowing older tests to omit maps."""
-        rows = getattr(self, "_prop_combo_rows", None)
-        if rows is None:
-            return fallback
-        return rows.get(key, fallback)
+    def _property_combo_row(self, key: str) -> int | None:
+        """Return the combo row registered for a metric key."""
+        return self._prop_combo_rows.get(key)
 
     def _current_target_kind(self) -> str:
         """Return a lightweight target kind without resolving token maps or loading data."""

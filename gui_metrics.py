@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import importlib.util
-import sys
 
 import numpy as np
 
@@ -11,44 +10,14 @@ from . import compute, metrics
 from .compat import MessageBoxStandardButton, QtWidgets
 from .gui_state import MetricContext
 from .mol_viewer import (
-    compare_token_map_to_object as _compare_token_map_to_object,
-)
-from .mol_viewer import (
+    compare_token_map_to_object,
     get_viewer_name,
-)
-from .mol_viewer import (
-    selection_to_token_indices as _selection_to_token_indices,
-)
-from .mol_viewer import (
-    tokens_within_distance as _tokens_within_distance,
+    selection_to_token_indices,
+    tokens_within_distance,
 )
 
 APP_TITLE = "FoldQC"
 VIEWER_NAME = get_viewer_name()
-
-
-def _viewer_call(name: str, fallback, *args, **kwargs):
-    gui_module = sys.modules.get("FoldQC.gui")
-    func = getattr(gui_module, name, fallback) if gui_module is not None else fallback
-    return func(*args, **kwargs)
-
-
-def compare_token_map_to_object(*args, **kwargs):
-    return _viewer_call(
-        "compare_token_map_to_object", _compare_token_map_to_object, *args, **kwargs
-    )
-
-
-def selection_to_token_indices(*args, **kwargs):
-    return _viewer_call(
-        "selection_to_token_indices", _selection_to_token_indices, *args, **kwargs
-    )
-
-
-def tokens_within_distance(*args, **kwargs):
-    return _viewer_call(
-        "tokens_within_distance", _tokens_within_distance, *args, **kwargs
-    )
 
 
 class MetricController:
@@ -76,16 +45,6 @@ class MetricController:
             self._token_map = build_token_map(self._pred_data.structure_path)
             self._token_map_obj = obj_name  # type: ignore[attr-defined]
             self._token_map_structure_path = self._pred_data.structure_path
-
-    def _compute_property(self, key: str, ref_sel: str | None):
-        """Dispatch to properties.py functions. Returns per-token array or None."""
-        return self._compute_property_for(
-            key,
-            ref_sel,
-            self._pred_data,
-            self._token_map,
-            self._obj_combo.currentText(),
-        )
 
     def _compute_property_for(
         self,
@@ -159,7 +118,7 @@ class MetricController:
                 return None
 
         if key in metrics.CONTACT_FILTERED_METRICS:
-            cutoff = self._get_contact_cutoff()
+            cutoff = self._get_cutoff_threshold()
             if cutoff is None:
                 return None
             contact_indices = self._binding_site_token_indices(

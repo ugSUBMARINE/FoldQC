@@ -1,4 +1,4 @@
-"""Typed state and workflow values shared by FoldQC GUI coordinators.
+"""Typed state and context values shared by FoldQC GUI coordinators.
 
 This module is deliberately independent of Qt and PyMOL.  The dialog owns one
 ``GuiState`` instance while GUI-side coordinators operate on the same state.
@@ -35,14 +35,6 @@ class MetricContext:
     contact_indices: tuple[int, ...] = ()
     cutoff_angstrom: float | None = None
 
-    def compute_kwargs(self) -> dict[str, object]:
-        """Return mutable collections expected by :func:`compute_metric`."""
-        return {
-            "ref_indices": list(self.reference_indices),
-            "contact_indices": list(self.contact_indices),
-            "cutoff": self.cutoff_angstrom,
-        }
-
 
 @dataclass
 class GuiState:
@@ -67,44 +59,16 @@ class GuiState:
     )
 
 
-@dataclass(frozen=True)
-class WorkflowMessage:
-    """Expected user-facing outcome returned without a Qt dependency."""
-
-    severity: Literal["information", "warning", "critical"]
-    text: str
-    title: str = "FoldQC"
-
-
-class GuiWorkflowError(Exception):
-    """Expected workflow failure for presentation by the Qt adapter."""
-
-    def __init__(self, message: WorkflowMessage) -> None:
-        super().__init__(message.text)
-        self.message = message
-
-
 class GuiStateBacked:
-    """Compatibility properties exposing the shared state to GUI mixins.
-
-    Lazy creation keeps focused tests that instantiate the dialog with
-    ``__new__`` working while they migrate to explicit ``GuiState`` fixtures.
-    """
-
-    def _get_gui_state(self) -> GuiState:
-        state = getattr(self, "_state", None)
-        if state is None:
-            state = GuiState()
-            self._state = state
-        return state
+    """Properties exposing the dialog's shared state to GUI coordinators."""
 
 
 def _state_property(name: str):
     def getter(self):
-        return getattr(self._get_gui_state(), name)
+        return getattr(self._state, name)
 
     def setter(self, value) -> None:
-        setattr(self._get_gui_state(), name, value)
+        setattr(self._state, name, value)
 
     return property(getter, setter)
 

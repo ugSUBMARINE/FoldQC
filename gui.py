@@ -8,7 +8,6 @@ All Qt imports go through :mod:`compat` to handle Qt5/Qt6 differences.
 
 from __future__ import annotations
 
-import importlib.util
 from pathlib import Path
 
 from . import metrics, session
@@ -26,18 +25,7 @@ from .gui_loading import GuiLoadingController
 from .gui_metrics import MetricController
 from .gui_plots import PlotController
 from .gui_state import GuiState, GuiStateBacked, ResolvedTarget
-from .mol_viewer import (
-    delete_colorbar,
-    get_selection_examples,
-    get_viewer_name,
-    paint_categorical_labels_bulk,
-    paint_plddt_class_coloring,
-    paint_property,
-    paint_property_bulk,
-    selection_to_token_indices,
-    show_colorbar,
-    tokens_within_distance,
-)
+from .mol_viewer import get_selection_examples, get_viewer_name
 
 APP_TITLE = "FoldQC"
 VIEWER_NAME = get_viewer_name()
@@ -48,24 +36,6 @@ PREDICTION_FILE_FILTER = (
 
 
 _PlotTarget = ResolvedTarget
-
-__all__ = [
-    "APP_TITLE",
-    "PREDICTION_FILE_FILTER",
-    "FoldQCPluginDialog",
-    "_PlotTarget",
-    # Temporary private patch seams retained for the legacy adapter tests.
-    "delete_colorbar",
-    "importlib",
-    "paint_categorical_labels_bulk",
-    "paint_plddt_class_coloring",
-    "paint_property",
-    "paint_property_bulk",
-    "selection_to_token_indices",
-    "show_colorbar",
-    "tokens_within_distance",
-]
-
 
 # ---------------------------------------------------------------------------
 # Dialog
@@ -349,19 +319,10 @@ class FoldQCPluginDialog(
                 self._obj_combo.setCurrentIndex(i)
                 return
 
-    def _combo_item_data(self, combo, row: int):
-        """Return combo item data, tolerating minimal fake Qt combos in tests."""
-        if hasattr(combo, "itemData"):
-            return combo.itemData(row)
-        data = getattr(combo, "_data", None)
-        if data is not None and 0 <= row < len(data):
-            return data[row]
-        return None
-
     def _select_combo_data(self, combo, value) -> bool:
         """Select the first combo row whose item data matches *value*."""
         for i in range(combo.count()):
-            if self._combo_item_data(combo, i) == value:
+            if combo.itemData(i) == value:
                 combo.setCurrentIndex(i)
                 return True
         return False
@@ -380,14 +341,14 @@ class FoldQCPluginDialog(
     def _select_property(self, key: str) -> None:
         """Select a property combo item by internal key."""
         for i in range(self._prop_combo.count()):
-            if self._combo_item_data(self._prop_combo, i) == key:
+            if self._prop_combo.itemData(i) == key:
                 self._prop_combo.setCurrentIndex(i)
                 return
 
     def _select_property_if_available(self, key: str) -> bool:
         """Select a property only when the combo row exists and is enabled."""
-        row = self._property_combo_row(key, -1)
-        if row < 0:
+        row = self._property_combo_row(key)
+        if row is None:
             return False
         item = self._prop_combo.model().item(row)
         if item is not None and not (item.flags() & ItemIsEnabled):

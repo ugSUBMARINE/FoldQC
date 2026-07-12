@@ -2,32 +2,15 @@
 
 from __future__ import annotations
 
-import sys
-
 import numpy as np
 
 from . import gui_rules, metrics, plot_data
 from .compat import QtWidgets
 from .gui_state import ResolvedTarget as _PlotTarget
-from .mol_viewer import (
-    get_viewer_name,
-)
-from .mol_viewer import (
-    selection_to_token_indices as _selection_to_token_indices,
-)
+from .mol_viewer import get_viewer_name, selection_to_token_indices
 
 APP_TITLE = "FoldQC"
 VIEWER_NAME = get_viewer_name()
-
-
-def selection_to_token_indices(*args, **kwargs):
-    gui_module = sys.modules.get("FoldQC.gui")
-    func = (
-        getattr(gui_module, "selection_to_token_indices", _selection_to_token_indices)
-        if gui_module is not None
-        else _selection_to_token_indices
-    )
-    return func(*args, **kwargs)
 
 
 class PlotController:
@@ -845,7 +828,7 @@ class PlotController:
                 f"Enter a ligand or other {VIEWER_NAME} selection in the Reference field.",
             )
             return
-        cutoff = self._get_contact_cutoff()
+        cutoff = self._get_cutoff_threshold()
         if cutoff is None:
             return
         if not self._ensemble_members:
@@ -977,10 +960,6 @@ class PlotController:
         except Exception as exc:
             QtWidgets.QMessageBox.critical(self, f"{APP_TITLE} - error", str(exc))
 
-    def _show_heatmap(self) -> None:
-        """Compatibility wrapper for older callers."""
-        self._show_matrix_plot()
-
     def _show_binding_site_fingerprint(self) -> None:
         """Open a binding-site confidence fingerprint for the current target."""
         ref_sel = self._ref_edit.text().strip()
@@ -1002,7 +981,7 @@ class PlotController:
         )
         if ref_indices is None:
             return
-        cutoff = self._get_contact_cutoff()
+        cutoff = self._get_cutoff_threshold()
         if cutoff is None:
             return
 

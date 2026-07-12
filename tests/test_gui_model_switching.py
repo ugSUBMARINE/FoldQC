@@ -235,6 +235,14 @@ from FoldQC.gui import (  # noqa: E402
     FoldQCPluginDialog,
     _PlotTarget,
 )
+from FoldQC.gui_state import GuiState  # noqa: E402
+
+
+def _new_dialog() -> FoldQCPluginDialog:
+    dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+    dialog._state = GuiState()
+    return dialog
+
 
 SETTINGS_KEY_CUTOFF = session.SETTINGS_KEY_CUTOFF
 SETTINGS_KEY_GEOMETRY = session.SETTINGS_KEY_GEOMETRY
@@ -526,6 +534,13 @@ class _Combo:
         self._current = row
 
 
+def _set_metric_combo(dialog, flags: int) -> None:
+    dialog._prop_combo = _Combo(len(metrics.PROPERTIES), flags)
+    dialog._prop_combo_rows = {
+        prop["key"]: row for row, prop in enumerate(metrics.PROPERTIES)
+    }
+
+
 def _token(
     idx: int,
     *,
@@ -562,7 +577,7 @@ def _atom(
 
 def _dialog_with(cmd: _Cmd):
     _PYMOL.cmd = cmd
-    dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+    dialog = _new_dialog()
     dialog._pred_files = _PredictionFiles()
     dialog.refreshed = 0
     dialog.selected: list[str] = []
@@ -586,12 +601,12 @@ class GuiModelSwitchingTests(unittest.TestCase):
         _PYMOL.Qt.QtCore.QSettings._store.clear()
 
     def _settings(self):
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         return dialog._settings()
 
     def _session_dialog(self):
         enabled = _PYMOL.Qt.QtCore.Qt.ItemFlag.ItemIsEnabled
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         dialog._pred_files = None
         dialog._pred_data = None
         dialog._token_map = None
@@ -776,7 +791,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         self.assertEqual(dialog._vmax_edit.text(), "0.9")
 
     def test_browse_file_filter_includes_supported_archives(self) -> None:
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         dialog._dir_edit = _LineEdit("/tmp")
         dialog._load_prediction_dir = lambda: None
         dialog._raise_after_native_dialog = lambda: (_ for _ in ()).throw(
@@ -1158,7 +1173,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
 
     def test_property_combo_uses_group_headers_and_tier_labels(self) -> None:
         enabled = _PYMOL.Qt.QtCore.Qt.ItemFlag.ItemIsEnabled
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         dialog._prop_combo = _Combo(0, enabled)
 
         dialog._populate_property_combo()
@@ -1210,7 +1225,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         )
 
     def test_show_selected_plot_dispatches_selected_handler(self) -> None:
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         called = []
         dialog._prop_combo = types.SimpleNamespace(currentData=lambda: "plddt")
         dialog._ref_edit = _LineEdit("resname LIG")
@@ -1230,7 +1245,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
     def test_show_selected_plot_rejects_domain_label_line_and_ensemble_plots(
         self,
     ) -> None:
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         msg = _PYMOL.Qt.QtWidgets.QMessageBox
         msg.infos.clear()
         dialog._prop_combo = types.SimpleNamespace(
@@ -1255,7 +1270,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
 
     def test_plot_menu_actions_update_from_reference_and_metric(self) -> None:
         action_cls = _PYMOL.Qt.QtGui.QAction
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         dialog._plot_actions = {
             key: action_cls(label) for label, key in metrics.PLOT_TYPES
         }
@@ -1293,7 +1308,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
 
     def test_plot_menu_contains_all_current_plot_actions(self) -> None:
         action_cls = _PYMOL.Qt.QtGui.QAction
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         dialog._plot_actions = {
             key: action_cls(label) for label, key in metrics.PLOT_TYPES
         }
@@ -1303,7 +1318,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         )
 
     def _context_dialog(self, metric: str, *, ref: str = "", cutoff: str = "5.0"):
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         dialog._prop_combo = types.SimpleNamespace(currentData=lambda: metric)
         dialog._obj_combo = types.SimpleNamespace(currentText=lambda: "target_model_0")
         dialog._ref_label = _Label("Reference:")
@@ -1318,7 +1333,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         return dialog
 
     def test_help_guide_dialog_contains_common_recipes(self) -> None:
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         dialog._guide_dialog = None
 
         dialog._show_guide()
@@ -1343,7 +1358,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         self.assertTrue(guide.activated)
 
     def test_preview_widgets_reserve_five_vertically_centered_lines(self) -> None:
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         caption = _Label("Preview:")
         preview = _Label("")
         flags = _PYMOL.Qt.QtCore.Qt.AlignmentFlag
@@ -1534,7 +1549,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         self.assertEqual(dialog.painted, [])
 
     def test_ensemble_group_is_ordered_before_model_targets(self) -> None:
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         dialog._ensemble_group_name = "target_ensemble"
         dialog._ensemble_members = [
             types.SimpleNamespace(rank=0, obj_name="target_model_0"),
@@ -1564,7 +1579,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         )
 
     def test_target_names_are_sorted_without_active_ensemble(self) -> None:
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         dialog._ensemble_group_name = None
         dialog._ensemble_members = None
 
@@ -1573,7 +1588,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         self.assertEqual(ordered, ["a_obj", "B_obj", "z_obj"])
 
     def test_confidence_summary_update_writes_text_box(self) -> None:
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         dialog._conf_browser = _TextBox()
         dialog._pred_data = types.SimpleNamespace(
             provider="boltz",
@@ -1608,7 +1623,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         self.assertIn("affinity_probability", text)
 
     def test_continuous_plddt_warns_when_missing(self) -> None:
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         msg = _PYMOL.Qt.QtWidgets.QMessageBox
         msg.warnings.clear()
         self.assertIsNone(
@@ -1624,7 +1639,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         self.assertIn("pLDDT data are not available", msg.warnings[0][1])
 
     def test_plddt_class_coloring_uses_selected_fallback_source(self) -> None:
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         structure_values = np.array([0.9, 0.8], dtype=np.float32)
         provider_values = np.array([0.1, 0.2], dtype=np.float32)
         token_map = [_token(0), _token(1)]
@@ -1641,8 +1656,8 @@ class GuiModelSwitchingTests(unittest.TestCase):
         dialog._update_statistics_for_single = lambda *_args, **_kwargs: None
 
         with (
-            mock.patch("FoldQC.gui.paint_plddt_class_coloring") as paint,
-            mock.patch("FoldQC.gui.delete_colorbar"),
+            mock.patch("FoldQC.gui_coloring.paint_plddt_class_coloring") as paint,
+            mock.patch("FoldQC.gui_coloring.delete_colorbar"),
         ):
             dialog._apply_plddt_class_coloring("plddt_class", "target_model_0")
 
@@ -1655,15 +1670,15 @@ class GuiModelSwitchingTests(unittest.TestCase):
             plddt=provider_values,
         )
         with (
-            mock.patch("FoldQC.gui.paint_plddt_class_coloring") as paint,
-            mock.patch("FoldQC.gui.delete_colorbar"),
+            mock.patch("FoldQC.gui_coloring.paint_plddt_class_coloring") as paint,
+            mock.patch("FoldQC.gui_coloring.delete_colorbar"),
         ):
             dialog._apply_plddt_class_coloring("plddt_class", "target_model_0")
 
         np.testing.assert_array_equal(paint.call_args.kwargs["values"], provider_values)
 
     def test_single_statistics_update_writes_text_box(self) -> None:
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         dialog._stats_browser = _TextBox()
 
         dialog._update_statistics_for_single(
@@ -1677,7 +1692,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         self.assertIn("mean", dialog._stats_browser.text)
 
     def test_failed_property_compute_preserves_previous_statistics(self) -> None:
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         dialog._stats_browser = _TextBox("Previous statistics")
         dialog._ensemble_members = None
         dialog._pred_data = object()
@@ -1685,8 +1700,9 @@ class GuiModelSwitchingTests(unittest.TestCase):
         dialog._get_obj_name = lambda: "target_model_0"
         dialog._prop_combo = types.SimpleNamespace(currentData=lambda: "plddt")
         dialog._palette_combo = types.SimpleNamespace(
-            currentText=lambda: "blue_white_red"
+            currentData=lambda: "blue_white_red"
         )
+        dialog._palette_reverse_chk = types.SimpleNamespace(isChecked=lambda: False)
         dialog._get_vmin_vmax = lambda: (None, None)
         dialog._ref_edit = types.SimpleNamespace(text=lambda: "")
         dialog._build_token_map_if_needed = lambda _obj_name: None
@@ -1697,7 +1713,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         self.assertEqual(dialog._stats_browser.text, "Previous statistics")
 
     def _coloring_dialog_for_overlap(self, obj_name: str = "other"):
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         dialog._ensemble_members = None
         dialog._ensemble_group_name = None
         dialog._pred_data = types.SimpleNamespace(
@@ -1729,8 +1745,8 @@ class GuiModelSwitchingTests(unittest.TestCase):
         dialog = self._coloring_dialog_for_overlap()
 
         with (
-            mock.patch("FoldQC.gui.paint_property") as paint,
-            mock.patch("FoldQC.gui.show_colorbar"),
+            mock.patch("FoldQC.gui_coloring.paint_property") as paint,
+            mock.patch("FoldQC.gui_coloring.show_colorbar"),
         ):
             dialog._apply_coloring()
 
@@ -1749,8 +1765,8 @@ class GuiModelSwitchingTests(unittest.TestCase):
         dialog = self._coloring_dialog_for_overlap()
 
         with (
-            mock.patch("FoldQC.gui.paint_property") as paint,
-            mock.patch("FoldQC.gui.show_colorbar"),
+            mock.patch("FoldQC.gui_coloring.paint_property") as paint,
+            mock.patch("FoldQC.gui_coloring.show_colorbar"),
         ):
             paint.return_value = (0.8, 0.9)
             dialog._apply_coloring()
@@ -1769,8 +1785,8 @@ class GuiModelSwitchingTests(unittest.TestCase):
         dialog = self._coloring_dialog_for_overlap("partial")
 
         with (
-            mock.patch("FoldQC.gui.paint_property") as paint,
-            mock.patch("FoldQC.gui.show_colorbar"),
+            mock.patch("FoldQC.gui_coloring.paint_property") as paint,
+            mock.patch("FoldQC.gui_coloring.show_colorbar"),
         ):
             paint.return_value = (0.8, 0.9)
             dialog._apply_coloring()
@@ -1786,7 +1802,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         _PYMOL.cmd = cmd
         msg = _PYMOL.Qt.QtWidgets.QMessageBox
         msg.question_response = msg.Cancel
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         dialog._pred_data = types.SimpleNamespace(
             structure_path=Path("/tmp/target_model_0.cif"),
             structure_plddt=np.array([0.8, 0.9], dtype=np.float32),
@@ -1798,8 +1814,8 @@ class GuiModelSwitchingTests(unittest.TestCase):
         dialog._update_statistics_for_single = lambda *_args, **_kwargs: None
 
         with (
-            mock.patch("FoldQC.gui.paint_plddt_class_coloring") as paint,
-            mock.patch("FoldQC.gui.delete_colorbar"),
+            mock.patch("FoldQC.gui_coloring.paint_plddt_class_coloring") as paint,
+            mock.patch("FoldQC.gui_coloring.delete_colorbar"),
         ):
             dialog._apply_plddt_class_coloring("plddt_class", "other")
 
@@ -1807,7 +1823,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         paint.assert_not_called()
 
     def test_selected_palette_uses_combo_data_and_reverse_checkbox(self) -> None:
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         dialog._palette_combo = types.SimpleNamespace(
             currentData=lambda: "green_white",
             currentText=lambda: "Green-white",
@@ -1816,18 +1832,9 @@ class GuiModelSwitchingTests(unittest.TestCase):
 
         self.assertEqual(dialog._selected_palette(), ("green_white", True))
 
-    def test_selected_palette_falls_back_to_current_text(self) -> None:
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
-        dialog._palette_combo = types.SimpleNamespace(
-            currentData=lambda: None,
-            currentText=lambda: "blue_white_red",
-        )
-
-        self.assertEqual(dialog._selected_palette(), ("blue_white_red", False))
-
     def test_chain_iptm_is_disabled_without_confidence_data(self) -> None:
         enabled = _PYMOL.Qt.QtCore.Qt.ItemFlag.ItemIsEnabled
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         dialog._pred_files = types.SimpleNamespace(
             has_pae=False,
             has_pde=False,
@@ -1842,7 +1849,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
             confidence=None,
             summary_confidence=None,
         )
-        dialog._prop_combo = _Combo(len(metrics.PROPERTIES), enabled)
+        _set_metric_combo(dialog, enabled)
 
         dialog._update_property_availability()
 
@@ -1859,7 +1866,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
 
     def test_chain_iptm_is_enabled_with_confidence_data(self) -> None:
         enabled = _PYMOL.Qt.QtCore.Qt.ItemFlag.ItemIsEnabled
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         dialog._pred_files = types.SimpleNamespace(
             has_pae=False,
             has_pde=False,
@@ -1874,7 +1881,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
             confidence={"chains_iptm": {"0": 0.8}},
             summary_confidence=None,
         )
-        dialog._prop_combo = _Combo(len(metrics.PROPERTIES), enabled)
+        _set_metric_combo(dialog, enabled)
 
         dialog._update_property_availability()
 
@@ -1887,7 +1894,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
 
     def test_chain_iptm_is_disabled_when_confidence_lacks_chain_scores(self) -> None:
         enabled = _PYMOL.Qt.QtCore.Qt.ItemFlag.ItemIsEnabled
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         dialog._pred_files = types.SimpleNamespace(
             has_pae=False,
             has_pde=False,
@@ -1906,7 +1913,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
             },
             summary_confidence=None,
         )
-        dialog._prop_combo = _Combo(len(metrics.PROPERTIES), enabled)
+        _set_metric_combo(dialog, enabled)
 
         dialog._update_property_availability()
 
@@ -1923,7 +1930,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
 
     def test_ensemble_properties_require_loaded_ensemble(self) -> None:
         enabled = _PYMOL.Qt.QtCore.Qt.ItemFlag.ItemIsEnabled
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         dialog._pred_files = types.SimpleNamespace(
             has_pae=False,
             has_pde=False,
@@ -1939,7 +1946,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
             summary_confidence=None,
         )
         dialog._ensemble_members = None
-        dialog._prop_combo = _Combo(len(metrics.PROPERTIES), enabled)
+        _set_metric_combo(dialog, enabled)
 
         dialog._update_property_availability()
 
@@ -1952,7 +1959,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
             self.assertFalse(dialog._prop_combo.model().item(row).flags() & enabled)
 
         dialog._ensemble_members = [types.SimpleNamespace(rank=0)]
-        dialog._prop_combo = _Combo(len(metrics.PROPERTIES), enabled)
+        _set_metric_combo(dialog, enabled)
         dialog._update_property_availability()
 
         for row in ensemble_rows:
@@ -1960,7 +1967,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
 
     def test_ensemble_plddt_properties_accept_structure_plddt_only(self) -> None:
         enabled = _PYMOL.Qt.QtCore.Qt.ItemFlag.ItemIsEnabled
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         dialog._pred_files = types.SimpleNamespace(
             has_pae=False,
             has_pde=False,
@@ -1976,7 +1983,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
             summary_confidence=None,
         )
         dialog._ensemble_members = [types.SimpleNamespace(rank=0)]
-        dialog._prop_combo = _Combo(len(metrics.PROPERTIES), enabled)
+        _set_metric_combo(dialog, enabled)
 
         dialog._update_property_availability()
 
@@ -1992,7 +1999,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         self.assertIn("pae_domain_spectral", keys)
 
         enabled = _PYMOL.Qt.QtCore.Qt.ItemFlag.ItemIsEnabled
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         dialog._pred_files = types.SimpleNamespace(
             has_pae=False,
             has_pde=False,
@@ -2007,7 +2014,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
             confidence=None,
             summary_confidence=None,
         )
-        dialog._prop_combo = _Combo(len(metrics.PROPERTIES), enabled)
+        _set_metric_combo(dialog, enabled)
 
         dialog._update_property_availability()
 
@@ -2029,14 +2036,14 @@ class GuiModelSwitchingTests(unittest.TestCase):
         )
 
         dialog._pred_files.has_pae = True
-        dialog._prop_combo = _Combo(len(metrics.PROPERTIES), enabled)
+        _set_metric_combo(dialog, enabled)
         dialog._update_property_availability()
 
         self.assertTrue(dialog._prop_combo.model().item(complete_row).flags() & enabled)
         self.assertTrue(dialog._prop_combo.model().item(spectral_row).flags() & enabled)
 
     def test_ensemble_group_target_routes_apply_to_all_members(self) -> None:
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         members = [
             types.SimpleNamespace(obj_name="target_model_0"),
             types.SimpleNamespace(obj_name="target_model_1"),
@@ -2054,7 +2061,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         self.assertEqual(captured, [members])
 
     def test_ensemble_member_target_routes_apply_to_that_member_only(self) -> None:
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         members = [
             types.SimpleNamespace(obj_name="target_model_0"),
             types.SimpleNamespace(obj_name="target_model_1"),
@@ -2072,19 +2079,19 @@ class GuiModelSwitchingTests(unittest.TestCase):
         self.assertEqual(captured, [[members[1]]])
 
     def test_contact_cutoff_rejects_invalid_values(self) -> None:
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         msg = _PYMOL.Qt.QtWidgets.QMessageBox
 
         for text in ("abc", "0", "-1", "nan", "inf"):
             msg.warnings.clear()
             dialog._cutoff_edit = _LineEdit(text)
 
-            self.assertIsNone(dialog._get_contact_cutoff())
+            self.assertIsNone(dialog._get_cutoff_threshold())
             self.assertEqual(len(msg.warnings), 1)
             self.assertIn("Cutoff / threshold", msg.warnings[0][1])
 
     def test_pae_domain_complete_uses_cutoff_and_method(self) -> None:
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         dialog._cutoff_edit = _LineEdit("6.25")
         # Lambda returns False for "spectral", so any wrong method produces None.
         dialog._pae_domain_dependency_available = lambda method: (
@@ -2105,7 +2112,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         self.assertEqual(values.shape, (3,))
 
     def test_pae_domain_spectral_uses_cutoff_and_method(self) -> None:
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         dialog._cutoff_edit = _LineEdit("8.5")
         # Lambda returns False for "complete_linkage", so wrong method gives None.
         dialog._pae_domain_dependency_available = lambda method: method == "spectral"
@@ -2124,7 +2131,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         self.assertEqual(values.shape, (3,))
 
     def test_pae_domain_dependency_warning_for_missing_scipy(self) -> None:
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         dialog._cutoff_edit = _LineEdit("5.0")
         data = types.SimpleNamespace(
             pae=np.zeros((2, 2), dtype=np.float32),
@@ -2134,7 +2141,9 @@ class GuiModelSwitchingTests(unittest.TestCase):
         msg = _PYMOL.Qt.QtWidgets.QMessageBox
         msg.warnings.clear()
 
-        with mock.patch("FoldQC.gui.importlib.util.find_spec", return_value=None):
+        with mock.patch(
+            "FoldQC.gui_metrics.importlib.util.find_spec", return_value=None
+        ):
             values = dialog._compute_property_for(
                 "pae_domain_complete", None, data, [], "target_model_0"
             )
@@ -2144,7 +2153,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         self.assertIn("SciPy", msg.warnings[0][1])
 
     def test_pae_domain_dependency_warning_for_missing_sklearn(self) -> None:
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         dialog._cutoff_edit = _LineEdit("5.0")
         data = types.SimpleNamespace(
             pae=np.zeros((2, 2), dtype=np.float32),
@@ -2159,7 +2168,9 @@ class GuiModelSwitchingTests(unittest.TestCase):
                 return object()
             return None
 
-        with mock.patch("FoldQC.gui.importlib.util.find_spec", side_effect=_find_spec):
+        with mock.patch(
+            "FoldQC.gui_metrics.importlib.util.find_spec", side_effect=_find_spec
+        ):
             values = dialog._compute_property_for(
                 "pae_domain_spectral", None, data, [], "target_model_0"
             )
@@ -2173,7 +2184,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         self.assertEqual(metrics.line_ylabel("pae_domain_spectral"), "Domain label")
 
     def test_ensemble_domain_labels_are_painted_per_member_categorically(self) -> None:
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         token_map = [_token(0), _token(1), _token(2)]
         members = [
             types.SimpleNamespace(
@@ -2212,12 +2223,12 @@ class GuiModelSwitchingTests(unittest.TestCase):
 
         with (
             mock.patch(
-                "FoldQC.gui.paint_categorical_labels_bulk",
+                "FoldQC.gui_coloring.paint_categorical_labels_bulk",
                 side_effect=[(0.0, 1.0), (0.0, 1.0)],
             ) as categorical,
-            mock.patch("FoldQC.gui.paint_property_bulk") as continuous,
-            mock.patch("FoldQC.gui.show_colorbar") as show_colorbar,
-            mock.patch("FoldQC.gui.delete_colorbar") as delete_colorbar,
+            mock.patch("FoldQC.gui_coloring.paint_property_bulk") as continuous,
+            mock.patch("FoldQC.gui_coloring.show_colorbar") as show_colorbar,
+            mock.patch("FoldQC.gui_coloring.delete_colorbar") as delete_colorbar,
         ):
             dialog._apply_individual_property_to_ensemble(
                 "pae_domain_complete",
@@ -2240,7 +2251,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         self.assertTrue(stats_calls[0][1]["include_domain_labels"])
 
     def test_line_plot_data_uses_new_continuous_plddt_key(self) -> None:
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         token_map = [_token(0), _token(1)]
         target = _PlotTarget(
             kind="single",
@@ -2265,7 +2276,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
     def test_to_selection_line_plot_data_uses_all_tokens_when_reference_exists(
         self,
     ) -> None:
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         dialog._ref_edit = _LineEdit("chain L")
         token_map = [_token(i) for i in range(4)]
         target = _PlotTarget(
@@ -2299,7 +2310,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
     def test_reference_scoped_line_plot_data_still_restricts_other_metrics(
         self,
     ) -> None:
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         dialog._ref_edit = _LineEdit("chain L")
         token_map = [_token(i) for i in range(4)]
         target = _PlotTarget(
@@ -2325,7 +2336,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         )
 
     def test_contact_probability_to_selection_line_keeps_context_tokens(self) -> None:
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         dialog._ref_edit = _LineEdit("chain L")
         contact_probs = np.array(
             [
@@ -2343,7 +2354,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
             token_map=[_token(0), _token(1), _token(2)],
         )
 
-        import FoldQC.gui as gui_module
+        import FoldQC.gui_metrics as gui_module
 
         old_selection = gui_module.selection_to_token_indices
         try:
@@ -2367,7 +2378,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
     def test_csv_export_single_model_rows_follow_current_target(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+            dialog = _new_dialog()
             dialog._pred_files = _CsvPredictionFiles(root, ranks=(0,))
             data = types.SimpleNamespace(
                 name="target",
@@ -2414,7 +2425,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
     def test_csv_export_reference_and_contact_flags_follow_current_inputs(
         self,
     ) -> None:
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         root = Path("/tmp/foldqc-export")
         dialog._pred_files = _CsvPredictionFiles(root, ranks=(0,))
         pde = np.array(
@@ -2456,7 +2467,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         dialog._ensure_current_data_for_property = lambda _prop: None
         dialog._binding_site_token_indices = lambda *_args: [1, 2]
 
-        import FoldQC.gui as gui_module
+        import FoldQC.gui_plots as gui_module
 
         old_selection = gui_module.selection_to_token_indices
 
@@ -2485,7 +2496,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
     def test_csv_export_pae_contact_uses_contact_flags_and_symmetric_values(
         self,
     ) -> None:
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         root = Path("/tmp/foldqc-export")
         dialog._pred_files = _CsvPredictionFiles(root, ranks=(0,))
         pae = np.array(
@@ -2527,7 +2538,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         dialog._ensure_current_data_for_property = lambda _prop: None
         dialog._binding_site_token_indices = lambda *_args: [1, 2]
 
-        import FoldQC.gui as gui_module
+        import FoldQC.gui_plots as gui_module
 
         old_selection = gui_module.selection_to_token_indices
 
@@ -2553,7 +2564,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
     def test_csv_export_ensemble_group_per_model_metric_adds_member_columns(
         self,
     ) -> None:
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         root = Path("/tmp/foldqc-export")
         dialog._pred_files = _CsvPredictionFiles(root, ranks=(0, 1))
         dialog._ensemble_group_name = "target_ensemble"
@@ -2617,7 +2628,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         self.assertEqual(rows[2]["ensemble_member_label"], "rank 1")
 
     def test_csv_export_ensemble_level_metric_adds_aggregate_columns(self) -> None:
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         root = Path("/tmp/foldqc-export")
         dialog._pred_files = _CsvPredictionFiles(root, ranks=(0, 1))
         dialog._ensemble_group_name = "target_ensemble"
@@ -2667,7 +2678,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
     def test_export_csv_uses_save_file_dialog_and_adds_csv_suffix(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+            dialog = _new_dialog()
             dialog._pred_files = _CsvPredictionFiles(root, ranks=(0,))
             dialog._pred_data = types.SimpleNamespace(rank=0)
             dialog._prop_combo = types.SimpleNamespace(currentData=lambda: "plddt")
@@ -2691,7 +2702,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         self.assertEqual(captured, [root / "tokens.csv"])
 
     def test_ensemble_line_plot_data_uses_cached_plddt_mean_and_std(self) -> None:
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         dialog._ensemble_members = [types.SimpleNamespace(rank=0)]
         dialog._ensemble_rmsd = None
         dialog._ensemble_plddt_mean = np.array([0.8, 0.9], dtype=np.float32)
@@ -2717,7 +2728,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         np.testing.assert_allclose(series[0][2], np.array([0.2], dtype=np.float32))
 
     def test_distribution_plot_dispatches_plddt_classes_to_bar_plot(self) -> None:
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         token_map = [_token(i) for i in range(5)]
         target = _PlotTarget(
             kind="single",
@@ -2768,7 +2779,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         self.assertEqual(shown[0][0], "class-figure")
 
     def test_distribution_plot_dispatches_continuous_values_to_histogram(self) -> None:
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         token_map = [_token(i) for i in range(4)]
         target = _PlotTarget(
             kind="single",
@@ -2827,7 +2838,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
     def test_distribution_plot_dispatches_domain_labels_to_categorical_bars(
         self,
     ) -> None:
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         token_map = [_token(i) for i in range(4)]
         target = _PlotTarget(
             kind="single",
@@ -2882,7 +2893,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         self.assertEqual(shown[0][0], "category-figure")
 
     def test_distribution_plot_rejects_chain_iptm(self) -> None:
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         target = _PlotTarget(
             kind="single",
             label="target_model_0",
@@ -2903,7 +2914,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         self.assertIn("not available for chain ipTM", msg.infos[0][1])
 
     def test_distribution_plot_rejects_domain_labels_for_ensemble_group(self) -> None:
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         target = _PlotTarget(
             kind="ensemble_group",
             label="target_ensemble",
@@ -2928,7 +2939,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         self.assertIn("not pooled across an ensemble", msg.infos[0][1])
 
     def test_distribution_plot_honors_reference_required_validation(self) -> None:
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         target = _PlotTarget(
             kind="single",
             label="target_model_0",
@@ -2946,7 +2957,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         dialog._show_distribution_plot()
 
     def test_line_plot_warns_when_restricted_series_has_no_finite_values(self) -> None:
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         token_map = [_token(0), _token(1)]
         target = _PlotTarget(
             kind="single",
@@ -2984,7 +2995,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         self.assertIn("No finite values", msg.warnings[0][1])
 
     def test_pde_contact_line_plot_is_blocked_by_direct_handler(self) -> None:
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         target = _PlotTarget(
             kind="single",
             label="target_model_0",
@@ -3007,7 +3018,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         self.assertIn("PDE contact-filtered", msg.infos[0][1])
 
     def test_pae_contact_line_plot_is_blocked_by_direct_handler(self) -> None:
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         target = _PlotTarget(
             kind="single",
             label="target_model_0",
@@ -3032,7 +3043,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
     def test_pae_summary_plot_data_lazy_loads_single_model_and_scopes_x_only(
         self,
     ) -> None:
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         token_map = [
             _token(0, chain_id="A"),
             _token(1, chain_id="A"),
@@ -3092,7 +3103,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         self.assertEqual(series[1][3], "#6baed6")
 
     def test_pde_summary_plot_data_lazy_loads_ensemble_member(self) -> None:
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         token_map = [_token(0, chain_id="A"), _token(1, chain_id="B")]
         member = types.SimpleNamespace(
             rank=1,
@@ -3126,7 +3137,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         np.testing.assert_allclose(series[0][1], np.array([2.0, 4.0], dtype=np.float32))
 
     def test_summary_plot_handler_uses_line_metadata_and_reference_scope(self) -> None:
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         token_map = [_token(0, chain_id="A"), _token(1, chain_id="B")]
         target = _PlotTarget(
             kind="single",
@@ -3174,7 +3185,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
     def test_ensemble_summary_plot_uses_member_maps_for_selection_metadata(
         self,
     ) -> None:
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         token_map = [_token(0, chain_id="A"), _token(1, chain_id="B")]
         members = [
             types.SimpleNamespace(
@@ -3232,7 +3243,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         )
 
     def test_ensemble_distribution_metadata_targets_all_member_token_maps(self) -> None:
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         token_map = [_token(0), _token(1)]
         members = [
             types.SimpleNamespace(
@@ -3309,7 +3320,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
             data=data,
             token_map=token_map,
         )
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         dialog._pred_files = types.SimpleNamespace(has_pae=True, has_pde=True)
         dialog._ensemble_members = [member]
         dialog._ensure_member_data_for_plot = lambda *args, **kwargs: None
@@ -3341,7 +3352,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         np.testing.assert_allclose(series[2][1], np.array([5.0], dtype=np.float32))
 
     def test_show_ensemble_site_summary_requires_active_ensemble(self) -> None:
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         dialog._ref_edit = _LineEdit("lig")
         dialog._cutoff_edit = _LineEdit("5.0")
         dialog._ensemble_members = None
@@ -3355,7 +3366,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
     def test_show_ensemble_site_summary_warns_when_no_metrics_are_available(
         self,
     ) -> None:
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         dialog._ref_edit = _LineEdit("lig")
         dialog._cutoff_edit = _LineEdit("5.0")
         dialog._ensemble_members = [types.SimpleNamespace(rank=0)]
@@ -3378,7 +3389,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
     def test_ensemble_matrix_plot_data_averages_models_and_preserves_ref_order(
         self,
     ) -> None:
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         dialog._pred_files = types.SimpleNamespace(has_pae=False, has_pde=True)
         members = [
             types.SimpleNamespace(
@@ -3437,7 +3448,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         self.assertIsNone(cell_text)
 
     def test_pae_row_mean_matrix_uses_reference_rows(self) -> None:
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         dialog._pred_files = types.SimpleNamespace(has_pae=True, has_pde=False)
         matrix_data = np.arange(16, dtype=np.float32).reshape(4, 4)
         target = _PlotTarget(
@@ -3465,7 +3476,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         self.assertEqual(label, "PAE (Å)")
 
     def test_pae_column_to_selection_matrix_uses_reference_rows(self) -> None:
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         dialog._pred_files = types.SimpleNamespace(has_pae=True, has_pde=False)
         matrix_data = np.arange(16, dtype=np.float32).reshape(4, 4)
         target = _PlotTarget(
@@ -3495,7 +3506,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
     def test_pae_symmetric_within_selection_matrix_uses_reference_square(
         self,
     ) -> None:
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         dialog._pred_files = types.SimpleNamespace(has_pae=True, has_pde=False)
         matrix_data = np.arange(16, dtype=np.float32).reshape(4, 4)
         target = _PlotTarget(
@@ -3522,7 +3533,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         self.assertEqual(col_indices, [2, 0])
 
     def test_chain_iptm_matrix_plot_data_uses_confidence_json(self) -> None:
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         token_map = [
             _token(0, chain_id="A"),
             _token(1, chain_id="A"),
@@ -3567,7 +3578,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         self.assertEqual(cell_text.tolist(), [["0.912", "0.812"], ["0.712", "0.612"]])
 
     def test_ensemble_chain_iptm_matrix_plot_data_uses_mean_and_std(self) -> None:
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         token_map = [_token(0, chain_id="A"), _token(1, chain_id="B")]
         members = [
             types.SimpleNamespace(
@@ -3631,7 +3642,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         )
 
     def test_chain_iptm_matrix_plot_data_rejects_missing_pair_matrix(self) -> None:
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         target = _PlotTarget(
             kind="single",
             label="target_model_0",
@@ -3646,7 +3657,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
     def test_show_matrix_plot_accepts_chain_iptm_without_reference_resolution(
         self,
     ) -> None:
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         token_map = [_token(0, chain_id="A"), _token(1, chain_id="B")]
         target = _PlotTarget(
             kind="single",
@@ -3680,7 +3691,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         self.assertIn("Pairwise chain ipTM", shown[0][1])
 
     def test_ensemble_fingerprint_data_uses_mean_and_std(self) -> None:
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         dialog._pred_files = types.SimpleNamespace(has_pae=False, has_pde=False)
         token_map = [_token(0), _token(1)]
         members = [
@@ -3728,7 +3739,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         self.assertIsNone(series["pde_to_ligand"])
 
     def test_fingerprint_warns_when_reference_selection_is_empty(self) -> None:
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         dialog._pred_data = object()
         dialog._get_obj_name = lambda: "target_model_0"
         dialog._ref_edit = _LineEdit("")
@@ -3740,7 +3751,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         self.assertIn("reference selection", msg.warnings[0][1])
 
     def test_fingerprint_uses_cutoff_object_and_filters_to_polymer_tokens(self) -> None:
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         token_map = [
             _token(0, chain_id="L", is_hetatm=True),
             _token(1, chain_id="A"),
@@ -3790,10 +3801,11 @@ class GuiModelSwitchingTests(unittest.TestCase):
         )
 
         import FoldQC
-        import FoldQC.gui as gui_module
+        import FoldQC.gui_metrics as metrics_gui_module
+        import FoldQC.gui_plots as plots_gui_module
 
-        old_selection = gui_module.selection_to_token_indices
-        old_nearby = gui_module.tokens_within_distance
+        old_selection = plots_gui_module.selection_to_token_indices
+        old_nearby = metrics_gui_module.tokens_within_distance
         nearby_calls = []
         old_plots = sys.modules.get("FoldQC.plots")
         old_plots_attr = getattr(FoldQC, "plots", None)
@@ -3804,15 +3816,17 @@ class GuiModelSwitchingTests(unittest.TestCase):
         sys.modules["FoldQC.plot_viewer"] = fake_plot_viewer
         FoldQC.plot_viewer = fake_plot_viewer
         try:
-            gui_module.selection_to_token_indices = fake_selection_to_token_indices
-            gui_module.tokens_within_distance = lambda *args: (
+            plots_gui_module.selection_to_token_indices = (
+                fake_selection_to_token_indices
+            )
+            metrics_gui_module.tokens_within_distance = lambda *args: (
                 nearby_calls.append(args) or [0, 1, 2, 3]
             )
 
             dialog._show_binding_site_fingerprint()
         finally:
-            gui_module.selection_to_token_indices = old_selection
-            gui_module.tokens_within_distance = old_nearby
+            plots_gui_module.selection_to_token_indices = old_selection
+            metrics_gui_module.tokens_within_distance = old_nearby
             if old_plots_attr is None:
                 try:
                     delattr(FoldQC, "plots")
@@ -3866,7 +3880,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
     def test_fingerprint_warns_when_binding_site_residue_limit_is_exceeded(
         self,
     ) -> None:
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         token_map = [_token(i) for i in range(5)]
         plddt = np.linspace(0.5, 0.9, len(token_map), dtype=np.float32)
         dialog._pred_data = types.SimpleNamespace(
@@ -3915,10 +3929,11 @@ class GuiModelSwitchingTests(unittest.TestCase):
         )
 
         import FoldQC
-        import FoldQC.gui as gui_module
+        import FoldQC.gui_metrics as metrics_gui_module
+        import FoldQC.gui_plots as plots_gui_module
 
-        old_selection = gui_module.selection_to_token_indices
-        old_nearby = gui_module.tokens_within_distance
+        old_selection = plots_gui_module.selection_to_token_indices
+        old_nearby = metrics_gui_module.tokens_within_distance
         old_plots = sys.modules.get("FoldQC.plots")
         old_plots_attr = getattr(FoldQC, "plots", None)
         old_plot_viewer = sys.modules.get("FoldQC.plot_viewer")
@@ -3928,13 +3943,15 @@ class GuiModelSwitchingTests(unittest.TestCase):
         sys.modules["FoldQC.plot_viewer"] = fake_plot_viewer
         FoldQC.plot_viewer = fake_plot_viewer
         try:
-            gui_module.selection_to_token_indices = fake_selection_to_token_indices
-            gui_module.tokens_within_distance = lambda *_args: [1, 2, 3, 4]
+            plots_gui_module.selection_to_token_indices = (
+                fake_selection_to_token_indices
+            )
+            metrics_gui_module.tokens_within_distance = lambda *_args: [1, 2, 3, 4]
 
             dialog._show_binding_site_fingerprint()
         finally:
-            gui_module.selection_to_token_indices = old_selection
-            gui_module.tokens_within_distance = old_nearby
+            plots_gui_module.selection_to_token_indices = old_selection
+            metrics_gui_module.tokens_within_distance = old_nearby
             if old_plots_attr is None:
                 try:
                     delattr(FoldQC, "plots")
@@ -3968,7 +3985,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         self.assertEqual(len(viewer_calls), 1)
 
     def test_show_plot_figure_uses_qt_viewer_and_keeps_reference(self) -> None:
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         dialog._plot_windows = []
         viewer_calls = []
         fake_plot_viewer = types.SimpleNamespace(
@@ -4009,7 +4026,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         self.assertEqual(dialog._plot_windows, [])
 
     def test_show_plot_figure_falls_back_to_external_viewer(self) -> None:
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         dialog._plot_windows = []
         saved = []
         fake_plot_viewer = types.SimpleNamespace(
@@ -4066,7 +4083,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
     def test_pde_contact_uses_all_atom_contact_selection_and_excludes_reference(
         self,
     ) -> None:
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         dialog._cutoff_edit = _LineEdit("8.25")
         pde = np.array(
             [
@@ -4090,7 +4107,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
             _token(3, chain_id="A"),
         ]
 
-        import FoldQC.gui as gui_module
+        import FoldQC.gui_metrics as gui_module
 
         old_selection = gui_module.selection_to_token_indices
         old_nearby = gui_module.tokens_within_distance
@@ -4127,7 +4144,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
     def test_pae_contact_uses_all_atom_contact_selection_and_symmetric_mean(
         self,
     ) -> None:
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         dialog._cutoff_edit = _LineEdit("8.25")
         pae = np.array(
             [
@@ -4151,7 +4168,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
             _token(3, chain_id="A"),
         ]
 
-        import FoldQC.gui as gui_module
+        import FoldQC.gui_metrics as gui_module
 
         old_selection = gui_module.selection_to_token_indices
         old_nearby = gui_module.tokens_within_distance
@@ -4186,7 +4203,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         np.testing.assert_allclose(values[[1, 3]], np.array([3.0, 9.5]))
 
     def test_interaction_probability_to_selection_dispatches_from_gui(self) -> None:
-        dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+        dialog = _new_dialog()
         contact_probs = np.array(
             [
                 [1.0, 0.1, 0.4],
@@ -4198,7 +4215,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         data = types.SimpleNamespace(contact_probs=contact_probs)
         token_map = [_token(0), _token(1), _token(2)]
 
-        import FoldQC.gui as gui_module
+        import FoldQC.gui_metrics as gui_module
 
         old_selection = gui_module.selection_to_token_indices
         try:

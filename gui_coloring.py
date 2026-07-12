@@ -2,83 +2,23 @@
 
 from __future__ import annotations
 
-import sys
-
 import numpy as np
 
 from . import compute, metrics
 from .compat import QtWidgets
 from .mol_viewer import (
-    delete_colorbar as _delete_colorbar,
-)
-from .mol_viewer import (
+    delete_colorbar,
     get_viewer_name,
-)
-from .mol_viewer import (
-    paint_categorical_labels_bulk as _paint_categorical_labels_bulk,
-)
-from .mol_viewer import (
-    paint_plddt_class_coloring as _paint_plddt_class_coloring,
-)
-from .mol_viewer import (
-    paint_property as _paint_property,
-)
-from .mol_viewer import (
-    paint_property_bulk as _paint_property_bulk,
-)
-from .mol_viewer import (
-    run_with_updates_suspended as _run_with_updates_suspended,
-)
-from .mol_viewer import (
-    show_colorbar as _show_colorbar,
+    paint_categorical_labels_bulk,
+    paint_plddt_class_coloring,
+    paint_property,
+    paint_property_bulk,
+    run_with_updates_suspended,
+    show_colorbar,
 )
 
 APP_TITLE = "FoldQC"
 VIEWER_NAME = get_viewer_name()
-
-
-def _viewer_call(name: str, fallback, *args, **kwargs):
-    """Honor patched legacy GUI seams while controllers are migrated."""
-    gui_module = sys.modules.get("FoldQC.gui")
-    func = getattr(gui_module, name, fallback) if gui_module is not None else fallback
-    return func(*args, **kwargs)
-
-
-def delete_colorbar(*args, **kwargs):
-    return _viewer_call("delete_colorbar", _delete_colorbar, *args, **kwargs)
-
-
-def paint_categorical_labels_bulk(*args, **kwargs):
-    return _viewer_call(
-        "paint_categorical_labels_bulk",
-        _paint_categorical_labels_bulk,
-        *args,
-        **kwargs,
-    )
-
-
-def paint_plddt_class_coloring(*args, **kwargs):
-    return _viewer_call(
-        "paint_plddt_class_coloring", _paint_plddt_class_coloring, *args, **kwargs
-    )
-
-
-def paint_property(*args, **kwargs):
-    return _viewer_call("paint_property", _paint_property, *args, **kwargs)
-
-
-def paint_property_bulk(*args, **kwargs):
-    return _viewer_call("paint_property_bulk", _paint_property_bulk, *args, **kwargs)
-
-
-def run_with_updates_suspended(*args, **kwargs):
-    return _viewer_call(
-        "run_with_updates_suspended", _run_with_updates_suspended, *args, **kwargs
-    )
-
-
-def show_colorbar(*args, **kwargs):
-    return _viewer_call("show_colorbar", _show_colorbar, *args, **kwargs)
 
 
 class ColoringController:
@@ -88,16 +28,10 @@ class ColoringController:
 
     def _selected_palette(self) -> tuple[str, bool]:
         """Return the selected palette key and reverse checkbox state."""
-        combo = self._palette_combo
-        try:
-            key = combo.currentData()
-        except AttributeError:
-            key = None
-        if key is None:
-            key = combo.currentText()
-        reverse_chk = getattr(self, "_palette_reverse_chk", None)
-        reverse = bool(reverse_chk.isChecked()) if reverse_chk is not None else False
-        return str(key), reverse
+        return (
+            str(self._palette_combo.currentData()),
+            bool(self._palette_reverse_chk.isChecked()),
+        )
 
     def _selected_ensemble_member(self, obj_name: str):
         """Return the active ensemble member matching *obj_name*, if any."""
@@ -141,10 +75,6 @@ class ColoringController:
             )
             return None
         return cutoff
-
-    def _get_contact_cutoff(self) -> float | None:
-        """Compatibility wrapper for contact-based callers."""
-        return self._get_cutoff_threshold()
 
     def _apply_coloring(self) -> None:
         """Compute the selected property and paint the structure."""
