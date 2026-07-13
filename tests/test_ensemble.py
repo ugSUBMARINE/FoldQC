@@ -14,10 +14,13 @@ import FoldQC.ensemble as ensemble  # noqa: E402
 from FoldQC.ensemble import (  # noqa: E402
     EnsembleMember,
     build_members,
+    calculate_alignment_plan,
     compute_metric_consensus,
     compute_per_token_rmsd,
     default_group_name,
+    invert_rigid_transform,
     kabsch_transform,
+    prepare_ensemble,
     prepare_metrics,
     select_alignment_core,
     validate_members,
@@ -140,6 +143,28 @@ class EnsembleTests(unittest.TestCase):
 
         np.testing.assert_allclose(transformed, target, atol=1e-6)
 
+    def test_inverse_rigid_transform_restores_coordinates(self) -> None:
+        coords = np.array(
+            [[0.0, 0.0, 0.0], [1.0, 2.0, 3.0], [-1.0, 1.0, 2.0]],
+            dtype=np.float64,
+        )
+        rotation = np.array(
+            [[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
+            dtype=np.float64,
+        )
+        translation = np.array([2.0, 3.0, 4.0], dtype=np.float64)
+
+        transformed = coords @ rotation.T + translation
+        inverse_rotation, inverse_translation = invert_rigid_transform(
+            rotation, translation
+        )
+
+        np.testing.assert_allclose(
+            transformed @ inverse_rotation.T + inverse_translation,
+            coords,
+            atol=1e-6,
+        )
+
 
 def _member(
     rank: int,
@@ -160,6 +185,31 @@ def _member(
         ),
         token_map=TokenMap(tuple(_token(i) for i in range(token_count))),
     )
+
+
+def test_calculate_alignment_plan_uses_current_coordinate_arrays() -> None:
+    token_map = TokenMap(tuple(_token(i) for i in range(3)))
+    members = [
+        types.SimpleNamespace(rank=0, token_map=token_map),
+        types.SimpleNamespace(rank=1, token_map=token_map),
+    ]
+    reference = np.array(
+        [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+        dtype=np.float32,
+    )
+    mobile = reference + np.array([4.0, -2.0, 1.0], dtype=np.float32)
+
+    plan = calculate_alignment_plan(
+        members,
+        {0: reference, 1: mobile},
+        reference_rank=0,
+        core_indices=(0, 1, 2),
+    )
+
+    assert [transform.rank for transform in plan.transforms] == [1]
+    np.testing.assert_allclose(plan.transformed_coords[0], reference, atol=1e-6)
+    np.testing.assert_allclose(plan.transformed_coords[1], reference, atol=1e-6)
+    np.testing.assert_allclose(plan.rmsd, np.zeros(3), atol=1e-6)
 
 
 def test_default_group_name_derives_current_gui_name() -> None:
@@ -227,6 +277,119 @@ def test_build_members_loads_data_and_reuses_reference_token_map(monkeypatch) ->
         "load_structure_plddt": True,
     }
     assert members[0].token_map is members[1].token_map
+
+
+def test_prepare_ensemble_reuses_loaded_rank_and_prepares_missing_rank(
+    monkeypatch,
+) -> None:
+    pred_files = types.SimpleNamespace(
+        models=[
+            types.SimpleNamespace(
+                rank=0,
+                object_name="target_model_0",
+                structure_path=Path("/tmp/target_model_0.cif"),
+                display_label="model_0",
+            ),
+            types.SimpleNamespace(
+                rank=1,
+                object_name="target_model_1",
+                structure_path=Path("/tmp/target_model_1.cif"),
+                display_label="model_1",
+            ),
+        ]
+    )
+    existing = types.SimpleNamespace(
+        rank=0,
+        structure_path=Path("/tmp/target_model_0.cif"),
+        plddt=None,
+        structure_plddt=np.array([0.8, 0.9, 1.0], dtype=np.float32),
+        pae=np.ones((3, 3), dtype=np.float32),
+        pde=None,
+        contact_probs=None,
+    )
+    load_calls = []
+    map_paths = []
+    phases = []
+
+    def load_data(pred, rank, **kwargs):
+        load_calls.append((pred, rank, kwargs))
+        return types.SimpleNamespace(
+            rank=rank,
+            structure_path=Path(f"/tmp/target_model_{rank}.cif"),
+            plddt=np.array([0.6, 0.7, 0.8], dtype=np.float32),
+            structure_plddt=None,
+        )
+
+    def build_map(path):
+        map_paths.append(path)
+        return TokenMap((_token(0), _token(1), _token(2)))
+
+    monkeypatch.setattr("FoldQC.loader.load_prediction_data", load_data)
+    monkeypatch.setattr("FoldQC.token_map.build_token_map", build_map)
+
+    result = prepare_ensemble(
+        pred_files,
+        skip_alignment=False,
+        existing_data_by_rank={0: existing},
+        report_phase=phases.append,
+    )
+
+    assert [member.rank for member in result.members] == [0, 1]
+    assert result.members[0].data is existing
+    assert load_calls == [
+        (
+            pred_files,
+            1,
+            {
+                "load_pae": False,
+                "load_pde": False,
+                "load_contact_probs": False,
+                "load_structure_plddt": True,
+                "load_plddt": True,
+            },
+        )
+    ]
+    assert map_paths == [
+        Path("/tmp/target_model_0.cif"),
+        Path("/tmp/target_model_1.cif"),
+    ]
+    assert result.reference_rank == 0
+    assert result.core_indices == (0, 1, 2)
+    np.testing.assert_allclose(result.plddt_mean, np.array([0.7, 0.8, 0.9]))
+    assert phases[-1] == "Validating ensemble token maps…"
+
+
+def test_prepare_ensemble_rejects_different_ordered_tokens(monkeypatch) -> None:
+    pred_files = types.SimpleNamespace(
+        models=[
+            types.SimpleNamespace(
+                rank=rank,
+                object_name=f"target_model_{rank}",
+                display_label=f"model_{rank}",
+            )
+            for rank in (0, 1)
+        ]
+    )
+
+    def load_data(_pred, rank, **_kwargs):
+        return types.SimpleNamespace(
+            rank=rank,
+            structure_path=Path(f"/tmp/target_model_{rank}.cif"),
+            plddt=np.ones(3, dtype=np.float32),
+            structure_plddt=None,
+        )
+
+    maps = iter(
+        (
+            TokenMap((_token(0), _token(1), _token(2))),
+            TokenMap((_token(0), _token(1, is_hetatm=True), _token(2))),
+        )
+    )
+    monkeypatch.setattr("FoldQC.loader.load_prediction_data", load_data)
+    monkeypatch.setattr("FoldQC.token_map.build_token_map", lambda _path: next(maps))
+
+    with pytest.raises(ValueError, match="Token order mismatch for model_1"):
+        prepare_ensemble(pred_files, skip_alignment=True)
 
 
 def test_validate_members_accepts_compatible_members() -> None:

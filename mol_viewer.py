@@ -182,6 +182,63 @@ def ensure_structure_object(
     return True
 
 
+def load_structure_object_if_missing(path: str | Path, obj_name: str) -> bool:
+    """Load one object without changing the state of an existing object."""
+    from pymol import cmd
+
+    current_objects = set(cmd.get_names("objects") or [])
+    if obj_name in current_objects:
+        return False
+    cmd.load(str(path), obj_name, quiet=1, zoom=0)
+    return True
+
+
+def viewer_name_exists(name: str) -> bool:
+    """Return whether *name* currently exists as an object, group, or selection."""
+    from pymol import cmd
+
+    try:
+        return name in set(cmd.get_names("all") or [])
+    except Exception:
+        return name in set(cmd.get_names("objects") or [])
+
+
+def get_group_members(group_name: str) -> tuple[str, ...]:
+    """Return object members of a viewer group, or an empty tuple."""
+    from pymol import cmd
+
+    if not viewer_name_exists(group_name):
+        return ()
+    return tuple(str(name) for name in (cmd.get_object_list(f"({group_name})") or []))
+
+
+def add_objects_to_group(group_name: str, object_names: Iterable[str]) -> None:
+    """Add objects to one viewer group."""
+    from pymol import cmd
+
+    for obj_name in object_names:
+        cmd.group(group_name, str(obj_name), "add")
+
+
+def remove_objects_from_group(group_name: str, object_names: Iterable[str]) -> None:
+    """Remove objects from one viewer group when it still exists."""
+    from pymol import cmd
+
+    if not viewer_name_exists(group_name):
+        return
+    for obj_name in object_names:
+        cmd.group(group_name, str(obj_name), "remove")
+
+
+def delete_viewer_names(names: Iterable[str]) -> None:
+    """Delete existing viewer names."""
+    from pymol import cmd
+
+    for name in names:
+        if viewer_name_exists(str(name)):
+            cmd.delete(str(name))
+
+
 def load_models_as_states(
     model_paths: list[tuple[int, Path]],
     obj_name: str = "foldqc_ensemble",

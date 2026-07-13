@@ -3,14 +3,28 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
 
 from . import ensemble, gui_rules, metrics, plot_data, reports
 from .compat import ItemIsEnabled, QtCore, QtWidgets, WindowCloseButtonHint
-from .mol_viewer import ensure_structure_object, get_object_list, get_viewer_name
+from .mol_viewer import (
+    add_objects_to_group,
+    delete_viewer_names,
+    ensure_structure_object,
+    get_group_members,
+    get_object_list,
+    get_viewer_name,
+    inspect_object_tokens,
+    load_structure_object_if_missing,
+    rebuild,
+    remove_objects_from_group,
+    run_with_updates_suspended,
+    transform_object,
+    viewer_name_exists,
+)
 
 APP_TITLE = "FoldQC"
 VIEWER_NAME = get_viewer_name()
@@ -63,6 +77,27 @@ class DataLoadBatchResult:
     pred_files: object
     loaded: tuple[tuple[DataLoadItem, object], ...]
     _owns_prediction_files: bool = False
+
+
+@dataclass
+class EnsembleViewerTransaction:
+    """Main-thread state for an incrementally committed ensemble."""
+
+    request_id: int
+    prepared: ensemble.PreparedEnsemble
+    previous_target: str = ""
+    created_objects: list[str] = field(default_factory=list)
+    inspections: dict[int, object] = field(default_factory=dict)
+    applied_transforms: list[ensemble.AlignmentTransform] = field(default_factory=list)
+    group_existed: bool = False
+    previous_group_members: tuple[str, ...] = ()
+    group_additions: tuple[str, ...] = ()
+    previous_members: list | None = None
+    previous_group_name: str | None = None
+    previous_aligned: bool = False
+    previous_rmsd: np.ndarray | None = None
+    previous_plddt_mean: np.ndarray | None = None
+    previous_plddt_std: np.ndarray | None = None
 
 
 def _session_path_for_candidate(discovery, candidate) -> Path:
@@ -153,6 +188,20 @@ def _load_data_batch(pred_files, items: tuple[DataLoadItem, ...], report_phase):
         )
         loaded.append((item, data))
     return DataLoadBatchResult(pred_files, tuple(loaded))
+
+
+def _prepare_ensemble_job(
+    pred_files,
+    skip_alignment: bool,
+    existing_data_by_rank: dict[int, object],
+    report_phase,
+):
+    return ensemble.prepare_ensemble(
+        pred_files,
+        skip_alignment=skip_alignment,
+        existing_data_by_rank=existing_data_by_rank,
+        report_phase=report_phase,
+    )
 
 
 def _score_table_has_values(value) -> bool:
@@ -389,6 +438,8 @@ class GuiLoadingController:
         handle = getattr(self, "_active_load_handle", None)
         if handle is not None:
             handle.abandon()
+        if getattr(self, "_active_ensemble_viewer_transaction", None) is not None:
+            self._rollback_ensemble_viewer_transaction(refresh_gui=False)
         request_id = self._next_gui_job_request_id()
         self._prediction_load_request_id = request_id
         self._data_load_request_id = request_id
@@ -1383,7 +1434,9 @@ class GuiLoadingController:
         )
 
     def _show_ensemble(self) -> None:
-        """Load, group, optionally align, and activate the ensemble."""
+        """Prepare an ensemble in the worker, then commit it through PyMOL."""
+        if self._gui_job_is_busy():
+            return
         if self._pred_files is None:
             QtWidgets.QMessageBox.warning(
                 self, APP_TITLE, "No prediction output loaded."
@@ -1401,35 +1454,398 @@ class GuiLoadingController:
         if skip_alignment is None:
             return
 
+        pred_files = self._pred_files
+        existing_data = self._existing_ensemble_data_by_rank()
+        self._loading_data = True
+        request_id = self._next_gui_job_request_id()
+        self._data_load_request_id = request_id
+        self._set_prediction_load_controls_enabled(False)
+        first_model = pred_files.models[0]
+        self._schedule_load_progress(
+            request_id,
+            f"Preparing {first_model.display_label} ensemble data…",
+        )
+        handle = self._job_runner.submit(
+            request_id,
+            lambda report: _prepare_ensemble_job(
+                pred_files,
+                skip_alignment,
+                existing_data,
+                report,
+            ),
+            self._on_data_load_progress,
+            self._on_ensemble_prepared,
+            self._on_ensemble_preparation_error,
+        )
+        if self._data_load_is_active(request_id):
+            self._active_load_handle = handle
+
+    def _existing_ensemble_data_by_rank(self) -> dict[int, object]:
+        """Return current rank data suitable for reuse by ensemble preparation."""
+        existing: dict[int, object] = {}
+        current = self._pred_data
+        if current is not None and getattr(current, "rank", None) is not None:
+            existing[int(current.rank)] = current
+        for member in self._ensemble_members or []:
+            rank = int(member.rank)
+            previous = existing.get(rank)
+            if previous is None or self._prediction_data_array_count(
+                member.data
+            ) > self._prediction_data_array_count(previous):
+                existing[rank] = member.data
+        return existing
+
+    @staticmethod
+    def _prediction_data_array_count(data: object) -> int:
+        fields = ("plddt", "structure_plddt", "pae", "pde", "contact_probs")
+        return sum(getattr(data, field, None) is not None for field in fields)
+
+    def _on_ensemble_prepared(
+        self,
+        request_id: int,
+        prepared: ensemble.PreparedEnsemble,
+    ) -> None:
+        if not self._data_load_is_active(request_id):
+            self._job_runner.dispose(prepared)
+            return
+        if prepared.pred_files is not self._pred_files:
+            self._job_runner.dispose(prepared)
+            self._finish_data_load(request_id)
+            return
+
+        self._active_load_handle = None
+        previous_target = ""
+        obj_combo = getattr(self, "_obj_combo", None)
+        if obj_combo is not None and hasattr(obj_combo, "currentText"):
+            previous_target = obj_combo.currentText()
         try:
-            group_name, members = ensemble.build_members(self._pred_files)
-            ensemble.validate_members(members)
-            metrics_result = ensemble.prepare_metrics(
-                members, skip_alignment=skip_alignment
+            group_existed = viewer_name_exists(prepared.group_name)
+            previous_group_members = get_group_members(prepared.group_name)
+        except Exception as exc:
+            logger.exception("Could not inspect the target PyMOL ensemble group")
+            self._finish_data_load(request_id)
+            QtWidgets.QMessageBox.critical(
+                self,
+                f"{APP_TITLE} - error",
+                str(exc),
             )
-            self._ensemble_members = members
-            self._ensemble_group_name = group_name
-            self._ensemble_aligned = metrics_result.aligned
-            self._ensemble_rmsd = metrics_result.rmsd
-            self._ensemble_plddt_mean = metrics_result.plddt_mean
-            self._ensemble_plddt_std = metrics_result.plddt_std
+            return
+        transaction = EnsembleViewerTransaction(
+            request_id=request_id,
+            prepared=prepared,
+            previous_target=previous_target,
+            group_existed=group_existed,
+            previous_group_members=previous_group_members,
+            previous_members=self._ensemble_members,
+            previous_group_name=self._ensemble_group_name,
+            previous_aligned=self._ensemble_aligned,
+            previous_rmsd=self._ensemble_rmsd,
+            previous_plddt_mean=self._ensemble_plddt_mean,
+            previous_plddt_std=self._ensemble_plddt_std,
+        )
+        self._active_ensemble_viewer_transaction = transaction
+        QtCore.QTimer.singleShot(
+            0,
+            lambda: self._load_next_ensemble_object(transaction, 0),
+        )
+
+    def _ensemble_transaction_is_active(
+        self,
+        transaction: EnsembleViewerTransaction,
+    ) -> bool:
+        return bool(
+            self._data_load_is_active(transaction.request_id)
+            and self._active_ensemble_viewer_transaction is transaction
+            and transaction.prepared.pred_files is self._pred_files
+        )
+
+    def _load_next_ensemble_object(
+        self,
+        transaction: EnsembleViewerTransaction,
+        index: int,
+    ) -> None:
+        if not self._ensemble_transaction_is_active(transaction):
+            return
+        members = transaction.prepared.members
+        if index >= len(members):
+            QtCore.QTimer.singleShot(
+                0,
+                lambda: self._inspect_next_ensemble_object(transaction, 0),
+            )
+            return
+
+        member = members[index]
+        self._on_data_load_progress(
+            transaction.request_id,
+            f"Loading {member.model_label} into PyMOL… ({index + 1}/{len(members)})",
+        )
+        try:
+            did_load = load_structure_object_if_missing(
+                member.structure_path,
+                member.obj_name,
+            )
+            if did_load:
+                transaction.created_objects.append(member.obj_name)
+        except Exception as exc:
+            self._fail_ensemble_viewer_transaction(transaction, exc)
+            return
+        QtCore.QTimer.singleShot(
+            0,
+            lambda: self._load_next_ensemble_object(transaction, index + 1),
+        )
+
+    def _inspect_next_ensemble_object(
+        self,
+        transaction: EnsembleViewerTransaction,
+        index: int,
+    ) -> None:
+        if not self._ensemble_transaction_is_active(transaction):
+            return
+        members = transaction.prepared.members
+        if index >= len(members):
+            QtCore.QTimer.singleShot(
+                0,
+                lambda: self._align_and_group_ensemble(transaction),
+            )
+            return
+
+        member = members[index]
+        self._on_data_load_progress(
+            transaction.request_id,
+            f"Inspecting {member.model_label} coordinates… "
+            f"({index + 1}/{len(members)})",
+        )
+        try:
+            if not viewer_name_exists(member.obj_name):
+                raise ValueError(f"PyMOL object '{member.obj_name}' no longer exists.")
+            transaction.inspections[member.rank] = inspect_object_tokens(
+                member.obj_name,
+                member.token_map,
+            )
+        except Exception as exc:
+            self._fail_ensemble_viewer_transaction(transaction, exc)
+            return
+        QtCore.QTimer.singleShot(
+            0,
+            lambda: self._inspect_next_ensemble_object(transaction, index + 1),
+        )
+
+    def _align_and_group_ensemble(
+        self,
+        transaction: EnsembleViewerTransaction,
+    ) -> None:
+        if not self._ensemble_transaction_is_active(transaction):
+            return
+        prepared = transaction.prepared
+        coords = {
+            rank: inspection.representative_coords
+            for rank, inspection in transaction.inspections.items()
+        }
+        try:
+            if prepared.skip_alignment:
+                rmsd = ensemble.compute_per_token_rmsd(
+                    [coords[member.rank] for member in prepared.members]
+                )
+                transforms: tuple[ensemble.AlignmentTransform, ...] = ()
+            else:
+                reference = next(
+                    member
+                    for member in prepared.members
+                    if member.rank == prepared.reference_rank
+                )
+                self._on_data_load_progress(
+                    transaction.request_id,
+                    f"Aligning ensemble to {reference.model_label}…",
+                )
+                plan = ensemble.calculate_alignment_plan(
+                    prepared.members,
+                    coords,
+                    reference_rank=prepared.reference_rank,
+                    core_indices=prepared.core_indices,
+                )
+                transforms = plan.transforms
+                rmsd = plan.rmsd
+
+                def apply_transforms() -> None:
+                    for transform in transforms:
+                        member = next(
+                            item
+                            for item in prepared.members
+                            if item.rank == transform.rank
+                        )
+                        transform_object(
+                            member.obj_name,
+                            transform.rotation,
+                            transform.translation,
+                        )
+                        transaction.applied_transforms.append(transform)
+
+                run_with_updates_suspended(apply_transforms)
+
+            self._on_data_load_progress(
+                transaction.request_id,
+                "Grouping ensemble objects…",
+            )
+            object_names = tuple(member.obj_name for member in prepared.members)
+            previous_members = set(transaction.previous_group_members)
+            transaction.group_additions = tuple(
+                name for name in object_names if name not in previous_members
+            )
+            run_with_updates_suspended(
+                lambda: add_objects_to_group(prepared.group_name, object_names)
+            )
+        except Exception as exc:
+            self._fail_ensemble_viewer_transaction(transaction, exc)
+            return
+
+        self._commit_ensemble_transaction(transaction, rmsd)
+
+    def _commit_ensemble_transaction(
+        self,
+        transaction: EnsembleViewerTransaction,
+        rmsd: np.ndarray,
+    ) -> None:
+        if not self._ensemble_transaction_is_active(transaction):
+            return
+        prepared = transaction.prepared
+        members = [
+            ensemble.EnsembleMember(
+                rank=member.rank,
+                obj_name=member.obj_name,
+                data=member.data,
+                token_map=member.token_map,
+                paint_mapping=transaction.inspections[member.rank].paint_mapping,
+            )
+            for member in prepared.members
+        ]
+        self._ensemble_members = members
+        self._ensemble_group_name = prepared.group_name
+        self._ensemble_aligned = not prepared.skip_alignment
+        self._ensemble_rmsd = rmsd
+        self._ensemble_plddt_mean = prepared.plddt_mean
+        self._ensemble_plddt_std = prepared.plddt_std
+        try:
             self._refresh_objects()
-            if self._ensemble_group_name:
-                self._select_object(self._ensemble_group_name)
+            self._select_object(prepared.group_name)
             self._update_property_availability()
             self._select_property("ensemble_rmsd")
-
-            QtWidgets.QMessageBox.information(
-                self,
-                APP_TITLE,
-                f"Loaded {len(members)} ensemble models into group "
-                f"'{self._ensemble_group_name}'.\n"
-                f"RMSD was computed using {metrics_result.mode_label}.\n\n"
-                "Use Apply Coloring to color the selected target.",
-            )
-            self._refresh_contextual_ui()
         except Exception as exc:
-            QtWidgets.QMessageBox.critical(self, f"{APP_TITLE} - error", str(exc))
+            self._restore_previous_ensemble_state(transaction)
+            self._fail_ensemble_viewer_transaction(transaction, exc)
+            return
+        self._active_ensemble_viewer_transaction = None
+
+        mode_label = (
+            "current coordinates"
+            if prepared.skip_alignment
+            else "automatic core alignment"
+        )
+        self._finish_data_load(transaction.request_id, save_session=True)
+        QtWidgets.QMessageBox.information(
+            self,
+            APP_TITLE,
+            f"Loaded {len(members)} ensemble models into group "
+            f"'{prepared.group_name}'.\n"
+            f"RMSD was computed using {mode_label}.\n\n"
+            "Use Apply Coloring to color the selected target.",
+        )
+
+    def _restore_previous_ensemble_state(
+        self,
+        transaction: EnsembleViewerTransaction,
+    ) -> None:
+        self._ensemble_members = transaction.previous_members
+        self._ensemble_group_name = transaction.previous_group_name
+        self._ensemble_aligned = transaction.previous_aligned
+        self._ensemble_rmsd = transaction.previous_rmsd
+        self._ensemble_plddt_mean = transaction.previous_plddt_mean
+        self._ensemble_plddt_std = transaction.previous_plddt_std
+
+    def _on_ensemble_preparation_error(self, request_id: int, failure) -> None:
+        if not self._data_load_is_active(request_id):
+            return
+        logger.error(
+            "Background ensemble preparation failed:\n%s", failure.traceback_text
+        )
+        self._finish_data_load(request_id)
+        QtWidgets.QMessageBox.critical(
+            self,
+            f"{APP_TITLE} - error",
+            failure.message,
+        )
+
+    def _fail_ensemble_viewer_transaction(
+        self,
+        transaction: EnsembleViewerTransaction,
+        exc: Exception,
+    ) -> None:
+        if not self._ensemble_transaction_is_active(transaction):
+            return
+        logger.exception("Could not load or align the ensemble in PyMOL")
+        self._rollback_ensemble_viewer_transaction(refresh_gui=True)
+        self._finish_data_load(transaction.request_id, save_session=True)
+        QtWidgets.QMessageBox.critical(
+            self,
+            f"{APP_TITLE} - error",
+            str(exc),
+        )
+
+    def _rollback_ensemble_viewer_transaction(
+        self,
+        *,
+        refresh_gui: bool,
+    ) -> None:
+        transaction = getattr(self, "_active_ensemble_viewer_transaction", None)
+        if transaction is None:
+            return
+        prepared = transaction.prepared
+
+        try:
+            if transaction.group_existed:
+                remove_objects_from_group(
+                    prepared.group_name,
+                    transaction.group_additions,
+                )
+            else:
+                delete_viewer_names((prepared.group_name,))
+        except Exception:
+            logger.exception("Could not restore the previous ensemble group")
+
+        try:
+            members_by_rank = {member.rank: member for member in prepared.members}
+
+            def revert_transforms() -> None:
+                for transform in reversed(transaction.applied_transforms):
+                    member = members_by_rank[transform.rank]
+                    if not viewer_name_exists(member.obj_name):
+                        continue
+                    rotation, translation = ensemble.invert_rigid_transform(
+                        transform.rotation,
+                        transform.translation,
+                    )
+                    transform_object(member.obj_name, rotation, translation)
+
+            if transaction.applied_transforms:
+                run_with_updates_suspended(revert_transforms)
+        except Exception:
+            logger.exception("Could not restore transformed ensemble objects")
+
+        try:
+            delete_viewer_names(reversed(transaction.created_objects))
+            if transaction.created_objects:
+                rebuild()
+        except Exception:
+            logger.exception("Could not remove partially loaded ensemble objects")
+        finally:
+            self._active_ensemble_viewer_transaction = None
+
+        if refresh_gui:
+            try:
+                self._refresh_objects()
+                if transaction.previous_target:
+                    self._select_object(transaction.previous_target)
+            except Exception:
+                logger.exception("Could not refresh the viewer after ensemble rollback")
 
     def _ask_skip_ensemble_alignment(self) -> bool | None:
         """Return True for expert-mode no-align, False for auto-align, None on cancel."""

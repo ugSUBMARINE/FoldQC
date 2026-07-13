@@ -71,6 +71,58 @@ def test_object_discovery_and_ensure_structure_object(monkeypatch) -> None:
     assert cmd.loads == [(("/tmp/other.cif", "model_1"), {"quiet": 1, "zoom": 1})]
 
 
+def test_incremental_ensemble_viewer_helpers_preserve_existing_objects(
+    monkeypatch,
+) -> None:
+    objects = {"model_0"}
+    all_names = {"model_0", "ensemble"}
+    group_calls = []
+    deleted = []
+    loads = []
+
+    def get_names(kind, *_args, **_kwargs):
+        return sorted(all_names if kind == "all" else objects)
+
+    def load(path, name, **kwargs):
+        loads.append((path, name, kwargs))
+        objects.add(name)
+        all_names.add(name)
+
+    def delete(name):
+        deleted.append(name)
+        objects.discard(name)
+        all_names.discard(name)
+
+    cmd = types.SimpleNamespace(
+        get_names=get_names,
+        get_object_list=lambda selection: (
+            ["model_0"] if selection == "(ensemble)" else []
+        ),
+        load=load,
+        group=lambda *args: group_calls.append(args),
+        delete=delete,
+    )
+    monkeypatch.setitem(sys.modules, "pymol", types.SimpleNamespace(cmd=cmd))
+
+    assert not mol_viewer.load_structure_object_if_missing(
+        "/tmp/model_0.cif", "model_0"
+    )
+    assert mol_viewer.load_structure_object_if_missing("/tmp/model_1.cif", "model_1")
+    assert loads == [("/tmp/model_1.cif", "model_1", {"quiet": 1, "zoom": 0})]
+    assert mol_viewer.get_group_members("ensemble") == ("model_0",)
+
+    mol_viewer.add_objects_to_group("ensemble", ("model_0", "model_1"))
+    mol_viewer.remove_objects_from_group("ensemble", ("model_1",))
+    assert group_calls == [
+        ("ensemble", "model_0", "add"),
+        ("ensemble", "model_1", "add"),
+        ("ensemble", "model_1", "remove"),
+    ]
+
+    mol_viewer.delete_viewer_names(("missing", "model_1"))
+    assert deleted == ["model_1"]
+
+
 def test_object_paint_mapping_handles_polymer_ligand_order_and_sparse_indices(
     monkeypatch,
 ) -> None:

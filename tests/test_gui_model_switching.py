@@ -329,7 +329,7 @@ def _install_fake_pymol() -> types.SimpleNamespace:
 
 _PYMOL = _install_fake_pymol()
 
-from FoldQC import gui_jobs, metrics, session  # noqa: E402
+from FoldQC import ensemble, gui_jobs, gui_loading, metrics, session  # noqa: E402
 from FoldQC.gui import (  # noqa: E402
     APP_TITLE,
     PREDICTION_FILE_FILTER,
@@ -986,6 +986,57 @@ class GuiModelSwitchingTests(unittest.TestCase):
         dialog.setWindowTitle = lambda _title: None
         return dialog
 
+    def _prepared_ensemble(self, pred_files, *, skip_alignment: bool = False):
+        token_map = TokenMap(tuple(_token(i) for i in range(3)))
+        prepared_members = []
+        for model in pred_files.models:
+            data = types.SimpleNamespace(
+                rank=model.rank,
+                structure_path=pred_files.structure_path(model.rank),
+                plddt=np.array([0.9, 0.8, 0.7], dtype=np.float32),
+                structure_plddt=None,
+                pae=None,
+                pde=None,
+                contact_probs=None,
+            )
+            prepared_members.append(
+                ensemble.PreparedEnsembleMember(
+                    rank=model.rank,
+                    model_label=model.display_label,
+                    obj_name=model.object_name,
+                    structure_path=data.structure_path,
+                    data=data,
+                    token_map=token_map,
+                )
+            )
+        return ensemble.PreparedEnsemble(
+            pred_files=pred_files,
+            group_name="target_ensemble",
+            members=tuple(prepared_members),
+            skip_alignment=skip_alignment,
+            reference_rank=0,
+            core_indices=(0, 1, 2) if not skip_alignment else (),
+            plddt_mean=np.array([0.9, 0.8, 0.7], dtype=np.float32),
+            plddt_std=np.zeros(3, dtype=np.float32),
+        )
+
+    def _ensemble_dialog(self, runner):
+        dialog = self._session_dialog()
+        pred_files = _SessionPredictionFiles(Path("/tmp"))
+        dialog._pred_files = pred_files
+        dialog._pred_data = self._prepared_ensemble(pred_files).members[0].data
+        dialog._obj_combo.addItem("target_model_0", "target_model_0")
+        dialog._job_runner = runner
+        dialog._active_ensemble_viewer_transaction = None
+        dialog._ask_skip_ensemble_alignment = lambda: False
+        dialog._refresh_objects = lambda: None
+        dialog._select_object = lambda _name: None
+        dialog._update_property_availability = lambda: None
+        dialog._select_property = lambda _key: None
+        dialog._refresh_contextual_ui = lambda: None
+        dialog._save_session_settings = lambda: None
+        return dialog, pred_files
+
     def _write_session_settings(self, **values) -> None:
         settings = self._settings()
         for key, value in values.items():
@@ -1015,6 +1066,394 @@ class GuiModelSwitchingTests(unittest.TestCase):
 
     def test_app_title_uses_foldqc_display_name(self) -> None:
         self.assertEqual(APP_TITLE, "FoldQC")
+
+    def test_ensemble_prepares_before_incremental_pymol_commit(self) -> None:
+        runner = _ManualJobRunner()
+        dialog, pred_files = self._ensemble_dialog(runner)
+        prepared = self._prepared_ensemble(pred_files)
+        objects = set()
+        viewer_calls = []
+        transforms = []
+        completion_states = []
+        coordinates = {
+            0: np.array(
+                [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+                dtype=np.float32,
+            ),
+            1: np.array(
+                [[4.0, -2.0, 1.0], [5.0, -2.0, 1.0], [4.0, -1.0, 1.0]],
+                dtype=np.float32,
+            ),
+        }
+
+        def load_object(_path, name):
+            viewer_calls.append(("load", name))
+            objects.add(name)
+            return True
+
+        def inspect(name, _token_map):
+            viewer_calls.append(("inspect", name))
+            rank = int(name.rsplit("_", 1)[1])
+            return types.SimpleNamespace(
+                paint_mapping=f"mapping:{name}",
+                representative_coords=coordinates[rank],
+            )
+
+        def group(name, members):
+            viewer_calls.append(("group", name, tuple(members)))
+            objects.add(name)
+
+        def show_success(_parent, _title, _message):
+            completion_states.append(
+                (
+                    dialog._loading_data,
+                    dialog._load_progress_dialog.visible,
+                    dialog._ensemble_btn.enabled,
+                )
+            )
+
+        with (
+            mock.patch.object(
+                gui_loading,
+                "_prepare_ensemble_job",
+                side_effect=lambda *_args: prepared,
+            ),
+            mock.patch.object(
+                gui_loading,
+                "load_structure_object_if_missing",
+                side_effect=load_object,
+            ),
+            mock.patch.object(
+                gui_loading, "inspect_object_tokens", side_effect=inspect
+            ),
+            mock.patch.object(
+                gui_loading,
+                "viewer_name_exists",
+                side_effect=lambda name: name in objects,
+            ),
+            mock.patch.object(gui_loading, "get_group_members", return_value=()),
+            mock.patch.object(gui_loading, "add_objects_to_group", side_effect=group),
+            mock.patch.object(
+                gui_loading,
+                "transform_object",
+                side_effect=lambda name, rotation, translation: transforms.append(
+                    (name, rotation, translation)
+                ),
+            ),
+            mock.patch.object(gui_loading, "rebuild"),
+            mock.patch.object(
+                _PYMOL.Qt.QtWidgets.QMessageBox,
+                "information",
+                side_effect=show_success,
+            ),
+        ):
+            dialog._show_ensemble()
+            self.assertEqual(viewer_calls, [])
+
+            runner.run_next()
+
+        self.assertEqual(
+            viewer_calls,
+            [
+                ("load", "target_model_0"),
+                ("load", "target_model_1"),
+                ("inspect", "target_model_0"),
+                ("inspect", "target_model_1"),
+                (
+                    "group",
+                    "target_ensemble",
+                    ("target_model_0", "target_model_1"),
+                ),
+            ],
+        )
+        self.assertEqual([item[0] for item in transforms], ["target_model_1"])
+        self.assertEqual([member.rank for member in dialog._ensemble_members], [0, 1])
+        self.assertTrue(dialog._ensemble_aligned)
+        np.testing.assert_allclose(dialog._ensemble_rmsd, np.zeros(3), atol=1e-6)
+        self.assertFalse(dialog._loading_data)
+        self.assertEqual(completion_states, [(False, False, True)])
+
+    def test_ensemble_skip_alignment_uses_current_coordinates(self) -> None:
+        runner = _ManualJobRunner()
+        dialog, pred_files = self._ensemble_dialog(runner)
+        dialog._ask_skip_ensemble_alignment = lambda: True
+        prepared = self._prepared_ensemble(pred_files, skip_alignment=True)
+        objects = set()
+        coords = {
+            0: np.zeros((3, 3), dtype=np.float32),
+            1: np.ones((3, 3), dtype=np.float32),
+        }
+
+        def load_object(_path, name):
+            objects.add(name)
+            return True
+
+        with (
+            mock.patch.object(
+                gui_loading, "_prepare_ensemble_job", return_value=prepared
+            ),
+            mock.patch.object(
+                gui_loading,
+                "load_structure_object_if_missing",
+                side_effect=load_object,
+            ),
+            mock.patch.object(
+                gui_loading,
+                "inspect_object_tokens",
+                side_effect=lambda name, _token_map: types.SimpleNamespace(
+                    paint_mapping=f"mapping:{name}",
+                    representative_coords=coords[int(name.rsplit("_", 1)[1])],
+                ),
+            ),
+            mock.patch.object(
+                gui_loading,
+                "viewer_name_exists",
+                side_effect=lambda name: name in objects,
+            ),
+            mock.patch.object(gui_loading, "get_group_members", return_value=()),
+            mock.patch.object(
+                gui_loading,
+                "add_objects_to_group",
+                side_effect=lambda name, _members: objects.add(name),
+            ),
+            mock.patch.object(gui_loading, "transform_object") as transform,
+            mock.patch.object(gui_loading, "rebuild"),
+        ):
+            dialog._show_ensemble()
+            runner.run_next()
+
+        transform.assert_not_called()
+        self.assertFalse(dialog._ensemble_aligned)
+        np.testing.assert_allclose(
+            dialog._ensemble_rmsd,
+            np.full(3, np.sqrt(3.0) / 2.0, dtype=np.float32),
+        )
+
+    def test_ensemble_mid_load_failure_rolls_back_new_objects(self) -> None:
+        runner = _ManualJobRunner()
+        dialog, pred_files = self._ensemble_dialog(runner)
+        prepared = self._prepared_ensemble(pred_files)
+        previous_members = [types.SimpleNamespace(rank=9, data=object())]
+        dialog._ensemble_members = previous_members
+        dialog._ensemble_group_name = "previous_ensemble"
+        objects = set()
+        deleted = []
+
+        def load_object(_path, name):
+            if name.endswith("_1"):
+                raise RuntimeError("second object failed")
+            objects.add(name)
+            return True
+
+        def delete_names(names):
+            for name in names:
+                deleted.append(name)
+                objects.discard(name)
+
+        with (
+            mock.patch.object(
+                gui_loading, "_prepare_ensemble_job", return_value=prepared
+            ),
+            mock.patch.object(
+                gui_loading,
+                "load_structure_object_if_missing",
+                side_effect=load_object,
+            ),
+            mock.patch.object(
+                gui_loading,
+                "viewer_name_exists",
+                side_effect=lambda name: name in objects,
+            ),
+            mock.patch.object(gui_loading, "get_group_members", return_value=()),
+            mock.patch.object(
+                gui_loading, "delete_viewer_names", side_effect=delete_names
+            ),
+            mock.patch.object(gui_loading, "rebuild"),
+        ):
+            dialog._show_ensemble()
+            runner.run_next()
+
+        self.assertIs(dialog._ensemble_members, previous_members)
+        self.assertEqual(dialog._ensemble_group_name, "previous_ensemble")
+        self.assertIn("target_model_0", deleted)
+        self.assertFalse(dialog._loading_data)
+        self.assertIn(
+            "second object failed", _PYMOL.Qt.QtWidgets.QMessageBox.criticals[-1][1]
+        )
+
+    def test_abandoned_ensemble_preparation_never_enters_pymol(self) -> None:
+        runner = _ManualJobRunner()
+        dialog, pred_files = self._ensemble_dialog(runner)
+        prepared = self._prepared_ensemble(pred_files)
+
+        with (
+            mock.patch.object(
+                gui_loading, "_prepare_ensemble_job", return_value=prepared
+            ),
+            mock.patch.object(
+                gui_loading,
+                "load_structure_object_if_missing",
+                side_effect=AssertionError("abandoned ensemble reached PyMOL"),
+            ),
+        ):
+            dialog._show_ensemble()
+            dialog._abandon_active_gui_job()
+            runner.run_next()
+
+        self.assertEqual(runner.disposed, [prepared])
+        self.assertIsNone(dialog._ensemble_members)
+
+    def test_ensemble_preparation_failure_does_not_touch_pymol(self) -> None:
+        runner = _ManualJobRunner()
+        dialog, _pred_files = self._ensemble_dialog(runner)
+
+        with (
+            mock.patch.object(
+                gui_loading,
+                "_prepare_ensemble_job",
+                side_effect=ValueError("incompatible ensemble"),
+            ),
+            mock.patch.object(
+                gui_loading,
+                "load_structure_object_if_missing",
+                side_effect=AssertionError("failed preparation reached PyMOL"),
+            ),
+        ):
+            dialog._show_ensemble()
+            runner.run_next()
+
+        self.assertIsNone(dialog._ensemble_members)
+        self.assertFalse(dialog._loading_data)
+        self.assertIn(
+            "incompatible ensemble",
+            _PYMOL.Qt.QtWidgets.QMessageBox.criticals[-1][1],
+        )
+
+    def test_ensemble_transform_failure_reverts_reused_objects(self) -> None:
+        runner = _ManualJobRunner()
+        dialog = self._session_dialog()
+        pred_files = _SessionPredictionFiles(Path("/tmp"), ranks=(0, 1, 2))
+        prepared = self._prepared_ensemble(pred_files)
+        dialog._pred_files = pred_files
+        dialog._pred_data = prepared.members[0].data
+        dialog._obj_combo.addItem("target_model_0", "target_model_0")
+        dialog._job_runner = runner
+        dialog._active_ensemble_viewer_transaction = None
+        dialog._ask_skip_ensemble_alignment = lambda: False
+        dialog._refresh_objects = lambda: None
+        dialog._select_object = lambda _name: None
+        dialog._update_property_availability = lambda: None
+        dialog._select_property = lambda _key: None
+        dialog._refresh_contextual_ui = lambda: None
+        dialog._save_session_settings = lambda: None
+        objects = {member.obj_name for member in prepared.members}
+        base = np.array(
+            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            dtype=np.float32,
+        )
+        transform_names = []
+
+        def apply_transform(name, _rotation, _translation):
+            transform_names.append(name)
+            if name == "target_model_2":
+                raise RuntimeError("transform failed")
+
+        with (
+            mock.patch.object(
+                gui_loading, "_prepare_ensemble_job", return_value=prepared
+            ),
+            mock.patch.object(
+                gui_loading,
+                "load_structure_object_if_missing",
+                return_value=False,
+            ),
+            mock.patch.object(
+                gui_loading,
+                "inspect_object_tokens",
+                side_effect=lambda name, _token_map: types.SimpleNamespace(
+                    paint_mapping=f"mapping:{name}",
+                    representative_coords=base + float(int(name.rsplit("_", 1)[1])),
+                ),
+            ),
+            mock.patch.object(
+                gui_loading,
+                "viewer_name_exists",
+                side_effect=lambda name: name in objects,
+            ),
+            mock.patch.object(gui_loading, "get_group_members", return_value=()),
+            mock.patch.object(gui_loading, "delete_viewer_names"),
+            mock.patch.object(
+                gui_loading, "transform_object", side_effect=apply_transform
+            ),
+            mock.patch.object(gui_loading, "rebuild"),
+        ):
+            dialog._show_ensemble()
+            runner.run_next()
+
+        self.assertEqual(
+            transform_names,
+            ["target_model_1", "target_model_2", "target_model_1"],
+        )
+        self.assertIsNone(dialog._ensemble_members)
+        self.assertIn(
+            "transform failed", _PYMOL.Qt.QtWidgets.QMessageBox.criticals[-1][1]
+        )
+
+    def test_close_between_ensemble_viewer_steps_rolls_back_and_stops(self) -> None:
+        runner = _ManualJobRunner()
+        dialog, pred_files = self._ensemble_dialog(runner)
+        prepared = self._prepared_ensemble(pred_files)
+        callbacks = []
+        objects = set()
+        loads = []
+        deleted = []
+
+        def load_object(_path, name):
+            loads.append(name)
+            objects.add(name)
+            return True
+
+        def delete_names(names):
+            for name in names:
+                deleted.append(name)
+                objects.discard(name)
+
+        with (
+            mock.patch.object(
+                gui_loading, "_prepare_ensemble_job", return_value=prepared
+            ),
+            mock.patch.object(
+                _PYMOL.Qt.QtCore.QTimer,
+                "singleShot",
+                side_effect=lambda _delay, callback: callbacks.append(callback),
+            ),
+            mock.patch.object(
+                gui_loading,
+                "load_structure_object_if_missing",
+                side_effect=load_object,
+            ),
+            mock.patch.object(
+                gui_loading,
+                "viewer_name_exists",
+                side_effect=lambda name: name in objects,
+            ),
+            mock.patch.object(gui_loading, "get_group_members", return_value=()),
+            mock.patch.object(
+                gui_loading, "delete_viewer_names", side_effect=delete_names
+            ),
+            mock.patch.object(gui_loading, "rebuild"),
+        ):
+            dialog._show_ensemble()
+            runner.run_next()
+            callbacks[1]()  # first zero-delay viewer continuation
+            self.assertEqual(loads, ["target_model_0"])
+
+            dialog._abandon_active_gui_job()
+            callbacks[2]()  # continuation queued by the first model load
+
+        self.assertEqual(loads, ["target_model_0"])
+        self.assertIn("target_model_0", deleted)
+        self.assertIsNone(dialog._active_ensemble_viewer_transaction)
 
     def test_plot_type_choices_include_ensemble_site_summary(self) -> None:
         self.assertEqual(

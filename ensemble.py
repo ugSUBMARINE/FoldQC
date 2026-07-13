@@ -12,7 +12,9 @@ object-based ensemble ordered by rank. This module provides tools to:
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -29,6 +31,9 @@ if TYPE_CHECKING:
     from .token_map import TokenMap
 
 
+PhaseReporter = Callable[[str], None]
+
+
 @dataclass
 class EnsembleMember:
     """One loaded prediction model in an object-based ensemble."""
@@ -38,6 +43,51 @@ class EnsembleMember:
     data: Any
     token_map: TokenMap
     paint_mapping: ObjectPaintMapping | None = None
+
+
+@dataclass(frozen=True)
+class PreparedEnsembleMember:
+    """One ensemble member prepared without accessing a molecular viewer."""
+
+    rank: int
+    model_label: str
+    obj_name: str
+    structure_path: Path
+    data: Any
+    token_map: TokenMap
+
+
+@dataclass(frozen=True)
+class PreparedEnsemble:
+    """Atomically prepared ensemble data borrowed from one prediction."""
+
+    pred_files: Any
+    group_name: str
+    members: tuple[PreparedEnsembleMember, ...]
+    skip_alignment: bool
+    reference_rank: int
+    core_indices: tuple[int, ...]
+    plddt_mean: np.ndarray
+    plddt_std: np.ndarray
+    _owns_prediction_files: bool = False
+
+
+@dataclass(frozen=True)
+class AlignmentTransform:
+    """Rigid transform for one non-reference ensemble member."""
+
+    rank: int
+    rotation: np.ndarray
+    translation: np.ndarray
+
+
+@dataclass(frozen=True)
+class AlignmentPlan:
+    """Pure alignment result ready to apply to viewer objects."""
+
+    transforms: tuple[AlignmentTransform, ...]
+    transformed_coords: tuple[np.ndarray, ...]
+    rmsd: np.ndarray
 
 
 @dataclass(frozen=True)
@@ -56,6 +106,129 @@ def default_group_name(pred_files) -> str:
     first_obj = pred_files.models[0].object_name
     obj_prefix = first_obj.rsplit("_", 1)[0]
     return f"{obj_prefix}_ensemble"
+
+
+def _ordered_token_identities(token_map: TokenMap) -> tuple[tuple, ...]:
+    return tuple(
+        (
+            token.chain_id,
+            token.res_num,
+            token.res_name,
+            token.atom_name if token.is_hetatm else None,
+        )
+        for token in token_map
+    )
+
+
+def validate_prepared_members(
+    members: Sequence[PreparedEnsembleMember],
+) -> None:
+    """Validate token order and pLDDT lengths before touching the viewer."""
+    validate_members(list(members))
+    reference = members[0]
+    reference_identities = _ordered_token_identities(reference.token_map)
+    for member in members[1:]:
+        if _ordered_token_identities(member.token_map) != reference_identities:
+            raise ValueError(
+                f"Token order mismatch for model_{member.rank}; ensemble models "
+                "must contain the same ordered prediction tokens."
+            )
+
+
+def _data_load_flags(existing: Any | None) -> dict[str, bool]:
+    """Return ensemble flags while preserving arrays already held by *existing*."""
+    return {
+        "load_pae": existing is not None and getattr(existing, "pae", None) is not None,
+        "load_pde": existing is not None and getattr(existing, "pde", None) is not None,
+        "load_contact_probs": existing is not None
+        and getattr(existing, "contact_probs", None) is not None,
+        "load_structure_plddt": True,
+        "load_plddt": True,
+    }
+
+
+def _has_plddt(data: Any | None) -> bool:
+    return data is not None and (
+        getattr(data, "plddt", None) is not None
+        or getattr(data, "structure_plddt", None) is not None
+    )
+
+
+def prepare_ensemble(
+    pred_files: Any,
+    *,
+    skip_alignment: bool,
+    existing_data_by_rank: Mapping[int, Any] | None = None,
+    report_phase: PhaseReporter | None = None,
+) -> PreparedEnsemble:
+    """Load and validate ensemble data without accessing Qt or PyMOL."""
+    from .loader import load_prediction_data
+    from .token_map import build_token_map
+
+    report = report_phase or (lambda _label: None)
+    models = tuple(pred_files.models)
+    if not models:
+        raise ValueError("No ensemble models were found.")
+    existing_data_by_rank = existing_data_by_rank or {}
+    prepared: list[PreparedEnsembleMember] = []
+    total = len(models)
+    for index, model in enumerate(models, start=1):
+        report(f"Preparing {model.display_label} ensemble data… ({index}/{total})")
+        existing = existing_data_by_rank.get(model.rank)
+        data = existing
+        if not _has_plddt(existing):
+            data = load_prediction_data(
+                pred_files,
+                model.rank,
+                **_data_load_flags(existing),
+            )
+        token_map = build_token_map(data.structure_path)
+        prepared.append(
+            PreparedEnsembleMember(
+                rank=model.rank,
+                model_label=model.display_label,
+                obj_name=model.object_name,
+                structure_path=Path(data.structure_path),
+                data=data,
+                token_map=token_map,
+            )
+        )
+
+    report("Validating ensemble token maps…")
+    validate_prepared_members(prepared)
+    reference = next((member for member in prepared if member.rank == 0), prepared[0])
+    reference_plddt = _member_plddt(reference)
+    core_indices: tuple[int, ...] = ()
+    if not skip_alignment:
+        core_indices = tuple(
+            select_alignment_core(reference.token_map, reference_plddt)
+        )
+        if len(core_indices) < 3:
+            raise ValueError(
+                "Automatic ensemble alignment requires at least 3 polymer tokens."
+            )
+
+    plddt_mean, plddt_std = compute_metric_consensus(
+        [_member_plddt(member) for member in prepared]
+    )
+    return PreparedEnsemble(
+        pred_files=pred_files,
+        group_name=default_group_name(pred_files),
+        members=tuple(prepared),
+        skip_alignment=skip_alignment,
+        reference_rank=reference.rank,
+        core_indices=core_indices,
+        plddt_mean=plddt_mean,
+        plddt_std=plddt_std,
+    )
+
+
+def _member_plddt(member: Any) -> np.ndarray:
+    data = member.data
+    plddt = data.plddt if data.plddt is not None else data.structure_plddt
+    if plddt is None:
+        raise ValueError(f"pLDDT data are not available for model_{member.rank}.")
+    return plddt
 
 
 def build_members(
@@ -232,6 +405,60 @@ def kabsch_transform(
         rotation = vt.T @ u.T
     translation = target_centroid - mobile_centroid @ rotation.T
     return rotation.astype(np.float64), translation.astype(np.float64)
+
+
+def invert_rigid_transform(
+    rotation: np.ndarray,
+    translation: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return the inverse of ``coords @ rotation.T + translation``."""
+    inverse_rotation = np.asarray(rotation, dtype=np.float64).T
+    inverse_translation = -np.asarray(translation, dtype=np.float64) @ np.asarray(
+        rotation, dtype=np.float64
+    )
+    return inverse_rotation, inverse_translation
+
+
+def calculate_alignment_plan(
+    members: Sequence[PreparedEnsembleMember],
+    coordinates_by_rank: Mapping[int, np.ndarray],
+    *,
+    reference_rank: int,
+    core_indices: Sequence[int],
+) -> AlignmentPlan:
+    """Calculate transforms and RMSD from coordinates already in the viewer."""
+    if len(core_indices) < 3:
+        raise ValueError("At least 3 polymer tokens are required for alignment.")
+    if reference_rank not in coordinates_by_rank:
+        raise ValueError(f"Reference rank {reference_rank} is not loaded.")
+
+    target_all = np.asarray(coordinates_by_rank[reference_rank], dtype=np.float32)
+    target_core = target_all[list(core_indices)]
+    transformed: list[np.ndarray] = []
+    transforms: list[AlignmentTransform] = []
+    for member in members:
+        current = np.asarray(coordinates_by_rank[member.rank], dtype=np.float32)
+        if current.shape != target_all.shape:
+            raise ValueError(
+                f"Coordinate shape mismatch for model_{member.rank}: "
+                f"{current.shape} vs {target_all.shape}."
+            )
+        if member.rank == reference_rank:
+            transformed.append(current)
+            continue
+        rotation, translation = kabsch_transform(
+            current[list(core_indices)],
+            target_core,
+        )
+        transforms.append(AlignmentTransform(member.rank, rotation, translation))
+        transformed.append((current @ rotation.T + translation).astype(np.float32))
+
+    transformed_tuple = tuple(transformed)
+    return AlignmentPlan(
+        transforms=tuple(transforms),
+        transformed_coords=transformed_tuple,
+        rmsd=compute_per_token_rmsd(list(transformed_tuple)),
+    )
 
 
 def align_objects_to_reference(
