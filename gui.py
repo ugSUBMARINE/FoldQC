@@ -73,6 +73,9 @@ class FoldQCPluginDialog(
             job_runner = QtJobRunner()
         self._job_runner = job_runner
         self._active_load_handle = None
+        self._active_data_continuation = None
+        self._active_data_error_title = f"{APP_TITLE} - error"
+        self._model_switch_previous_data = None
         self._load_progress_dialog = None
         self._progress_show_generation = 0
 
@@ -214,7 +217,7 @@ class FoldQCPluginDialog(
         """Persist lightweight GUI state for the next FoldQC dialog."""
         if getattr(self, "_restoring_settings", False):
             return
-        if getattr(self, "_loading_prediction", False):
+        if self._gui_job_is_busy():
             return
 
         try:
@@ -279,8 +282,8 @@ class FoldQCPluginDialog(
 
     def closeEvent(self, event) -> None:
         """Persist session state when the dialog closes."""
-        if getattr(self, "_loading_prediction", False):
-            self._abandon_prediction_load()
+        if self._gui_job_is_busy():
+            self._abandon_active_gui_job()
         else:
             self._save_session_settings()
         try:

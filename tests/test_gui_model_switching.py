@@ -886,6 +886,35 @@ class QtJobRunnerTests(unittest.TestCase):
         self.assertEqual(cleanup_calls, ["cleaned"])
         self.assertIsNone(queued[0]._value)
 
+    def test_abandoned_borrowed_prediction_result_does_not_cleanup_archive(
+        self,
+    ) -> None:
+        queued = []
+        cleanup_calls = []
+        pred_files = types.SimpleNamespace(
+            _temporary_directory=types.SimpleNamespace(
+                cleanup=lambda: cleanup_calls.append("cleaned")
+            )
+        )
+        result = types.SimpleNamespace(
+            pred_files=pred_files,
+            _owns_prediction_files=False,
+        )
+        runner = gui_jobs.QtJobRunner()
+
+        with mock.patch.object(gui_jobs._POOL, "start", side_effect=queued.append):
+            handle = runner.submit(
+                12,
+                lambda _report: result,
+                lambda *_args: None,
+                lambda *_args: self.fail("Abandoned job must not emit a result"),
+                lambda *_args: self.fail("Abandoned job must not emit an error"),
+            )
+
+        handle.abandon()
+        queued[0].run()
+        self.assertEqual(cleanup_calls, [])
+
 
 class GuiModelSwitchingTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -1595,6 +1624,336 @@ class GuiModelSwitchingTests(unittest.TestCase):
         self.assertIsNone(dialog._pred_files)
         self.assertEqual(_PYMOL.cmd.loads, [])
         self.assertEqual(dialog._job_runner.disposed, [discovery])
+
+    def test_model_switch_loads_in_worker_then_commits_on_completion(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            files = _SessionPredictionFiles(root, ranks=(0, 1))
+            old_data = types.SimpleNamespace(
+                provider="structure_only",
+                rank=0,
+                structure_path=files.structure_path(0),
+                structure_plddt=np.array([0.8], dtype=np.float32),
+                plddt=None,
+                confidence=None,
+                summary_confidence=None,
+                pae=None,
+                pde=None,
+                contact_probs=None,
+            )
+            new_data = types.SimpleNamespace(
+                provider="structure_only",
+                rank=1,
+                structure_path=files.structure_path(1),
+                structure_plddt=np.array([0.9], dtype=np.float32),
+                plddt=None,
+                confidence=None,
+                summary_confidence=None,
+                pae=None,
+                pde=None,
+                contact_probs=None,
+            )
+            dialog = self._session_dialog()
+            dialog._pred_files = files
+            dialog._pred_data = old_data
+            dialog._model_combo.addItem("model_0", 0)
+            dialog._model_combo.addItem("model_1", 1)
+            dialog._model_combo.setCurrentIndex(1)
+            dialog._obj_combo.addItem("target_model_0")
+            dialog._job_runner = _ManualJobRunner()
+            _PYMOL.cmd = _Cmd(objects={"target_model_0"}, enabled={"target_model_0"})
+            calls = []
+
+            def load_data(pred_files, rank, **flags):
+                calls.append((pred_files, rank, flags))
+                return new_data
+
+            with mock.patch(
+                "FoldQC.loader.load_prediction_data", side_effect=load_data
+            ):
+                dialog._on_model_changed()
+                self.assertIs(dialog._pred_data, old_data)
+                self.assertFalse(dialog._model_combo.isEnabled())
+                self.assertEqual(_PYMOL.cmd.loads, [])
+                dialog._job_runner.run_next()
+
+        self.assertIs(dialog._pred_data, new_data)
+        self.assertEqual(calls[0][1], 1)
+        self.assertEqual(
+            calls[0][2],
+            {
+                "load_pae": False,
+                "load_pde": False,
+                "load_contact_probs": False,
+            },
+        )
+        self.assertEqual(
+            _PYMOL.cmd.loads,
+            [(str(files.structure_path(1)), "target_model_1", 1, 1)],
+        )
+        self.assertFalse(dialog._loading_data)
+        self.assertTrue(dialog._model_combo.isEnabled())
+        self.assertEqual(self._settings()._values[SETTINGS_KEY_MODEL_RANK], 1)
+
+    def test_model_switch_failure_restores_committed_rank_and_data(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            files = _SessionPredictionFiles(root, ranks=(0, 1))
+            old_data = types.SimpleNamespace(rank=0)
+            dialog = self._session_dialog()
+            dialog._pred_files = files
+            dialog._pred_data = old_data
+            dialog._model_combo.addItem("model_0", 0)
+            dialog._model_combo.addItem("model_1", 1)
+            dialog._model_combo.setCurrentIndex(1)
+            dialog._obj_combo.addItem("target_model_0")
+            dialog._job_runner = _ManualJobRunner()
+            msg = _PYMOL.Qt.QtWidgets.QMessageBox
+
+            with mock.patch(
+                "FoldQC.loader.load_prediction_data",
+                side_effect=ValueError("broken model"),
+            ):
+                dialog._on_model_changed()
+                dialog._job_runner.run_next()
+
+        self.assertIs(dialog._pred_data, old_data)
+        self.assertEqual(dialog._model_combo.currentData(), 0)
+        self.assertFalse(dialog._loading_data)
+        self.assertEqual(msg.warnings, [(APP_TITLE, "broken model")])
+        self.assertEqual(self._settings()._values[SETTINGS_KEY_MODEL_RANK], 0)
+
+    def test_model_switch_viewer_failure_preserves_committed_state(self) -> None:
+        files = _SessionPredictionFiles(Path("/tmp"), ranks=(0, 1))
+        old_data = types.SimpleNamespace(rank=0)
+        new_data = types.SimpleNamespace(rank=1)
+        dialog = self._session_dialog()
+        dialog._pred_files = files
+        dialog._pred_data = old_data
+        dialog._model_combo.addItem("model_0", 0)
+        dialog._model_combo.addItem("model_1", 1)
+        dialog._model_combo.setCurrentIndex(1)
+        dialog._job_runner = _ManualJobRunner()
+
+        with (
+            mock.patch(
+                "FoldQC.loader.load_prediction_data",
+                return_value=new_data,
+            ),
+            mock.patch(
+                "FoldQC.gui_loading.ensure_structure_object",
+                side_effect=RuntimeError("viewer busy"),
+            ),
+        ):
+            dialog._on_model_changed()
+            dialog._job_runner.run_next()
+
+        self.assertIs(dialog._pred_data, old_data)
+        self.assertEqual(dialog._model_combo.currentData(), 0)
+        self.assertFalse(dialog._loading_data)
+
+    def test_selecting_committed_model_submits_no_job(self) -> None:
+        dialog = self._session_dialog()
+        dialog._pred_files = _SessionPredictionFiles(Path("/tmp"), ranks=(0,))
+        dialog._pred_data = types.SimpleNamespace(rank=0)
+        dialog._model_combo.addItem("model_0", 0)
+        dialog._job_runner = _ManualJobRunner()
+
+        dialog._on_model_changed()
+
+        self.assertEqual(dialog._job_runner.jobs, [])
+
+    def test_lazy_single_model_load_preserves_arrays_and_resumes_once(self) -> None:
+        files = _SessionPredictionFiles(Path("/tmp"), ranks=(0,))
+        old_pde = np.array([[1.0]], dtype=np.float32)
+        old_data = types.SimpleNamespace(
+            rank=0,
+            pae=None,
+            pde=old_pde,
+            contact_probs=None,
+            structure_plddt=np.array([0.8], dtype=np.float32),
+            plddt=None,
+        )
+        new_data = types.SimpleNamespace(
+            rank=0,
+            pae=np.array([[2.0]], dtype=np.float32),
+            pde=old_pde,
+            contact_probs=None,
+            structure_plddt=np.array([0.8], dtype=np.float32),
+            plddt=None,
+        )
+        dialog = self._session_dialog()
+        dialog._pred_files = files
+        dialog._pred_data = old_data
+        dialog._job_runner = _ManualJobRunner()
+        target = _PlotTarget(
+            kind="single",
+            label="target_model_0",
+            obj_name="target_model_0",
+            data=old_data,
+            token_map=_token_map(_token(0)),
+        )
+        calls = []
+        resumed = []
+
+        def load_data(pred_files, rank, **flags):
+            calls.append((pred_files, rank, flags))
+            return new_data
+
+        with mock.patch("FoldQC.loader.load_prediction_data", side_effect=load_data):
+            deferred = dialog._defer_action_for_data(
+                target,
+                {"load_pae": True},
+                lambda: resumed.append(dialog._pred_data),
+                error_title=f"{APP_TITLE} - error",
+            )
+            self.assertTrue(deferred)
+            self.assertIs(dialog._pred_data, old_data)
+            dialog._job_runner.run_next()
+
+        self.assertIs(dialog._pred_data, new_data)
+        self.assertEqual(resumed, [new_data])
+        self.assertTrue(calls[0][2]["load_pae"])
+        self.assertTrue(calls[0][2]["load_pde"])
+        self.assertTrue(calls[0][2]["load_structure_plddt"])
+
+    def test_lazy_action_with_loaded_arrays_runs_without_a_job(self) -> None:
+        files = _SessionPredictionFiles(Path("/tmp"), ranks=(0,))
+        data = types.SimpleNamespace(
+            rank=0,
+            pae=np.array([[1.0]], dtype=np.float32),
+            pde=None,
+            contact_probs=None,
+            structure_plddt=None,
+            plddt=None,
+        )
+        dialog = self._session_dialog()
+        dialog._pred_files = files
+        dialog._pred_data = data
+        dialog._job_runner = _ManualJobRunner()
+        target = _PlotTarget(
+            kind="single",
+            label="target_model_0",
+            obj_name="target_model_0",
+            data=data,
+            token_map=_token_map(_token(0)),
+        )
+
+        deferred = dialog._defer_action_for_data(
+            target,
+            {"load_pae": True},
+            lambda: self.fail("No continuation is owned when no job is needed"),
+            error_title=f"{APP_TITLE} - error",
+        )
+
+        self.assertFalse(deferred)
+        self.assertEqual(dialog._job_runner.jobs, [])
+
+    def test_lazy_ensemble_failure_commits_no_members(self) -> None:
+        files = _SessionPredictionFiles(Path("/tmp"), ranks=(0, 1))
+        old_data = [
+            types.SimpleNamespace(
+                rank=rank,
+                pae=None,
+                pde=None,
+                contact_probs=None,
+                structure_plddt=np.array([0.8], dtype=np.float32),
+                plddt=None,
+            )
+            for rank in (0, 1)
+        ]
+        members = [
+            types.SimpleNamespace(
+                rank=rank,
+                obj_name=f"target_model_{rank}",
+                data=old_data[rank],
+                token_map=_token_map(_token(0)),
+            )
+            for rank in (0, 1)
+        ]
+        dialog = self._session_dialog()
+        dialog._pred_files = files
+        dialog._ensemble_members = members
+        dialog._job_runner = _ManualJobRunner()
+        target = _PlotTarget(
+            kind="ensemble_group",
+            label="target_ensemble",
+            obj_name="target_model_0",
+            data=None,
+            token_map=members[0].token_map,
+            members=members,
+        )
+        resumed = []
+
+        def load_data(_pred_files, rank, **_flags):
+            if rank == 1:
+                raise ValueError("broken member")
+            return types.SimpleNamespace(
+                rank=rank,
+                pae=np.array([[2.0]], dtype=np.float32),
+                pde=None,
+                contact_probs=None,
+                structure_plddt=np.array([0.8], dtype=np.float32),
+                plddt=None,
+            )
+
+        with mock.patch("FoldQC.loader.load_prediction_data", side_effect=load_data):
+            dialog._defer_action_for_data(
+                target,
+                {"load_pae": True},
+                lambda: resumed.append(True),
+                error_title=f"{APP_TITLE} - error",
+            )
+            dialog._job_runner.run_next()
+
+        self.assertIs(members[0].data, old_data[0])
+        self.assertIs(members[1].data, old_data[1])
+        self.assertEqual(resumed, [])
+        self.assertFalse(dialog._loading_data)
+
+    def test_close_abandons_lazy_result_without_resuming_action(self) -> None:
+        files = _SessionPredictionFiles(Path("/tmp"), ranks=(0,))
+        old_data = types.SimpleNamespace(
+            rank=0,
+            pae=None,
+            pde=None,
+            contact_probs=None,
+            structure_plddt=None,
+            plddt=None,
+        )
+        new_data = types.SimpleNamespace(
+            rank=0,
+            pae=np.array([[1.0]], dtype=np.float32),
+            pde=None,
+            contact_probs=None,
+            structure_plddt=None,
+            plddt=None,
+        )
+        dialog = self._session_dialog()
+        dialog._pred_files = files
+        dialog._pred_data = old_data
+        dialog._job_runner = _ManualJobRunner()
+        target = _PlotTarget(
+            kind="single",
+            label="target_model_0",
+            obj_name="target_model_0",
+            data=old_data,
+            token_map=_token_map(_token(0)),
+        )
+        resumed = []
+
+        with mock.patch("FoldQC.loader.load_prediction_data", return_value=new_data):
+            dialog._defer_action_for_data(
+                target,
+                {"load_pae": True},
+                lambda: resumed.append(True),
+                error_title=f"{APP_TITLE} - error",
+            )
+            dialog.closeEvent(object())
+            dialog._job_runner.run_next()
+
+        self.assertIs(dialog._pred_data, old_data)
+        self.assertEqual(resumed, [])
 
     def test_close_event_saves_session_settings(self) -> None:
         dialog = self._session_dialog()
@@ -3583,7 +3942,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         self.assertEqual(len(msg.infos), 1)
         self.assertIn("PAE contact-filtered", msg.infos[0][1])
 
-    def test_pae_summary_plot_data_lazy_loads_single_model_and_scopes_x_only(
+    def test_pae_summary_plot_data_uses_preloaded_single_model_and_scopes_x_only(
         self,
     ) -> None:
         dialog = _new_dialog()
@@ -3595,33 +3954,19 @@ class GuiModelSwitchingTests(unittest.TestCase):
         dialog._pred_files = types.SimpleNamespace(has_pae=True, has_pde=False)
         dialog._pred_data = types.SimpleNamespace(
             rank=0,
-            pae=None,
+            pae=np.array(
+                [
+                    [0.0, 2.0, 10.0],
+                    [4.0, 0.0, 12.0],
+                    [6.0, 8.0, 0.0],
+                ],
+                dtype=np.float32,
+            ),
             pde=None,
             contact_probs=None,
             structure_plddt=None,
             plddt=None,
         )
-        load_calls = []
-
-        def reload_data(rank, **flags):
-            load_calls.append((rank, flags))
-            return types.SimpleNamespace(
-                rank=rank,
-                pae=np.array(
-                    [
-                        [0.0, 2.0, 10.0],
-                        [4.0, 0.0, 12.0],
-                        [6.0, 8.0, 0.0],
-                    ],
-                    dtype=np.float32,
-                ),
-                pde=None,
-                contact_probs=None,
-                structure_plddt=None,
-                plddt=None,
-            )
-
-        dialog._reload_prediction_data = reload_data
         target = _PlotTarget(
             kind="single",
             label="target_model_0",
@@ -3636,7 +3981,6 @@ class GuiModelSwitchingTests(unittest.TestCase):
 
         np.testing.assert_array_equal(x_values, np.array([2, 0], dtype=np.int32))
         self.assertEqual(ylabel, "PAE gap (Å)")
-        self.assertEqual(load_calls[0][1]["load_pae"], True)
         self.assertEqual(series[0][0], "row gap (other - within)")
         np.testing.assert_allclose(series[0][1], np.array([7.0, 9.0], dtype=np.float32))
         np.testing.assert_allclose(

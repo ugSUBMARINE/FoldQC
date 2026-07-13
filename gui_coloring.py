@@ -103,6 +103,17 @@ class ColoringController:
 
         key = self._prop_combo.currentData()
         prop = metrics.PROPERTY_BY_KEY.get(key, {})
+        target = self._resolve_plot_target()
+        if target is None:
+            return
+        if self._defer_action_for_data(
+            target,
+            metrics.metric_load_flags(prop),
+            self._apply_coloring,
+            error_title=f"{APP_TITLE} - error",
+        ):
+            return
+
         if metrics.PROPERTY_BY_KEY.get(key, {}).get("ensemble_level", False):
             QtWidgets.QMessageBox.information(
                 self,
@@ -190,6 +201,16 @@ class ColoringController:
         key = self._prop_combo.currentData()
         prop = metrics.PROPERTY_BY_KEY.get(key, {})
         if not target_members:
+            return
+        target = self._resolve_plot_target()
+        if target is None:
+            return
+        if self._defer_action_for_data(
+            target,
+            metrics.metric_load_flags(prop),
+            self._apply_coloring,
+            error_title=f"{APP_TITLE} - error",
+        ):
             return
 
         try:

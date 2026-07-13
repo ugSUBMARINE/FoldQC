@@ -473,22 +473,6 @@ class PlotController:
                 and target.data is self._pred_data
                 and getattr(self, "_pred_files", None) is not None
             ):
-                self._pred_data = self._reload_prediction_data(
-                    self._pred_data.rank,
-                    load_pae=getattr(self._pred_files, "has_pae", False)
-                    if self._pred_files
-                    else False,
-                    load_pde=getattr(self._pred_files, "has_pde", False)
-                    if self._pred_files
-                    else False,
-                    load_contact_probs=getattr(
-                        self._pred_files, "has_contact_probs", False
-                    )
-                    if self._pred_files
-                    else False,
-                    load_structure_plddt=True,
-                    load_plddt=True,
-                )
                 target.data = self._pred_data
             return plot_data.fingerprint_series_for_single(target.data, ref_indices)
 
@@ -557,6 +541,20 @@ class PlotController:
                 self, APP_TITLE, f"Unknown plot type: {plot_type}"
             )
 
+    def _fingerprint_load_flags(
+        self, *, include_contact_probs: bool
+    ) -> dict[str, bool]:
+        pred_files = getattr(self, "_pred_files", None)
+        return {
+            "load_pae": bool(pred_files and pred_files.has_pae),
+            "load_pde": bool(pred_files and pred_files.has_pde),
+            "load_contact_probs": bool(
+                include_contact_probs and pred_files and pred_files.has_contact_probs
+            ),
+            "load_structure_plddt": True,
+            "load_plddt": True,
+        }
+
     def _show_line_plot(self) -> None:
         """Open a token-indexed line plot for the selected property."""
         target = self._resolve_plot_target()
@@ -587,6 +585,13 @@ class PlotController:
             target.token_map, target.obj_name, required=prop.get("needs_ref", False)
         )
         if ref_indices is None:
+            return
+        if self._defer_action_for_data(
+            target,
+            metrics.metric_load_flags(prop),
+            self._show_line_plot,
+            error_title=f"{APP_TITLE} - error",
+        ):
             return
 
         try:
@@ -665,6 +670,17 @@ class PlotController:
             target.token_map, target.obj_name, required=False
         )
         if ref_indices is None:
+            return
+        flags = {
+            "load_pae": kind == "pae",
+            "load_pde": kind == "pde",
+        }
+        if self._defer_action_for_data(
+            target,
+            flags,
+            lambda: self._show_summary_plot(kind),
+            error_title=f"{APP_TITLE} - error",
+        ):
             return
 
         try:
@@ -745,6 +761,13 @@ class PlotController:
             target.token_map, target.obj_name, required=prop.get("needs_ref", False)
         )
         if ref_indices is None:
+            return
+        if self._defer_action_for_data(
+            target,
+            metrics.metric_load_flags(prop),
+            self._show_distribution_plot,
+            error_title=f"{APP_TITLE} - error",
+        ):
             return
 
         try:
@@ -840,6 +863,25 @@ class PlotController:
             )
             return
 
+        if self._pred_files is not None:
+            members = sorted(self._ensemble_members, key=lambda member: member.rank)
+            reference = members[0]
+            target = _PlotTarget(
+                kind="ensemble_group",
+                label=self._ensemble_group_name or "ensemble",
+                obj_name=reference.obj_name,
+                data=None,
+                token_map=reference.token_map,
+                members=members,
+            )
+            if self._defer_action_for_data(
+                target,
+                self._fingerprint_load_flags(include_contact_probs=False),
+                self._show_ensemble_site_summary,
+                error_title=f"{APP_TITLE} - error",
+            ):
+                return
+
         try:
             from . import plots
 
@@ -896,6 +938,19 @@ class PlotController:
             )
             if ref_indices is None:
                 return
+
+        flags = {
+            "load_pae": attr == "pae",
+            "load_pde": attr == "pde",
+            "load_contact_probs": attr == "contact_probs",
+        }
+        if self._defer_action_for_data(
+            target,
+            flags,
+            self._show_matrix_plot,
+            error_title=f"{APP_TITLE} - error",
+        ):
+            return
 
         try:
             from . import plots
@@ -984,6 +1039,14 @@ class PlotController:
             return
         cutoff = self._get_cutoff_threshold()
         if cutoff is None:
+            return
+
+        if self._defer_action_for_data(
+            target,
+            self._fingerprint_load_flags(include_contact_probs=True),
+            self._show_binding_site_fingerprint,
+            error_title=f"{APP_TITLE} - error",
+        ):
             return
 
         try:

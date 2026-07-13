@@ -422,91 +422,24 @@ class MetricController:
         ]
 
     def _ensure_current_data_for_property(self, prop: dict) -> None:
-        """Reload current single-model data if a lazy property needs more arrays."""
+        """Assert that asynchronous preflight supplied the property's arrays."""
         if self._pred_files is None or self._pred_data is None:
             raise ValueError("No prediction output loaded.")
         flags = metrics.metric_load_flags(prop)
-        data = self._pred_data
-        if prop.get("needs_any_plddt", False) and (
-            getattr(data, "structure_plddt", None) is not None
-            or getattr(data, "plddt", None) is not None
-        ):
-            flags["load_structure_plddt"] = False
-            flags["load_plddt"] = False
-        needs_reload = (
-            (flags["load_pae"] and getattr(data, "pae", None) is None)
-            or (flags["load_pde"] and getattr(data, "pde", None) is None)
-            or (
-                flags["load_contact_probs"]
-                and getattr(data, "contact_probs", None) is None
-            )
-            or (
-                flags["load_structure_plddt"]
-                and getattr(data, "structure_plddt", None) is None
-            )
-            or (flags["load_plddt"] and getattr(data, "plddt", None) is None)
+        self._require_loaded_data(
+            self._pred_data, flags, any_plddt=bool(prop.get("needs_any_plddt"))
         )
-        if needs_reload:
-            self._pred_data = self._reload_prediction_data(
-                data.rank,
-                load_pae=flags["load_pae"] or getattr(data, "pae", None) is not None,
-                load_pde=flags["load_pde"] or getattr(data, "pde", None) is not None,
-                load_contact_probs=flags["load_contact_probs"]
-                or getattr(data, "contact_probs", None) is not None,
-                load_structure_plddt=flags["load_structure_plddt"]
-                or getattr(data, "structure_plddt", None) is not None,
-                load_plddt=flags["load_plddt"]
-                or getattr(data, "plddt", None) is not None,
-            )
-
-    def _reload_prediction_data(self, rank: int, **flags):
-        """Load one model while preserving the provider-aware loader defaults."""
-        if self._pred_files is None:
-            raise ValueError("No prediction output loaded.")
-        from .loader import load_prediction_data
-
-        return load_prediction_data(self._pred_files, rank, **flags)
 
     def _ensure_member_data_for_property(self, member, prop: dict) -> None:
-        """Reload member data with large matrices only when the property needs them."""
+        """Assert that asynchronous preflight supplied a member's arrays."""
         if self._pred_files is None:
             raise ValueError("No prediction output loaded.")
         flags = metrics.metric_load_flags(prop)
-        needs_pae = flags["load_pae"]
-        needs_pde = flags["load_pde"]
-        needs_contact_probs = flags["load_contact_probs"]
-        needs_structure_plddt = flags["load_structure_plddt"]
-        needs_plddt = flags["load_plddt"]
-        if prop.get("needs_any_plddt", False) and (
-            getattr(member.data, "structure_plddt", None) is not None
-            or getattr(member.data, "plddt", None) is not None
-        ):
-            needs_structure_plddt = False
-            needs_plddt = False
-        if (
-            (needs_pae and getattr(member.data, "pae", None) is None)
-            or (needs_pde and getattr(member.data, "pde", None) is None)
-            or (
-                needs_contact_probs
-                and getattr(member.data, "contact_probs", None) is None
-            )
-            or (
-                needs_structure_plddt
-                and getattr(member.data, "structure_plddt", None) is None
-            )
-            or (needs_plddt and getattr(member.data, "plddt", None) is None)
-        ):
-            member.data = self._reload_prediction_data(
-                member.rank,
-                load_pae=needs_pae or getattr(member.data, "pae", None) is not None,
-                load_pde=needs_pde or getattr(member.data, "pde", None) is not None,
-                load_contact_probs=needs_contact_probs
-                or getattr(member.data, "contact_probs", None) is not None,
-                load_structure_plddt=needs_structure_plddt
-                or getattr(member.data, "structure_plddt", None) is not None,
-                load_plddt=needs_plddt
-                or getattr(member.data, "plddt", None) is not None,
-            )
+        self._require_loaded_data(
+            member.data,
+            flags,
+            any_plddt=bool(prop.get("needs_any_plddt")),
+        )
 
     def _ensure_member_data_for_plot(
         self,
@@ -518,37 +451,49 @@ class MetricController:
         load_structure_plddt: bool = False,
         load_plddt: bool = False,
     ) -> None:
-        """Reload an ensemble member while preserving already-loaded plot arrays."""
+        """Assert that asynchronous preflight supplied plot arrays."""
         if self._pred_files is None:
             raise ValueError("No prediction output loaded.")
-        data = member.data
-        if (
-            load_structure_plddt
-            and load_plddt
-            and (
-                getattr(data, "structure_plddt", None) is not None
-                or getattr(data, "plddt", None) is not None
-            )
-        ):
-            load_structure_plddt = False
-            load_plddt = False
-        needs_reload = (
-            (load_pae and getattr(data, "pae", None) is None)
-            or (load_pde and getattr(data, "pde", None) is None)
-            or (load_contact_probs and getattr(data, "contact_probs", None) is None)
-            or (load_structure_plddt and getattr(data, "structure_plddt", None) is None)
-            or (load_plddt and getattr(data, "plddt", None) is None)
+        self._require_loaded_data(
+            member.data,
+            {
+                "load_pae": load_pae,
+                "load_pde": load_pde,
+                "load_contact_probs": load_contact_probs,
+                "load_structure_plddt": load_structure_plddt,
+                "load_plddt": load_plddt,
+            },
+            any_plddt=load_structure_plddt and load_plddt,
         )
-        if not needs_reload:
-            return
 
-        member.data = self._reload_prediction_data(
-            member.rank,
-            load_pae=load_pae or getattr(data, "pae", None) is not None,
-            load_pde=load_pde or getattr(data, "pde", None) is not None,
-            load_contact_probs=load_contact_probs
-            or getattr(data, "contact_probs", None) is not None,
-            load_structure_plddt=load_structure_plddt
-            or getattr(data, "structure_plddt", None) is not None,
-            load_plddt=load_plddt or getattr(data, "plddt", None) is not None,
+    def _require_loaded_data(
+        self,
+        data,
+        flags: dict[str, bool],
+        *,
+        any_plddt: bool = False,
+    ) -> None:
+        """Raise if a ready-data continuation is missing required arrays."""
+        if any_plddt and (
+            getattr(data, "structure_plddt", None) is not None
+            or getattr(data, "plddt", None) is not None
+        ):
+            flags = dict(flags)
+            flags["load_structure_plddt"] = False
+            flags["load_plddt"] = False
+        fields = (
+            ("load_pae", "pae", "PAE"),
+            ("load_pde", "pde", "PDE"),
+            ("load_contact_probs", "contact_probs", "interaction probabilities"),
+            ("load_structure_plddt", "structure_plddt", "structure pLDDT"),
+            ("load_plddt", "plddt", "pLDDT"),
         )
+        missing = [
+            label
+            for flag, attr, label in fields
+            if flags.get(flag, False) and getattr(data, attr, None) is None
+        ]
+        if missing:
+            raise ValueError(
+                "Required prediction data are not available: " + ", ".join(missing)
+            )

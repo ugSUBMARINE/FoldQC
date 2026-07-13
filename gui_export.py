@@ -38,6 +38,18 @@ class ExportController:
 
     def _export_csv_to_path(self, path: str | Path) -> None:
         """Build and write CSV rows, reporting GUI errors consistently."""
+        if self._pred_files is not None:
+            key = self._prop_combo.currentData()
+            prop = metrics.PROPERTY_BY_KEY.get(key, {})
+            target = self._resolve_plot_target() if prop else None
+            if target is not None and not prop.get("ensemble_level", False):
+                if self._defer_action_for_data(
+                    target,
+                    metrics.metric_load_flags(prop),
+                    lambda: self._export_csv_to_path(path),
+                    error_title=f"{APP_TITLE} - export error",
+                ):
+                    return
         try:
             rows = self._build_csv_export_rows()
             if rows is None:

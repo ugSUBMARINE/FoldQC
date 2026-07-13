@@ -21,7 +21,7 @@ JobTask = Callable[[ProgressReporter], Any]
 def _cleanup_temporary_extraction(value: object) -> None:
     """Explicitly clean archive ownership carried by a discarded job result."""
     nested = getattr(value, "pred_files", None)
-    if nested is not None:
+    if nested is not None and getattr(value, "_owns_prediction_files", True):
         _cleanup_temporary_extraction(nested)
     temporary = getattr(value, "_temporary_directory", None)
     cleanup = getattr(temporary, "cleanup", None)

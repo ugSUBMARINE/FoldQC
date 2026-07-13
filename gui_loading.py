@@ -29,6 +29,42 @@ class InitialLoadResult:
     display_path: Path
 
 
+@dataclass(frozen=True)
+class ModelSwitchResult:
+    """One ranked model prepared without touching Qt widgets or PyMOL."""
+
+    pred_files: object
+    rank: int
+    data: object
+    _owns_prediction_files: bool = False
+
+
+@dataclass(frozen=True)
+class DataLoadItem:
+    """One current-model or ensemble-member lazy reload request."""
+
+    slot: str
+    rank: int
+    model_label: str
+    flags: tuple[tuple[str, bool], ...]
+    original_data: object
+    member: object | None = None
+    phase_arrays: tuple[str, ...] = ()
+    any_plddt: bool = False
+
+    def load_kwargs(self) -> dict[str, bool]:
+        return dict(self.flags)
+
+
+@dataclass(frozen=True)
+class DataLoadBatchResult:
+    """Atomically committable lazy data returned by one worker task."""
+
+    pred_files: object
+    loaded: tuple[tuple[DataLoadItem, object], ...]
+    _owns_prediction_files: bool = False
+
+
 def _session_path_for_candidate(discovery, candidate) -> Path:
     input_path = getattr(discovery, "input_path", None)
     if input_path is not None:
@@ -86,6 +122,39 @@ def _scan_and_load_initial_prediction(
     return InitialLoadResult(pred_files, pred_data, rank, display_path)
 
 
+def _load_rank_data(pred_files, rank: int, report_phase) -> ModelSwitchResult:
+    from .loader import load_prediction_data
+
+    model = pred_files.model(rank)
+    report_phase(f"Loading {model.display_label} data…")
+    data = load_prediction_data(
+        pred_files,
+        rank,
+        load_pae=False,
+        load_pde=False,
+        load_contact_probs=False,
+    )
+    return ModelSwitchResult(pred_files, rank, data)
+
+
+def _load_data_batch(pred_files, items: tuple[DataLoadItem, ...], report_phase):
+    from .loader import load_prediction_data
+
+    loaded = []
+    total = len(items)
+    for index, item in enumerate(items, start=1):
+        arrays = " and ".join(item.phase_arrays) or "metric data"
+        suffix = f" ({index}/{total})" if total > 1 else ""
+        report_phase(f"Loading {arrays} for {item.model_label}{suffix}…")
+        data = load_prediction_data(
+            pred_files,
+            item.rank,
+            **item.load_kwargs(),
+        )
+        loaded.append((item, data))
+    return DataLoadBatchResult(pred_files, tuple(loaded))
+
+
 def _score_table_has_values(value) -> bool:
     return isinstance(value, (dict, list)) and bool(value)
 
@@ -111,17 +180,27 @@ def _confidence_has_chain_iptm_metric_data(confidence) -> bool:
 
 
 class GuiLoadingController:
+    def _gui_job_is_busy(self) -> bool:
+        return bool(
+            getattr(self, "_loading_prediction", False)
+            or getattr(self, "_loading_data", False)
+        )
+
+    def _next_gui_job_request_id(self) -> int:
+        self._gui_job_request_id += 1
+        return self._gui_job_request_id
+
     def _load_prediction_dir(self) -> None:
         """Start background discovery for the selected prediction path."""
         path = self._dir_edit.text().strip()
         if not path:
             return
-        if getattr(self, "_loading_prediction", False):
+        if self._gui_job_is_busy():
             return
 
         self._loading_prediction = True
-        self._prediction_load_request_id += 1
-        request_id = self._prediction_load_request_id
+        request_id = self._next_gui_job_request_id()
+        self._prediction_load_request_id = request_id
         self._set_prediction_load_controls_enabled(False)
         self._schedule_load_progress(request_id, _discovery_phase(path))
 
@@ -142,6 +221,14 @@ class GuiLoadingController:
     def _prediction_load_is_active(self, request_id: int) -> bool:
         return bool(
             self._loading_prediction and request_id == self._prediction_load_request_id
+        )
+
+    def _data_load_is_active(self, request_id: int) -> bool:
+        return bool(self._loading_data and request_id == self._data_load_request_id)
+
+    def _load_progress_is_active(self, request_id: int) -> bool:
+        return self._prediction_load_is_active(request_id) or self._data_load_is_active(
+            request_id
         )
 
     def _on_prediction_load_progress(self, request_id: int, label: str) -> None:
@@ -295,12 +382,20 @@ class GuiLoadingController:
 
     def _abandon_prediction_load(self) -> None:
         """Detach the dialog from a running job without blocking for completion."""
+        self._abandon_active_gui_job()
+
+    def _abandon_active_gui_job(self) -> None:
+        """Invalidate any active GUI job without waiting for its worker."""
         handle = getattr(self, "_active_load_handle", None)
         if handle is not None:
             handle.abandon()
-        self._prediction_load_request_id += 1
+        request_id = self._next_gui_job_request_id()
+        self._prediction_load_request_id = request_id
+        self._data_load_request_id = request_id
         self._active_load_handle = None
+        self._active_data_continuation = None
         self._loading_prediction = False
+        self._loading_data = False
         self._hide_load_progress()
         self._set_prediction_load_controls_enabled(True)
 
@@ -362,7 +457,7 @@ class GuiLoadingController:
         )
 
     def _show_load_progress(self, request_id: int, generation: int) -> None:
-        if not self._prediction_load_is_active(request_id):
+        if not self._load_progress_is_active(request_id):
             return
         if generation != self._progress_show_generation:
             return
@@ -474,28 +569,397 @@ class GuiLoadingController:
                 pass  # coloring failure must not abort model selection
 
     def _on_model_changed(self) -> None:
-        """Load data for the newly selected rank and update the summary."""
+        """Start a transactional background load for the selected rank."""
         if self._pred_files is None:
             return
         rank = self._model_combo.currentData()
         if rank is None:
             return
+        committed_rank = getattr(self._pred_data, "rank", None)
+        if rank == committed_rank or self._gui_job_is_busy():
+            return
 
-        from .loader import load_prediction_data
+        pred_files = self._pred_files
+        self._model_switch_previous_data = self._pred_data
+        self._loading_data = True
+        request_id = self._next_gui_job_request_id()
+        self._data_load_request_id = request_id
+        self._set_prediction_load_controls_enabled(False)
+        model = pred_files.model(rank)
+        self._schedule_load_progress(
+            request_id,
+            f"Loading {model.display_label} data…",
+        )
+        handle = self._job_runner.submit(
+            request_id,
+            lambda report: _load_rank_data(pred_files, rank, report),
+            self._on_data_load_progress,
+            self._on_model_switch_ready,
+            self._on_model_switch_error,
+        )
+        if self._data_load_is_active(request_id):
+            self._active_load_handle = handle
 
+    def _on_data_load_progress(self, request_id: int, label: str) -> None:
+        if not self._data_load_is_active(request_id):
+            return
+        self._ensure_load_progress_dialog().setLabelText(label)
+
+    def _on_model_switch_ready(
+        self,
+        request_id: int,
+        result: ModelSwitchResult,
+    ) -> None:
+        if not self._data_load_is_active(request_id):
+            self._job_runner.dispose(result)
+            return
+        if result.pred_files is not self._pred_files:
+            self._job_runner.dispose(result)
+            self._finish_data_load(request_id)
+            return
+        self._active_load_handle = None
+        model = result.pred_files.model(result.rank)
+        self._on_data_load_progress(
+            request_id,
+            f"Loading {model.display_label} into PyMOL…",
+        )
+        QtCore.QTimer.singleShot(
+            0,
+            lambda: self._commit_model_switch(request_id, result),
+        )
+
+    def _commit_model_switch(
+        self,
+        request_id: int,
+        result: ModelSwitchResult,
+    ) -> None:
+        if not self._data_load_is_active(request_id):
+            self._job_runner.dispose(result)
+            return
+        if result.pred_files is not self._pred_files:
+            self._job_runner.dispose(result)
+            self._finish_data_load(request_id)
+            return
+
+        model = result.pred_files.model(result.rank)
+        structure_path = result.pred_files.structure_path(result.rank)
         try:
-            data = load_prediction_data(
-                self._pred_files,
-                rank,
-                load_pae=False,
-                load_pde=False,
-                load_contact_probs=False,
+            did_load = ensure_structure_object(
+                structure_path,
+                model.object_name,
+                zoom=True,
             )
         except Exception as exc:
+            logger.exception("Could not load the selected prediction model into PyMOL")
+            self._rollback_model_switch()
+            self._finish_data_load(request_id, save_session=True)
+            QtWidgets.QMessageBox.warning(
+                self,
+                APP_TITLE,
+                f"Could not load or show {structure_path.name}:\n{exc}",
+            )
+            return
+
+        try:
+            self._activate_model_data(
+                result.rank,
+                result.data,
+                prepared_object=(model.object_name, did_load),
+            )
+        except Exception as exc:
+            logger.exception("Could not activate the selected prediction model")
+            self._rollback_model_switch()
+            self._finish_data_load(request_id, save_session=True)
             QtWidgets.QMessageBox.warning(self, APP_TITLE, str(exc))
             return
 
-        self._activate_model_data(rank, data)
+        self._finish_data_load(request_id, save_session=True)
+
+    def _on_model_switch_error(self, request_id: int, failure) -> None:
+        if not self._data_load_is_active(request_id):
+            return
+        logger.error("Background model switch failed:\n%s", failure.traceback_text)
+        self._rollback_model_switch()
+        self._finish_data_load(request_id, save_session=True)
+        QtWidgets.QMessageBox.warning(self, APP_TITLE, failure.message)
+
+    def _restore_committed_model_rank(self) -> None:
+        rank = getattr(self._pred_data, "rank", None)
+        if rank is None:
+            return
+        self._model_combo.blockSignals(True)
+        try:
+            self._select_model_rank(rank)
+        finally:
+            self._model_combo.blockSignals(False)
+
+    def _rollback_model_switch(self) -> None:
+        previous = getattr(self, "_model_switch_previous_data", None)
+        if previous is not None and self._pred_data is not previous:
+            self._pred_data = previous
+            self._clear_token_map_cache()
+            self._update_confidence_summary()
+            self._update_property_availability()
+        self._restore_committed_model_rank()
+
+    def _finish_data_load(
+        self,
+        request_id: int,
+        *,
+        save_session: bool = False,
+    ) -> None:
+        if request_id != self._data_load_request_id:
+            return
+        self._active_load_handle = None
+        self._active_data_continuation = None
+        self._model_switch_previous_data = None
+        self._loading_data = False
+        self._hide_load_progress()
+        self._set_prediction_load_controls_enabled(True)
+        self._refresh_contextual_ui()
+        if save_session:
+            self._save_session_settings()
+
+    def _defer_action_for_data(
+        self,
+        target,
+        requested_flags: dict[str, bool],
+        continuation,
+        *,
+        error_title: str,
+    ) -> bool:
+        """Submit missing lazy arrays and resume *continuation* after commit."""
+        if self._pred_files is None:
+            return False
+        items = self._data_load_items_for_target(target, requested_flags)
+        if not items:
+            return False
+        if self._gui_job_is_busy():
+            return True
+
+        pred_files = self._pred_files
+        self._loading_data = True
+        request_id = self._next_gui_job_request_id()
+        self._data_load_request_id = request_id
+        self._active_data_continuation = continuation
+        self._active_data_error_title = error_title
+        self._set_prediction_load_controls_enabled(False)
+        first = items[0]
+        arrays = " and ".join(first.phase_arrays) or "metric data"
+        self._schedule_load_progress(
+            request_id,
+            f"Loading {arrays} for {first.model_label}…",
+        )
+        batch = tuple(items)
+        handle = self._job_runner.submit(
+            request_id,
+            lambda report: _load_data_batch(pred_files, batch, report),
+            self._on_data_load_progress,
+            self._on_lazy_data_ready,
+            self._on_lazy_data_error,
+        )
+        if self._data_load_is_active(request_id):
+            self._active_load_handle = handle
+        return True
+
+    def _data_load_items_for_target(
+        self,
+        target,
+        requested_flags: dict[str, bool],
+    ) -> list[DataLoadItem]:
+        if target is None:
+            return []
+        slots = []
+        if target.kind == "single":
+            if target.data is self._pred_data and self._pred_data is not None:
+                slots.append(("current", self._pred_data, None))
+        elif target.kind == "ensemble_member":
+            for member in target.members or []:
+                slots.append(("member", member.data, member))
+        elif target.kind == "ensemble_group":
+            for member in sorted(target.members or [], key=lambda item: item.rank):
+                slots.append(("member", member.data, member))
+
+        items = []
+        seen = set()
+        for slot, data, member in slots:
+            key = (slot, id(member) if member is not None else 0)
+            if key in seen:
+                continue
+            seen.add(key)
+            item = self._data_load_item(
+                slot,
+                data,
+                member,
+                requested_flags,
+            )
+            if item is not None:
+                items.append(item)
+        return items
+
+    def _data_load_item(
+        self,
+        slot: str,
+        data,
+        member,
+        requested_flags: dict[str, bool],
+    ) -> DataLoadItem | None:
+        flag_attrs = {
+            "load_pae": ("pae", "PAE"),
+            "load_pde": ("pde", "PDE"),
+            "load_contact_probs": ("contact_probs", "interaction probabilities"),
+            "load_structure_plddt": ("structure_plddt", "pLDDT"),
+            "load_plddt": ("plddt", "pLDDT"),
+        }
+        requested = {
+            name: bool(requested_flags.get(name, False)) for name in flag_attrs
+        }
+        any_plddt = requested["load_structure_plddt"] and requested["load_plddt"]
+        if (
+            requested["load_structure_plddt"]
+            and requested["load_plddt"]
+            and (
+                getattr(data, "structure_plddt", None) is not None
+                or getattr(data, "plddt", None) is not None
+            )
+        ):
+            requested["load_structure_plddt"] = False
+            requested["load_plddt"] = False
+
+        missing = [
+            name
+            for name, (attr, _label) in flag_attrs.items()
+            if requested[name] and getattr(data, attr, None) is None
+        ]
+        if not missing:
+            return None
+
+        flags = {
+            name: requested[name] or getattr(data, attr, None) is not None
+            for name, (attr, _label) in flag_attrs.items()
+        }
+        phase_arrays = tuple(dict.fromkeys(flag_attrs[name][1] for name in missing))
+        rank = int(member.rank if member is not None else data.rank)
+        model = self._pred_files.model(rank)
+        return DataLoadItem(
+            slot=slot,
+            rank=rank,
+            model_label=model.display_label,
+            flags=tuple(flags.items()),
+            original_data=data,
+            member=member,
+            phase_arrays=phase_arrays,
+            any_plddt=any_plddt,
+        )
+
+    def _on_lazy_data_ready(
+        self,
+        request_id: int,
+        result: DataLoadBatchResult,
+    ) -> None:
+        if not self._data_load_is_active(request_id):
+            self._job_runner.dispose(result)
+            return
+        if (
+            result.pred_files is not self._pred_files
+            or not self._lazy_result_is_current(result)
+        ):
+            self._job_runner.dispose(result)
+            self._finish_data_load(request_id)
+            return
+
+        try:
+            for item, data in result.loaded:
+                self._validate_lazy_loaded_item(item, data)
+        except Exception as exc:
+            title = getattr(
+                self,
+                "_active_data_error_title",
+                f"{APP_TITLE} - error",
+            )
+            self._finish_data_load(request_id)
+            QtWidgets.QMessageBox.critical(self, title, str(exc))
+            return
+
+        self._active_load_handle = None
+        for item, data in result.loaded:
+            if item.slot == "current":
+                self._pred_data = data
+            else:
+                item.member.data = data
+
+        continuation = self._active_data_continuation
+        self._on_data_load_progress(request_id, "Preparing requested action…")
+        QtCore.QTimer.singleShot(
+            0,
+            lambda: self._resume_lazy_action(request_id, continuation),
+        )
+
+    def _lazy_result_is_current(self, result: DataLoadBatchResult) -> bool:
+        for item, _data in result.loaded:
+            if item.slot == "current":
+                if self._pred_data is not item.original_data:
+                    return False
+            elif item.member is None or item.member.data is not item.original_data:
+                return False
+            elif item.member not in (self._ensemble_members or []):
+                return False
+        return True
+
+    def _validate_lazy_loaded_item(self, item: DataLoadItem, data) -> None:
+        flags = item.load_kwargs()
+        if item.any_plddt and (
+            getattr(data, "structure_plddt", None) is not None
+            or getattr(data, "plddt", None) is not None
+        ):
+            flags["load_structure_plddt"] = False
+            flags["load_plddt"] = False
+        fields = (
+            ("load_pae", "pae", "PAE"),
+            ("load_pde", "pde", "PDE"),
+            ("load_contact_probs", "contact_probs", "interaction probabilities"),
+            ("load_structure_plddt", "structure_plddt", "structure pLDDT"),
+            ("load_plddt", "plddt", "pLDDT"),
+        )
+        missing = [
+            label
+            for flag, attr, label in fields
+            if flags.get(flag, False) and getattr(data, attr, None) is None
+        ]
+        if missing:
+            raise ValueError(
+                f"{item.model_label} did not provide required prediction data: "
+                + ", ".join(missing)
+            )
+
+    def _resume_lazy_action(self, request_id: int, continuation) -> None:
+        if not self._data_load_is_active(request_id):
+            return
+        try:
+            if continuation is not None:
+                continuation()
+        except Exception as exc:
+            logger.exception("Could not resume the requested action")
+            title = getattr(
+                self,
+                "_active_data_error_title",
+                f"{APP_TITLE} - error",
+            )
+            QtWidgets.QMessageBox.critical(self, title, str(exc))
+        finally:
+            self._finish_data_load(request_id)
+
+    def _on_lazy_data_error(self, request_id: int, failure) -> None:
+        if not self._data_load_is_active(request_id):
+            return
+        logger.error("Background lazy-data load failed:\n%s", failure.traceback_text)
+        title = getattr(
+            self,
+            "_active_data_error_title",
+            f"{APP_TITLE} - error",
+        )
+        self._finish_data_load(request_id)
+        QtWidgets.QMessageBox.critical(self, title, failure.message)
 
     def _activate_model_data(
         self,
