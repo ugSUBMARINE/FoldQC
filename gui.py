@@ -76,6 +76,7 @@ class FoldQCPluginDialog(
         self._active_data_continuation = None
         self._active_data_error_title = f"{APP_TITLE} - error"
         self._model_switch_previous_data = None
+        self._model_switch_previous_token_context = None
         self._active_ensemble_viewer_transaction = None
         self._load_progress_dialog = None
         self._progress_show_generation = 0

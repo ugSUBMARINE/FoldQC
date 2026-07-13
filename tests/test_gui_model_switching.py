@@ -925,6 +925,12 @@ class GuiModelSwitchingTests(unittest.TestCase):
         msg.questions.clear()
         msg.question_response = msg.Yes
         _PYMOL.Qt.QtCore.QSettings._store.clear()
+        token_map_patcher = mock.patch(
+            "FoldQC.token_map.build_token_map",
+            return_value=_token_map(_token(0)),
+        )
+        self._build_token_map = token_map_patcher.start()
+        self.addCleanup(token_map_patcher.stop)
 
     def _settings(self):
         dialog = _new_dialog()
@@ -1730,6 +1736,52 @@ class GuiModelSwitchingTests(unittest.TestCase):
             [(str(files.structure_path(0)), "target_model_0", 1, 1)],
         )
 
+    def test_initial_token_map_is_prepared_in_worker_and_reused_on_commit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            files = _SessionPredictionFiles(root, ranks=(0,))
+            candidate = _candidate("target", path=root / "target")
+            discovery = _Discovery([candidate], [(candidate, files)])
+            data = types.SimpleNamespace(
+                provider="structure_only",
+                rank=0,
+                structure_path=files.structure_path(0),
+                structure_plddt=np.array([0.8], dtype=np.float32),
+                plddt=None,
+                confidence=None,
+                summary_confidence=None,
+                pae=None,
+                pde=None,
+                contact_probs=None,
+            )
+            dialog = self._session_dialog()
+            dialog._dir_edit.setText(str(root))
+            dialog._job_runner = _ManualJobRunner()
+            _PYMOL.cmd = _Cmd()
+            prepared_map = self._build_token_map.return_value
+            self._build_token_map.reset_mock()
+
+            with (
+                mock.patch(
+                    "FoldQC.loader.discover_prediction_candidates",
+                    return_value=discovery,
+                ),
+                mock.patch(
+                    "FoldQC.loader.load_prediction_data",
+                    return_value=data,
+                ),
+            ):
+                dialog._load_prediction_dir()
+                self._build_token_map.assert_not_called()
+                dialog._job_runner.run_next()  # discovery
+                self._build_token_map.assert_not_called()
+                dialog._job_runner.run_next()  # scan, data, and token map
+
+        self._build_token_map.assert_called_once_with(data.structure_path)
+        self.assertIs(dialog._token_map, prepared_map)
+        self.assertEqual(dialog._token_map_obj, "target_model_0")
+        self.assertEqual(dialog._token_map_structure_path, data.structure_path)
+
     def test_load_prediction_dir_keeps_archive_input_path_in_text_field(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -2107,6 +2159,8 @@ class GuiModelSwitchingTests(unittest.TestCase):
                 calls.append((pred_files, rank, flags))
                 return new_data
 
+            prepared_map = self._build_token_map.return_value
+            self._build_token_map.reset_mock()
             with mock.patch(
                 "FoldQC.loader.load_prediction_data", side_effect=load_data
             ):
@@ -2114,6 +2168,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
                 self.assertIs(dialog._pred_data, old_data)
                 self.assertFalse(dialog._model_combo.isEnabled())
                 self.assertEqual(_PYMOL.cmd.loads, [])
+                self._build_token_map.assert_not_called()
                 dialog._job_runner.run_next()
 
         self.assertIs(dialog._pred_data, new_data)
@@ -2133,6 +2188,9 @@ class GuiModelSwitchingTests(unittest.TestCase):
         self.assertFalse(dialog._loading_data)
         self.assertTrue(dialog._model_combo.isEnabled())
         self.assertEqual(self._settings()._values[SETTINGS_KEY_MODEL_RANK], 1)
+        self._build_token_map.assert_called_once_with(new_data.structure_path)
+        self.assertIs(dialog._token_map, prepared_map)
+        self.assertEqual(dialog._token_map_obj, "target_model_1")
 
     def test_model_switch_failure_restores_committed_rank_and_data(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2190,6 +2248,76 @@ class GuiModelSwitchingTests(unittest.TestCase):
         self.assertIs(dialog._pred_data, old_data)
         self.assertEqual(dialog._model_combo.currentData(), 0)
         self.assertFalse(dialog._loading_data)
+
+    def test_model_switch_activation_failure_restores_previous_token_context(
+        self,
+    ) -> None:
+        files = _SessionPredictionFiles(Path("/tmp"), ranks=(0, 1))
+        old_data = types.SimpleNamespace(
+            provider="structure_only",
+            rank=0,
+            structure_path=files.structure_path(0),
+            structure_plddt=np.array([0.8], dtype=np.float32),
+            plddt=None,
+            confidence=None,
+            summary_confidence=None,
+            pae=None,
+            pde=None,
+            contact_probs=None,
+        )
+        new_data = types.SimpleNamespace(
+            provider="structure_only",
+            rank=1,
+            structure_path=files.structure_path(1),
+            structure_plddt=np.array([0.9], dtype=np.float32),
+            plddt=None,
+            confidence=None,
+            summary_confidence=None,
+            pae=None,
+            pde=None,
+            contact_probs=None,
+        )
+        old_map = _token_map(_token(0, res_num=7))
+        old_mapping = object()
+        old_warning = (str(old_data.structure_path), "target_model_0")
+        dialog = self._session_dialog()
+        dialog._pred_files = files
+        dialog._pred_data = old_data
+        dialog._token_map = old_map
+        dialog._token_map_obj = "target_model_0"
+        dialog._token_map_structure_path = old_data.structure_path
+        dialog._paint_mappings = {old_warning: old_mapping}
+        dialog._accepted_token_overlap_warnings = {old_warning}
+        dialog._model_combo.addItem("model_0", 0)
+        dialog._model_combo.addItem("model_1", 1)
+        dialog._model_combo.setCurrentIndex(1)
+        dialog._job_runner = _ManualJobRunner()
+
+        with (
+            mock.patch(
+                "FoldQC.loader.load_prediction_data",
+                return_value=new_data,
+            ),
+            mock.patch(
+                "FoldQC.gui_loading.ensure_structure_object",
+                return_value=False,
+            ),
+            mock.patch.object(
+                dialog,
+                "_activate_prepared_model_object",
+                side_effect=RuntimeError("activation failed"),
+            ),
+        ):
+            dialog._on_model_changed()
+            dialog._job_runner.run_next()
+
+        self.assertIs(dialog._pred_data, old_data)
+        self.assertIs(dialog._token_map, old_map)
+        self.assertEqual(dialog._token_map_obj, "target_model_0")
+        self.assertEqual(dialog._token_map_structure_path, old_data.structure_path)
+        self.assertIs(dialog._paint_mappings[old_warning], old_mapping)
+        self.assertEqual(dialog._accepted_token_overlap_warnings, {old_warning})
+        self.assertEqual(dialog._model_combo.currentData(), 0)
 
     def test_selecting_committed_model_submits_no_job(self) -> None:
         dialog = self._session_dialog()
@@ -3127,6 +3255,22 @@ class GuiModelSwitchingTests(unittest.TestCase):
         self.assertIsNone(dialog._token_map)
         self.assertEqual(dialog._paint_mappings, {})
         self.assertEqual(dialog._accepted_token_overlap_warnings, set())
+
+    def test_prepared_token_map_is_reused_for_another_viewer_target(self) -> None:
+        path = Path("/tmp/target_model_0.cif")
+        prepared_map = _token_map(_token(0))
+        dialog = _new_dialog()
+        dialog._pred_data = types.SimpleNamespace(structure_path=path)
+        dialog._token_map = prepared_map
+        dialog._token_map_obj = "target_model_0"
+        dialog._token_map_structure_path = path
+        self._build_token_map.reset_mock()
+
+        dialog._build_token_map_if_needed("other_viewer_object")
+
+        self._build_token_map.assert_not_called()
+        self.assertIs(dialog._token_map, prepared_map)
+        self.assertEqual(dialog._token_map_obj, "other_viewer_object")
 
     def test_plddt_class_coloring_uses_token_overlap_warning(self) -> None:
         cmd = _Cmd(objects=("other",), enabled=("other",))

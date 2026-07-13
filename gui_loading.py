@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -30,6 +31,9 @@ APP_TITLE = "FoldQC"
 VIEWER_NAME = get_viewer_name()
 logger = logging.getLogger(__name__)
 
+if TYPE_CHECKING:
+    from .token_map import TokenMap
+
 _ARCHIVE_SUFFIXES = (".zip", ".tar", ".tar.gz", ".tgz")
 
 
@@ -39,6 +43,7 @@ class InitialLoadResult:
 
     pred_files: object
     pred_data: object
+    token_map: TokenMap
     rank: int
     display_path: Path
 
@@ -50,6 +55,7 @@ class ModelSwitchResult:
     pred_files: object
     rank: int
     data: object
+    token_map: TokenMap
     _owns_prediction_files: bool = False
 
 
@@ -132,6 +138,7 @@ def _scan_and_load_initial_prediction(
     report_phase,
 ) -> InitialLoadResult:
     from .loader import load_prediction_data
+    from .token_map import build_token_map
 
     display_path = _session_path_for_candidate(discovery, candidate)
     report_phase(f"Scanning {candidate.provider_label} output…")
@@ -154,11 +161,14 @@ def _scan_and_load_initial_prediction(
         load_pde=False,
         load_contact_probs=False,
     )
-    return InitialLoadResult(pred_files, pred_data, rank, display_path)
+    report_phase(f"Preparing {model.display_label} token map…")
+    token_map = build_token_map(pred_data.structure_path)
+    return InitialLoadResult(pred_files, pred_data, token_map, rank, display_path)
 
 
 def _load_rank_data(pred_files, rank: int, report_phase) -> ModelSwitchResult:
     from .loader import load_prediction_data
+    from .token_map import build_token_map
 
     model = pred_files.model(rank)
     report_phase(f"Loading {model.display_label} data…")
@@ -169,7 +179,9 @@ def _load_rank_data(pred_files, rank: int, report_phase) -> ModelSwitchResult:
         load_pde=False,
         load_contact_probs=False,
     )
-    return ModelSwitchResult(pred_files, rank, data)
+    report_phase(f"Preparing {model.display_label} token map…")
+    token_map = build_token_map(data.structure_path)
+    return ModelSwitchResult(pred_files, rank, data, token_map)
 
 
 def _load_data_batch(pred_files, items: tuple[DataLoadItem, ...], report_phase):
@@ -397,6 +409,7 @@ class GuiLoadingController:
                 result.rank,
                 result.pred_data,
                 prepared_object=(obj_name, did_load),
+                prepared_token_map=result.token_map,
             )
         except Exception as exc:
             logger.exception("Could not activate the initial prediction model")
@@ -445,6 +458,8 @@ class GuiLoadingController:
         self._data_load_request_id = request_id
         self._active_load_handle = None
         self._active_data_continuation = None
+        self._model_switch_previous_data = None
+        self._model_switch_previous_token_context = None
         self._loading_prediction = False
         self._loading_data = False
         self._hide_load_progress()
@@ -632,6 +647,7 @@ class GuiLoadingController:
 
         pred_files = self._pred_files
         self._model_switch_previous_data = self._pred_data
+        self._model_switch_previous_token_context = self._capture_token_context()
         self._loading_data = True
         request_id = self._next_gui_job_request_id()
         self._data_load_request_id = request_id
@@ -716,6 +732,7 @@ class GuiLoadingController:
                 result.rank,
                 result.data,
                 prepared_object=(model.object_name, did_load),
+                prepared_token_map=result.token_map,
             )
         except Exception as exc:
             logger.exception("Could not activate the selected prediction model")
@@ -746,9 +763,13 @@ class GuiLoadingController:
 
     def _rollback_model_switch(self) -> None:
         previous = getattr(self, "_model_switch_previous_data", None)
-        if previous is not None and self._pred_data is not previous:
+        restored_data = previous is not None and self._pred_data is not previous
+        if restored_data:
             self._pred_data = previous
-            self._clear_token_map_cache()
+        token_context = getattr(self, "_model_switch_previous_token_context", None)
+        if token_context is not None:
+            self._restore_token_context(token_context)
+        if restored_data:
             self._update_confidence_summary()
             self._update_property_availability()
         self._restore_committed_model_rank()
@@ -764,6 +785,7 @@ class GuiLoadingController:
         self._active_load_handle = None
         self._active_data_continuation = None
         self._model_switch_previous_data = None
+        self._model_switch_previous_token_context = None
         self._loading_data = False
         self._hide_load_progress()
         self._set_prediction_load_controls_enabled(True)
@@ -1018,10 +1040,20 @@ class GuiLoadingController:
         data,
         *,
         prepared_object: tuple[str, bool] | None = None,
+        prepared_token_map: TokenMap | None = None,
     ) -> None:
         """Commit loaded model data and perform main-thread viewer/UI updates."""
+        obj_name = (
+            prepared_object[0]
+            if prepared_object is not None
+            else self._expected_object_name(rank)
+        )
         self._pred_data = data
         self._clear_token_map_cache()
+        if prepared_token_map is not None:
+            self._token_map = prepared_token_map
+            self._token_map_obj = obj_name
+            self._token_map_structure_path = data.structure_path
         self._update_confidence_summary()
         self._update_property_availability()
         pending_metric = getattr(self._pending_session_restore, "metric_key", None)
@@ -1034,8 +1066,10 @@ class GuiLoadingController:
         if prepared_object is None:
             self._ensure_model_object(rank, paint=True)
         else:
-            obj_name, did_load = prepared_object
-            self._activate_prepared_model_object(obj_name, did_load, paint=True)
+            prepared_obj_name, did_load = prepared_object
+            self._activate_prepared_model_object(
+                prepared_obj_name, did_load, paint=True
+            )
         pending_target = getattr(self._pending_session_restore, "target_name", None)
         if pending_target and self._combo_contains_text(
             self._obj_combo, pending_target
@@ -1201,6 +1235,28 @@ class GuiLoadingController:
         self._token_map_structure_path = None  # type: ignore[attr-defined]
         self._paint_mappings = {}
         self._accepted_token_overlap_warnings = set()
+
+    def _capture_token_context(self) -> tuple:
+        """Snapshot token and viewer mappings for transactional model switching."""
+        return (
+            self._token_map,
+            self._token_map_obj,
+            self._token_map_structure_path,
+            dict(self._paint_mappings),
+            set(self._accepted_token_overlap_warnings),
+        )
+
+    def _restore_token_context(self, context: tuple) -> None:
+        """Restore a token-context snapshot after a failed model switch."""
+        (
+            self._token_map,
+            self._token_map_obj,
+            self._token_map_structure_path,
+            paint_mappings,
+            accepted_warnings,
+        ) = context
+        self._paint_mappings = paint_mappings
+        self._accepted_token_overlap_warnings = accepted_warnings
 
     def _property_combo_row(self, key: str) -> int | None:
         """Return the combo row registered for a metric key."""
