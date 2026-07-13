@@ -53,7 +53,12 @@ class FoldQCPluginDialog(
 ):
     """Main plugin window."""
 
-    def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
+    def __init__(
+        self,
+        parent: QtWidgets.QWidget | None = None,
+        *,
+        job_runner=None,
+    ) -> None:
         super().__init__(parent)
         self.setWindowTitle(APP_TITLE)
         self.setMinimumWidth(480)
@@ -62,6 +67,14 @@ class FoldQCPluginDialog(
         self._state = GuiState()
         self._plot_windows = []  # Qt plot dialogs kept alive while visible
         self._guide_dialog = None  # Lightweight first-run guide dialog
+        if job_runner is None:
+            from .gui_jobs import QtJobRunner
+
+            job_runner = QtJobRunner()
+        self._job_runner = job_runner
+        self._active_load_handle = None
+        self._load_progress_dialog = None
+        self._progress_show_generation = 0
 
         self._build_ui()
         self._connect_signals()
@@ -266,7 +279,10 @@ class FoldQCPluginDialog(
 
     def closeEvent(self, event) -> None:
         """Persist session state when the dialog closes."""
-        self._save_session_settings()
+        if getattr(self, "_loading_prediction", False):
+            self._abandon_prediction_load()
+        else:
+            self._save_session_settings()
         try:
             super().closeEvent(event)
         except AttributeError:

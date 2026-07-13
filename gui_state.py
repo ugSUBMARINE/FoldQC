@@ -57,6 +57,7 @@ class GuiState:
     ensemble_plddt_std: np.ndarray | None = None
     accepted_token_overlap_warnings: set[tuple[str, str]] = field(default_factory=set)
     loading_prediction: bool = False
+    prediction_load_request_id: int = 0
     restoring_settings: bool = False
     pending_session_restore: PendingSessionRestore = field(
         default_factory=PendingSessionRestore
@@ -92,6 +93,7 @@ for _private_name, _state_name in {
     "_ensemble_plddt_std": "ensemble_plddt_std",
     "_accepted_token_overlap_warnings": "accepted_token_overlap_warnings",
     "_loading_prediction": "loading_prediction",
+    "_prediction_load_request_id": "prediction_load_request_id",
     "_restoring_settings": "restoring_settings",
     "_pending_session_restore": "pending_session_restore",
 }.items():

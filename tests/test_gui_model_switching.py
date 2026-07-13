@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import tempfile
+import traceback
 import types
 import unittest
 from pathlib import Path
@@ -13,6 +14,52 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 
 def _install_fake_pymol() -> types.SimpleNamespace:
+    class _QtSignal:
+        def __init__(self) -> None:
+            self.callbacks = []
+
+        def connect(self, callback) -> None:
+            self.callbacks.append(callback)
+
+        def emit(self, *args) -> None:
+            for callback in list(self.callbacks):
+                callback(*args)
+
+    class _SignalDescriptor:
+        def __set_name__(self, _owner, name: str) -> None:
+            self.name = name
+
+        def __get__(self, instance, _owner):
+            if instance is None:
+                return self
+            return instance.__dict__.setdefault(self.name, _QtSignal())
+
+    class _QObject:
+        def __init__(self, _parent=None) -> None:
+            pass
+
+    class _QRunnable:
+        def __init__(self) -> None:
+            pass
+
+    class _QThreadPool:
+        def __init__(self) -> None:
+            self.max_threads = None
+
+        def setMaxThreadCount(self, count: int) -> None:
+            self.max_threads = count
+
+        def start(self, runnable) -> None:
+            runnable.run()
+
+    class _QTimer:
+        delays = []
+
+        @classmethod
+        def singleShot(cls, delay: int, callback) -> None:
+            cls.delays.append(delay)
+            callback()
+
     flag = types.SimpleNamespace(
         AlignLeft=1,
         AlignRight=2,
@@ -21,6 +68,7 @@ def _install_fake_pymol() -> types.SimpleNamespace:
         AlignBottom=16,
         AlignVCenter=32,
         ItemIsEnabled=64,
+        WindowCloseButtonHint=128,
     )
     orientation = types.SimpleNamespace(Horizontal=1, Vertical=2)
     scroll_policy = types.SimpleNamespace(ScrollBarAlwaysOff=1, ScrollBarAsNeeded=2)
@@ -31,7 +79,13 @@ def _install_fake_pymol() -> types.SimpleNamespace:
             Orientation=orientation,
             ScrollBarPolicy=scroll_policy,
             ItemFlag=flag,
+            WindowType=flag,
         ),
+        QObject=_QObject,
+        QRunnable=_QRunnable,
+        QThreadPool=_QThreadPool,
+        QTimer=_QTimer,
+        pyqtSignal=lambda *_args: _SignalDescriptor(),
     )
 
     class _QSettings:
@@ -74,6 +128,9 @@ def _install_fake_pymol() -> types.SimpleNamespace:
         def show(self) -> None:
             self.visible = True
 
+        def hide(self) -> None:
+            self.visible = False
+
         def close(self) -> None:
             self.closed = True
             self.visible = False
@@ -83,6 +140,42 @@ def _install_fake_pymol() -> types.SimpleNamespace:
 
         def activateWindow(self) -> None:
             self.activated = True
+
+    class _QProgressDialog(_QDialog):
+        def __init__(self, parent=None) -> None:
+            super().__init__(parent)
+            self.label_text = ""
+            self.value_range = None
+            self.cancel_button = "default"
+            self.auto_close = True
+            self.auto_reset = True
+            self.minimum_duration = None
+            self.window_flags = {}
+            self.reset_count = 0
+
+        def setLabelText(self, text: str) -> None:
+            self.label_text = text
+
+        def setRange(self, minimum: int, maximum: int) -> None:
+            self.value_range = (minimum, maximum)
+
+        def setCancelButton(self, button) -> None:
+            self.cancel_button = button
+
+        def setAutoClose(self, enabled: bool) -> None:
+            self.auto_close = bool(enabled)
+
+        def setAutoReset(self, enabled: bool) -> None:
+            self.auto_reset = bool(enabled)
+
+        def setMinimumDuration(self, duration: int) -> None:
+            self.minimum_duration = duration
+
+        def setWindowFlag(self, flag_value, enabled: bool) -> None:
+            self.window_flags[flag_value] = bool(enabled)
+
+        def reset(self) -> None:
+            self.reset_count += 1
 
     class _QFormLayout:
         FieldGrowthPolicy = types.SimpleNamespace(AllNonFixedFieldsGrow=1)
@@ -99,6 +192,7 @@ def _install_fake_pymol() -> types.SimpleNamespace:
             self.text = text
             self.tooltip = ""
             self.fixed_width = None
+            self.enabled = True
             self.clicked = _Signal()
 
         def setAutoDefault(self, _enabled: bool) -> None:
@@ -112,6 +206,12 @@ def _install_fake_pymol() -> types.SimpleNamespace:
 
         def setToolTip(self, text: str) -> None:
             self.tooltip = text
+
+        def setEnabled(self, enabled: bool) -> None:
+            self.enabled = bool(enabled)
+
+        def isEnabled(self) -> bool:
+            return self.enabled
 
     class _TextBrowser:
         def __init__(self) -> None:
@@ -205,6 +305,7 @@ def _install_fake_pymol() -> types.SimpleNamespace:
 
     qt_widgets = types.SimpleNamespace(
         QDialog=_QDialog,
+        QProgressDialog=_QProgressDialog,
         QFormLayout=_QFormLayout,
         QMessageBox=_MessageBox,
         QMenu=_Menu,
@@ -228,7 +329,7 @@ def _install_fake_pymol() -> types.SimpleNamespace:
 
 _PYMOL = _install_fake_pymol()
 
-from FoldQC import metrics, session  # noqa: E402
+from FoldQC import gui_jobs, metrics, session  # noqa: E402
 from FoldQC.gui import (  # noqa: E402
     APP_TITLE,
     PREDICTION_FILE_FILTER,
@@ -318,6 +419,97 @@ class _Discovery:
             if item is candidate:
                 return files
         raise KeyError(candidate)
+
+
+class _ImmediateJobHandle:
+    def __init__(self) -> None:
+        self.is_abandoned = False
+
+    def abandon(self) -> None:
+        self.is_abandoned = True
+
+
+class _ImmediateJobRunner:
+    def __init__(self) -> None:
+        self.disposed = []
+
+    def submit(
+        self,
+        request_id,
+        task,
+        on_progress,
+        on_result,
+        on_error,
+    ):
+        handle = _ImmediateJobHandle()
+
+        def report(label: str) -> None:
+            if not handle.is_abandoned:
+                on_progress(request_id, label)
+
+        try:
+            result = task(report)
+        except Exception as exc:
+            if not handle.is_abandoned:
+                on_error(
+                    request_id,
+                    types.SimpleNamespace(
+                        message=str(exc) or type(exc).__name__,
+                        traceback_text=traceback.format_exc(),
+                    ),
+                )
+        else:
+            if not handle.is_abandoned:
+                on_result(request_id, result)
+        return handle
+
+    def dispose(self, value) -> None:
+        self.disposed.append(value)
+
+
+class _ManualJobRunner:
+    def __init__(self) -> None:
+        self.jobs = []
+        self.disposed = []
+
+    def submit(
+        self,
+        request_id,
+        task,
+        on_progress,
+        on_result,
+        on_error,
+    ):
+        handle = _ImmediateJobHandle()
+        self.jobs.append((request_id, task, on_progress, on_result, on_error, handle))
+        return handle
+
+    def run_next(self) -> None:
+        request_id, task, on_progress, on_result, on_error, handle = self.jobs.pop(0)
+
+        def report(label: str) -> None:
+            if not handle.is_abandoned:
+                on_progress(request_id, label)
+
+        try:
+            result = task(report)
+        except Exception as exc:
+            if not handle.is_abandoned:
+                on_error(
+                    request_id,
+                    types.SimpleNamespace(
+                        message=str(exc) or type(exc).__name__,
+                        traceback_text=traceback.format_exc(),
+                    ),
+                )
+        else:
+            if handle.is_abandoned:
+                self.dispose(result)
+            else:
+                on_result(request_id, result)
+
+    def dispose(self, value) -> None:
+        self.disposed.append(value)
 
 
 def _candidate(name: str, provider: str = "af3_server", path: Path | None = None):
@@ -467,12 +659,16 @@ class _LineEdit:
 class _CheckBox:
     def __init__(self, checked: bool = False) -> None:
         self._checked = bool(checked)
+        self.enabled = True
 
     def isChecked(self) -> bool:
         return self._checked
 
     def setChecked(self, checked: bool) -> None:
         self._checked = bool(checked)
+
+    def setEnabled(self, enabled: bool) -> None:
+        self.enabled = bool(enabled)
 
 
 class _ComboItem:
@@ -504,6 +700,7 @@ class _Combo:
         self._texts = ["" for _ in range(count)]
         self._data = [None for _ in range(count)]
         self._current = 0
+        self.enabled = True
 
     def model(self):
         return self._model
@@ -542,6 +739,12 @@ class _Combo:
 
     def setCurrentIndex(self, row: int) -> None:
         self._current = row
+
+    def setEnabled(self, enabled: bool) -> None:
+        self.enabled = bool(enabled)
+
+    def isEnabled(self) -> bool:
+        return self.enabled
 
 
 def _set_metric_combo(dialog, flags: int) -> None:
@@ -604,6 +807,86 @@ def _dialog_with(cmd: _Cmd):
     return dialog
 
 
+class QtJobRunnerTests(unittest.TestCase):
+    def test_runner_reports_progress_and_result_in_order(self) -> None:
+        events = []
+        runner = gui_jobs.QtJobRunner()
+
+        runner.submit(
+            7,
+            lambda report: (report("phase one"), report("phase two"), "done")[-1],
+            lambda request_id, label: events.append(("progress", request_id, label)),
+            lambda request_id, result: events.append(("result", request_id, result)),
+            lambda request_id, failure: events.append(
+                ("error", request_id, failure.message)
+            ),
+        )
+
+        self.assertEqual(
+            events,
+            [
+                ("progress", 7, "phase one"),
+                ("progress", 7, "phase two"),
+                ("result", 7, "done"),
+            ],
+        )
+
+    def test_runner_transports_exception_message_and_traceback(self) -> None:
+        failures = []
+        runner = gui_jobs.QtJobRunner()
+
+        def fail(_report):
+            raise ValueError("broken job")
+
+        runner.submit(
+            3,
+            fail,
+            lambda *_args: None,
+            lambda *_args: self.fail("Failure must not emit a result"),
+            lambda request_id, failure: failures.append((request_id, failure)),
+        )
+
+        self.assertEqual(failures[0][0], 3)
+        self.assertEqual(failures[0][1].message, "broken job")
+        self.assertIn("ValueError: broken job", failures[0][1].traceback_text)
+
+    def test_abandoned_job_suppresses_progress_and_result(self) -> None:
+        queued = []
+        events = []
+        runner = gui_jobs.QtJobRunner()
+
+        with mock.patch.object(gui_jobs._POOL, "start", side_effect=queued.append):
+            handle = runner.submit(
+                11,
+                lambda report: (report("late phase"), "late result")[-1],
+                lambda *_args: events.append("progress"),
+                lambda *_args: events.append("result"),
+                lambda *_args: events.append("error"),
+            )
+
+        handle.abandon()
+        queued[0].run()
+        self.assertEqual(events, [])
+
+    def test_dispose_releases_value_in_discard_runnable(self) -> None:
+        queued = []
+        cleanup_calls = []
+        temporary = types.SimpleNamespace(
+            cleanup=lambda: cleanup_calls.append("cleaned")
+        )
+        pred_files = types.SimpleNamespace(_temporary_directory=temporary)
+        value = types.SimpleNamespace(pred_files=pred_files)
+        runner = gui_jobs.QtJobRunner()
+
+        with mock.patch.object(gui_jobs._POOL, "start", side_effect=queued.append):
+            runner.dispose(value)
+
+        self.assertIs(queued[0]._value, value)
+        queued[0].run()
+        self.assertEqual(cleanup_calls, ["cleaned"])
+        self.assertIsNone(queued[0]._value)
+
+
 class GuiModelSwitchingTests(unittest.TestCase):
     def setUp(self) -> None:
         msg = _PYMOL.Qt.QtWidgets.QMessageBox
@@ -632,6 +915,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         dialog._ensemble_plddt_std = None
         dialog._plot_windows = []
         dialog._loading_prediction = False
+        dialog._prediction_load_request_id = 0
         dialog._restoring_settings = False
         dialog._pending_session_restore = types.SimpleNamespace(
             model_rank=None,
@@ -657,6 +941,19 @@ class GuiModelSwitchingTests(unittest.TestCase):
         dialog._palette_reverse_chk = _CheckBox()
         dialog._vmin_edit = _LineEdit()
         dialog._vmax_edit = _LineEdit()
+        dialog._dir_btn = _LineEdit()
+        dialog._file_btn = _LineEdit()
+        dialog._obj_refresh_btn = _LineEdit()
+        dialog._apply_btn = _LineEdit()
+        dialog._plot_btn = _LineEdit()
+        dialog._export_csv_btn = _LineEdit()
+        dialog._ensemble_btn = _LineEdit()
+        dialog._guide_btn = _LineEdit()
+        dialog._close_btn = _LineEdit()
+        dialog._job_runner = _ImmediateJobRunner()
+        dialog._active_load_handle = None
+        dialog._load_progress_dialog = None
+        dialog._progress_show_generation = 0
         dialog.setWindowTitle = lambda _title: None
         return dialog
 
@@ -960,6 +1257,10 @@ class GuiModelSwitchingTests(unittest.TestCase):
         self.assertEqual(discovery.scanned, [candidate])
         self.assertEqual(dialog._model_combo.currentData(), 0)
         self.assertEqual(dialog._dir_edit.text(), str(root / "target"))
+        self.assertEqual(
+            _PYMOL.cmd.loads,
+            [(str(files.structure_path(0)), "target_model_0", 1, 1)],
+        )
 
     def test_load_prediction_dir_keeps_archive_input_path_in_text_field(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1122,6 +1423,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         self.assertIs(dialog._pred_files, previous)
         self.assertEqual(discovery.scanned, [])
         self.assertEqual(dialog._dir_edit.text(), str(root))
+        self.assertEqual(dialog._job_runner.disposed, [discovery])
 
     def test_load_prediction_dir_discovery_error_shows_warning(self) -> None:
         dialog = self._session_dialog()
@@ -1135,6 +1437,164 @@ class GuiModelSwitchingTests(unittest.TestCase):
             dialog._load_prediction_dir()
 
         self.assertEqual(msg.warnings, [(APP_TITLE, "no prediction here")])
+        self.assertFalse(dialog._loading_prediction)
+        self.assertTrue(dialog._dir_edit.isEnabled())
+
+    def test_prediction_loading_disables_conflicting_controls(self) -> None:
+        dialog = self._session_dialog()
+        dialog._dir_edit.setText("/tmp/prediction")
+        dialog._job_runner = _ManualJobRunner()
+
+        dialog._load_prediction_dir()
+
+        self.assertTrue(dialog._loading_prediction)
+        self.assertFalse(dialog._dir_edit.isEnabled())
+        self.assertFalse(dialog._model_combo.isEnabled())
+        self.assertFalse(dialog._apply_btn.isEnabled())
+        self.assertTrue(dialog._close_btn.isEnabled())
+        self.assertTrue(dialog._guide_btn.isEnabled())
+
+    def test_progress_dialog_is_modeless_indeterminate_and_delayed(self) -> None:
+        dialog = self._session_dialog()
+        dialog._loading_prediction = True
+        dialog._prediction_load_request_id = 4
+        _PYMOL.Qt.QtCore.QTimer.delays.clear()
+
+        dialog._schedule_load_progress(4, "Discovering prediction folders…")
+
+        progress = dialog._load_progress_dialog
+        self.assertFalse(progress.modal)
+        self.assertEqual(progress.value_range, (0, 0))
+        self.assertIsNone(progress.cancel_button)
+        self.assertFalse(progress.auto_close)
+        self.assertFalse(progress.auto_reset)
+        self.assertEqual(progress.minimum_duration, 0)
+        self.assertEqual(_PYMOL.Qt.QtCore.QTimer.delays, [300])
+        self.assertFalse(
+            progress.window_flags[_PYMOL.Qt.QtCore.Qt.WindowType.WindowCloseButtonHint]
+        )
+
+    def test_initial_provider_load_error_preserves_previous_prediction(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            previous = _SessionPredictionFiles(root / "previous", ranks=(0,))
+            files = _SessionPredictionFiles(root / "new", ranks=(0,))
+            candidate = _candidate("new", path=root / "new")
+            discovery = _Discovery([candidate], [(candidate, files)])
+            dialog = self._session_dialog()
+            dialog._pred_files = previous
+            dialog._dir_edit.setText(str(root))
+            msg = _PYMOL.Qt.QtWidgets.QMessageBox
+
+            with (
+                mock.patch(
+                    "FoldQC.loader.discover_prediction_candidates",
+                    return_value=discovery,
+                ),
+                mock.patch(
+                    "FoldQC.loader.load_prediction_data",
+                    side_effect=ValueError("could not read confidence"),
+                ),
+            ):
+                dialog._load_prediction_dir()
+
+        self.assertIs(dialog._pred_files, previous)
+        self.assertFalse(dialog._loading_prediction)
+        self.assertEqual(
+            msg.warnings,
+            [(APP_TITLE, "could not read confidence")],
+        )
+
+    def test_initial_pymol_load_error_preserves_previous_prediction(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            previous = _SessionPredictionFiles(root / "previous", ranks=(0,))
+            previous_data = object()
+            previous_members = [object()]
+            files = _SessionPredictionFiles(root / "new", ranks=(0,))
+            candidate = _candidate("new", path=root / "new")
+            discovery = _Discovery([candidate], [(candidate, files)])
+            loaded_data = types.SimpleNamespace(
+                provider="structure_only",
+                rank=0,
+                structure_path=files.structure_path(0),
+                structure_plddt=np.array([0.8], dtype=np.float32),
+                plddt=None,
+                confidence=None,
+                summary_confidence=None,
+                pae=None,
+                pde=None,
+                contact_probs=None,
+            )
+            dialog = self._session_dialog()
+            dialog._pred_files = previous
+            dialog._pred_data = previous_data
+            dialog._ensemble_members = previous_members
+            dialog._ensemble_group_name = "previous_ensemble"
+            dialog._model_combo.addItem("previous model", 7)
+            dialog._model_combo.setCurrentIndex(0)
+            dialog._dir_edit.setText(str(root))
+            msg = _PYMOL.Qt.QtWidgets.QMessageBox
+
+            with (
+                mock.patch(
+                    "FoldQC.loader.discover_prediction_candidates",
+                    return_value=discovery,
+                ),
+                mock.patch(
+                    "FoldQC.loader.load_prediction_data",
+                    return_value=loaded_data,
+                ),
+                mock.patch(
+                    "FoldQC.gui_loading.ensure_structure_object",
+                    side_effect=RuntimeError("viewer unavailable"),
+                ),
+            ):
+                dialog._load_prediction_dir()
+
+        self.assertIs(dialog._pred_files, previous)
+        self.assertIs(dialog._pred_data, previous_data)
+        self.assertIs(dialog._ensemble_members, previous_members)
+        self.assertEqual(dialog._ensemble_group_name, "previous_ensemble")
+        self.assertEqual(dialog._model_combo.currentData(), 7)
+        self.assertEqual(dialog._dir_edit.text(), str(root))
+        self.assertFalse(dialog._loading_prediction)
+        self.assertEqual(len(dialog._job_runner.disposed), 1)
+        self.assertIs(dialog._job_runner.disposed[0].pred_files, files)
+        self.assertEqual(
+            msg.warnings,
+            [
+                (
+                    APP_TITLE,
+                    "Could not load or show target_model_0.cif:\nviewer unavailable",
+                )
+            ],
+        )
+
+    def test_close_abandons_late_discovery_without_pymol_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            files = _SessionPredictionFiles(root / "new", ranks=(0,))
+            candidate = _candidate("new", path=root / "new")
+            discovery = _Discovery([candidate], [(candidate, files)])
+            dialog = self._session_dialog()
+            dialog._dir_edit.setText(str(root))
+            dialog._job_runner = _ManualJobRunner()
+            _PYMOL.cmd = _Cmd()
+
+            with mock.patch(
+                "FoldQC.loader.discover_prediction_candidates",
+                return_value=discovery,
+            ):
+                dialog._load_prediction_dir()
+                request_id = dialog._prediction_load_request_id
+                dialog.closeEvent(object())
+                dialog._job_runner.run_next()
+
+        self.assertGreater(dialog._prediction_load_request_id, request_id)
+        self.assertIsNone(dialog._pred_files)
+        self.assertEqual(_PYMOL.cmd.loads, [])
+        self.assertEqual(dialog._job_runner.disposed, [discovery])
 
     def test_close_event_saves_session_settings(self) -> None:
         dialog = self._session_dialog()

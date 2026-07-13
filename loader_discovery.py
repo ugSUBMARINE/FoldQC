@@ -20,7 +20,16 @@ class _TemporaryExtraction:
 
     def __init__(self, root: Path) -> None:
         self.root = root
-        weakref.finalize(self, shutil.rmtree, root, ignore_errors=True)
+        self._finalizer = weakref.finalize(
+            self,
+            shutil.rmtree,
+            root,
+            ignore_errors=True,
+        )
+
+    def cleanup(self) -> None:
+        """Remove extracted contents now; repeated calls are harmless."""
+        self._finalizer()
 
 
 def _archive_kind(path: Path) -> str | None:

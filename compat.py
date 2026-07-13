@@ -37,6 +37,7 @@ if QT_MAJOR >= 6:
     Vertical = QtCore.Qt.Orientation.Vertical
     ScrollBarAlwaysOff = QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff
     ScrollBarAsNeeded = QtCore.Qt.ScrollBarPolicy.ScrollBarAsNeeded
+    WindowCloseButtonHint = QtCore.Qt.WindowType.WindowCloseButtonHint
 else:
     AlignLeft = QtCore.Qt.AlignLeft
     AlignRight = QtCore.Qt.AlignRight
@@ -48,6 +49,7 @@ else:
     Vertical = QtCore.Qt.Vertical
     ScrollBarAlwaysOff = QtCore.Qt.ScrollBarAlwaysOff
     ScrollBarAsNeeded = QtCore.Qt.ScrollBarAsNeeded
+    WindowCloseButtonHint = QtCore.Qt.WindowCloseButtonHint
 
 # QAction: lives in QtWidgets (Qt5) and moved to QtGui (Qt6)
 if QT_MAJOR >= 6:

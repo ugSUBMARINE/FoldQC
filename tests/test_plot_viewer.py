@@ -24,6 +24,7 @@ def _install_fake_pymol() -> None:
         AlignBottom=16,
         AlignVCenter=32,
         ItemIsEnabled=64,
+        WindowCloseButtonHint=128,
     )
     orientation = types.SimpleNamespace(Horizontal=1, Vertical=2)
     scroll_policy = types.SimpleNamespace(ScrollBarAlwaysOff=1, ScrollBarAsNeeded=2)
@@ -34,6 +35,7 @@ def _install_fake_pymol() -> None:
             Orientation=orientation,
             ScrollBarPolicy=scroll_policy,
             ItemFlag=flag,
+            WindowType=flag,
         ),
         QTimer=types.SimpleNamespace(singleShot=lambda *_args, **_kwargs: None),
         QSettings=object,
@@ -42,6 +44,9 @@ def _install_fake_pymol() -> None:
         QDialog=object,
         QFormLayout=types.SimpleNamespace(
             FieldGrowthPolicy=types.SimpleNamespace(AllNonFixedFieldsGrow=1)
+        ),
+        QMessageBox=types.SimpleNamespace(
+            StandardButton=types.SimpleNamespace(Yes=1, Cancel=2)
         ),
     )
     qt = types.SimpleNamespace(
