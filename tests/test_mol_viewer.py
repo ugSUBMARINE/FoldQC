@@ -71,6 +71,117 @@ def test_object_discovery_and_ensure_structure_object(monkeypatch) -> None:
     assert cmd.loads == [(("/tmp/other.cif", "model_1"), {"quiet": 1, "zoom": 1})]
 
 
+def test_object_paint_mapping_handles_polymer_ligand_order_and_sparse_indices(
+    monkeypatch,
+) -> None:
+    atoms = [
+        types.SimpleNamespace(
+            index=4,
+            chain="A",
+            resi="1",
+            resn="ALA",
+            name="N",
+            hetatm=False,
+        ),
+        types.SimpleNamespace(
+            index=2,
+            chain="L",
+            resi="2",
+            resn="LIG",
+            name="C2",
+            hetatm=True,
+        ),
+        types.SimpleNamespace(
+            index=7,
+            chain="A",
+            resi="1",
+            resn="ALA",
+            name="CA",
+            hetatm=False,
+        ),
+        types.SimpleNamespace(
+            index=5,
+            chain="L",
+            resi="2",
+            resn="LIG",
+            name="C1",
+            hetatm=True,
+        ),
+    ]
+    cmd = types.SimpleNamespace(
+        get_model=lambda _name: types.SimpleNamespace(atom=atoms),
+        index=lambda _name: [("obj", atom.index) for atom in atoms],
+    )
+    monkeypatch.setitem(sys.modules, "pymol", types.SimpleNamespace(cmd=cmd))
+    token_map = [
+        _token(0),
+        TokenInfo(1, "L", 2, "LIG", True, "C1"),
+        TokenInfo(2, "L", 2, "LIG", True, "C2"),
+    ]
+
+    mapping = mol_viewer.prepare_object_paint_mapping("obj", token_map)
+
+    assert mapping.atom_index_fingerprint == (4, 2, 7, 5)
+    assert mapping.max_atom_index == 7
+    assert mapping.atom_token_indices.tolist() == [-1, -1, 2, -1, 0, 1, -1, 0]
+    assert mapping.overlap.matched_prediction_tokens == 3
+    assert mol_viewer.object_paint_mapping_is_valid(mapping)
+
+
+def test_ensure_object_paint_mapping_rebuilds_after_index_change(monkeypatch) -> None:
+    models = [
+        types.SimpleNamespace(
+            atom=[
+                types.SimpleNamespace(
+                    index=1,
+                    chain="A",
+                    resi="1",
+                    resn="ALA",
+                    name="CA",
+                    hetatm=False,
+                )
+            ]
+        ),
+        types.SimpleNamespace(
+            atom=[
+                types.SimpleNamespace(
+                    index=2,
+                    chain="A",
+                    resi="1",
+                    resn="ALA",
+                    name="CA",
+                    hetatm=False,
+                )
+            ]
+        ),
+    ]
+    state = {"model": 0, "get_model_calls": 0}
+
+    def get_model(_name):
+        state["get_model_calls"] += 1
+        return models[state["model"]]
+
+    cmd = types.SimpleNamespace(
+        get_model=get_model,
+        index=lambda _name: [
+            ("obj", atom.index) for atom in models[state["model"]].atom
+        ],
+    )
+    monkeypatch.setitem(sys.modules, "pymol", types.SimpleNamespace(cmd=cmd))
+    token_map = [_token(0)]
+    mapping = mol_viewer.prepare_object_paint_mapping("obj", token_map)
+
+    same, rebuilt = mol_viewer.ensure_object_paint_mapping("obj", token_map, mapping)
+    assert same is mapping
+    assert rebuilt is False
+
+    state["model"] = 1
+    changed, rebuilt = mol_viewer.ensure_object_paint_mapping("obj", token_map, mapping)
+    assert rebuilt is True
+    assert changed.atom_index_fingerprint == (2,)
+    assert state["get_model_calls"] == 2
+
+
 def test_tokens_within_distance_builds_backend_expression(monkeypatch) -> None:
     captured = []
     model = types.SimpleNamespace(

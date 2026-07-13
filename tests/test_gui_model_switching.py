@@ -355,13 +355,22 @@ class _Cmd:
         self.zoom_calls: list[str] = []
         self.refresh_calls = 0
         self.selection_models = {}
+        self.get_model_calls = 0
 
     def get_names(self, _kind: str, *args, **kwargs):
         enabled_only = kwargs.get("enabled_only") or (args and args[0] == 1)
         return sorted(self.enabled if enabled_only else self.objects)
 
     def get_model(self, selection: str):
+        self.get_model_calls += 1
         return self.selection_models.get(selection, types.SimpleNamespace(atom=[]))
+
+    def index(self, selection: str):
+        model = self.selection_models.get(selection, types.SimpleNamespace(atom=[]))
+        return [
+            (selection, int(getattr(atom, "index", fallback)))
+            for fallback, atom in enumerate(model.atom, start=1)
+        ]
 
     def load(self, path: str, obj_name: str, quiet: int = 1, zoom: int = 0) -> None:
         self.loads.append((path, obj_name, quiet, zoom))
@@ -1652,6 +1661,8 @@ class GuiModelSwitchingTests(unittest.TestCase):
         dialog._validate_token_count = lambda values, tm, _obj: self.assertEqual(
             len(values), len(tm)
         )
+        dialog._prepare_paint_mapping = lambda *_args: object()
+        dialog._confirm_token_overlap_for_coloring = lambda *_args, **_kwargs: True
         dialog.setWindowTitle = lambda _title: None
         dialog._update_statistics_for_single = lambda *_args, **_kwargs: None
 
@@ -1774,6 +1785,33 @@ class GuiModelSwitchingTests(unittest.TestCase):
 
         self.assertEqual(len(msg.questions), 1)
         self.assertEqual(paint.call_count, 2)
+        self.assertEqual(cmd.get_model_calls, 1)
+
+    def test_coloring_overlap_is_rechecked_after_atom_indices_change(self) -> None:
+        cmd = _Cmd(objects=("other",), enabled=("other",))
+        cmd.selection_models["other"] = types.SimpleNamespace(
+            atom=[_atom("B", 10, "GLY"), _atom("B", 11, "SER")]
+        )
+        _PYMOL.cmd = cmd
+        msg = _PYMOL.Qt.QtWidgets.QMessageBox
+        msg.question_response = msg.Yes
+        dialog = self._coloring_dialog_for_overlap()
+
+        with (
+            mock.patch("FoldQC.gui_coloring.paint_property") as paint,
+            mock.patch("FoldQC.gui_coloring.show_colorbar"),
+        ):
+            paint.return_value = (0.8, 0.9)
+            dialog._apply_coloring()
+            changed_atoms = [_atom("B", 10, "GLY"), _atom("B", 11, "SER")]
+            changed_atoms[0].index = 3
+            changed_atoms[1].index = 4
+            cmd.selection_models["other"] = types.SimpleNamespace(atom=changed_atoms)
+            dialog._apply_coloring()
+
+        self.assertEqual(len(msg.questions), 2)
+        self.assertEqual(cmd.get_model_calls, 2)
+        self.assertEqual(paint.call_count, 2)
 
     def test_coloring_subset_target_does_not_warn(self) -> None:
         cmd = _Cmd(objects=("partial",), enabled=("partial",))
@@ -1793,6 +1831,39 @@ class GuiModelSwitchingTests(unittest.TestCase):
 
         self.assertEqual(msg.questions, [])
         paint.assert_called_once()
+
+    def test_successful_overlap_mapping_is_reused_without_get_model(self) -> None:
+        cmd = _Cmd(objects=("partial",), enabled=("partial",))
+        cmd.selection_models["partial"] = types.SimpleNamespace(
+            atom=[_atom("A", 1, "ALA"), _atom("A", 2, "ALA")]
+        )
+        _PYMOL.cmd = cmd
+        dialog = self._coloring_dialog_for_overlap("partial")
+
+        with (
+            mock.patch("FoldQC.gui_coloring.paint_property") as paint,
+            mock.patch("FoldQC.gui_coloring.show_colorbar"),
+        ):
+            paint.return_value = (0.8, 0.9)
+            dialog._apply_coloring()
+            dialog._apply_coloring()
+
+        self.assertEqual(cmd.get_model_calls, 1)
+        self.assertEqual(paint.call_count, 2)
+
+    def test_clearing_token_context_also_clears_paint_mappings(self) -> None:
+        dialog = _new_dialog()
+        dialog._token_map = [_token(0)]
+        dialog._token_map_obj = "target_model_0"
+        dialog._token_map_structure_path = Path("/tmp/target_model_0.cif")
+        dialog._paint_mappings = {("path", "target_model_0"): object()}
+        dialog._accepted_token_overlap_warnings = {("path", "target_model_0")}
+
+        dialog._clear_token_map_cache()
+
+        self.assertIsNone(dialog._token_map)
+        self.assertEqual(dialog._paint_mappings, {})
+        self.assertEqual(dialog._accepted_token_overlap_warnings, set())
 
     def test_plddt_class_coloring_uses_token_overlap_warning(self) -> None:
         cmd = _Cmd(objects=("other",), enabled=("other",))
@@ -2215,6 +2286,8 @@ class GuiModelSwitchingTests(unittest.TestCase):
         dialog._validate_token_count = lambda values, tm, _obj: self.assertEqual(
             len(values), len(tm)
         )
+        dialog._prepare_paint_mapping = lambda *_args: object()
+        dialog._confirm_token_overlap_for_coloring = lambda *_args, **_kwargs: True
         stats_calls = []
         dialog._update_statistics_for_members = lambda *args, **kwargs: (
             stats_calls.append((args, kwargs))
@@ -2223,10 +2296,10 @@ class GuiModelSwitchingTests(unittest.TestCase):
 
         with (
             mock.patch(
-                "FoldQC.gui_coloring.paint_categorical_labels_bulk",
-                side_effect=[(0.0, 1.0), (0.0, 1.0)],
+                "FoldQC.gui_coloring.paint_categorical_labels_batch",
+                return_value=types.SimpleNamespace(vmin=0.0, vmax=1.0),
             ) as categorical,
-            mock.patch("FoldQC.gui_coloring.paint_property_bulk") as continuous,
+            mock.patch("FoldQC.gui_coloring.paint_properties_bulk") as continuous,
             mock.patch("FoldQC.gui_coloring.show_colorbar") as show_colorbar,
             mock.patch("FoldQC.gui_coloring.delete_colorbar") as delete_colorbar,
         ):
@@ -2236,13 +2309,18 @@ class GuiModelSwitchingTests(unittest.TestCase):
                 members,
             )
 
-        self.assertEqual(categorical.call_count, 2)
+        categorical.assert_called_once()
+        targets = categorical.call_args.args[0]
+        self.assertEqual(
+            [target.obj_name for target in targets],
+            ["target_model_0", "target_model_1"],
+        )
         np.testing.assert_array_equal(
-            categorical.call_args_list[0].args[2],
+            targets[0].values,
             member_arrays["target_model_0"],
         )
         np.testing.assert_array_equal(
-            categorical.call_args_list[1].args[2],
+            targets[1].values,
             member_arrays["target_model_1"],
         )
         continuous.assert_not_called()

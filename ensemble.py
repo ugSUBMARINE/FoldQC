@@ -18,7 +18,8 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 
 from .mol_viewer import (
-    get_representative_coords,
+    ObjectPaintMapping,
+    inspect_object_tokens,
     load_models_as_objects,
     rebuild,
     transform_object,
@@ -36,6 +37,7 @@ class EnsembleMember:
     obj_name: str
     data: Any
     token_map: list[TokenInfo]
+    paint_mapping: ObjectPaintMapping | None = None
 
 
 @dataclass(frozen=True)
@@ -250,14 +252,18 @@ def align_objects_to_reference(
     if ref is None:
         raise ValueError(f"Reference rank {reference_rank} is not loaded.")
 
-    target_all_coords = get_representative_coords(ref.obj_name, ref.token_map)
+    target_inspection = inspect_object_tokens(ref.obj_name, ref.token_map)
+    ref.paint_mapping = target_inspection.paint_mapping
+    target_all_coords = target_inspection.representative_coords
     target_coords = target_all_coords[core_indices]
     aligned_coords: list[np.ndarray] = []
     for member in members:
         if member.rank == reference_rank:
             aligned_coords.append(target_all_coords)
             continue
-        mobile_all_coords = get_representative_coords(member.obj_name, member.token_map)
+        mobile_inspection = inspect_object_tokens(member.obj_name, member.token_map)
+        member.paint_mapping = mobile_inspection.paint_mapping
+        mobile_all_coords = mobile_inspection.representative_coords
         mobile_coords = mobile_all_coords[core_indices]
         rotation, translation = kabsch_transform(mobile_coords, target_coords)
         transform_object(member.obj_name, rotation, translation)
@@ -273,7 +279,11 @@ def compute_aligned_per_token_rmsd(
     members: list[EnsembleMember],
 ) -> np.ndarray:
     """Compute per-token RMSD from the current coordinates of ensemble objects."""
-    coords_list = [get_representative_coords(m.obj_name, m.token_map) for m in members]
+    coords_list = []
+    for member in members:
+        inspection = inspect_object_tokens(member.obj_name, member.token_map)
+        member.paint_mapping = inspection.paint_mapping
+        coords_list.append(inspection.representative_coords)
     return compute_per_token_rmsd(coords_list)
 
 

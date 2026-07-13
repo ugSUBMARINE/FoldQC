@@ -285,6 +285,30 @@ def test_prepare_metrics_skip_alignment_uses_current_coordinates(monkeypatch) ->
     assert members[0].data.plddt is None  # prepare_metrics must not mutate data
 
 
+def test_current_coordinate_rmsd_reuses_each_object_inspection_for_painting(
+    monkeypatch,
+) -> None:
+    members = [_member(0), _member(1)]
+    calls = []
+
+    def inspect(obj_name, _token_map):
+        calls.append(obj_name)
+        offset = 0.0 if obj_name.endswith("0") else 1.0
+        return types.SimpleNamespace(
+            paint_mapping=f"mapping:{obj_name}",
+            representative_coords=np.full((3, 3), offset, dtype=np.float32),
+        )
+
+    monkeypatch.setattr(ensemble, "inspect_object_tokens", inspect)
+
+    result = ensemble.compute_aligned_per_token_rmsd(members)
+
+    assert calls == ["target_model_0", "target_model_1"]
+    assert members[0].paint_mapping == "mapping:target_model_0"
+    assert members[1].paint_mapping == "mapping:target_model_1"
+    np.testing.assert_allclose(result, np.sqrt(3.0) / 2.0)
+
+
 def test_prepare_metrics_aligns_to_rank_zero_or_first_member(monkeypatch) -> None:
     calls = []
     members = [

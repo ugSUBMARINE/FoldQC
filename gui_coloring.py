@@ -7,12 +7,15 @@ import numpy as np
 from . import compute, metrics
 from .compat import QtWidgets
 from .mol_viewer import (
+    PaintTarget,
     delete_colorbar,
     get_viewer_name,
+    paint_categorical_labels_batch,
     paint_categorical_labels_bulk,
+    paint_plddt_class_batch,
     paint_plddt_class_coloring,
+    paint_properties_bulk,
     paint_property,
-    paint_property_bulk,
     run_with_updates_suspended,
     show_colorbar,
 )
@@ -132,8 +135,14 @@ class ColoringController:
             if values is None:
                 return
             self._validate_token_count(values, self._token_map, obj_name)
-            if not self._confirm_token_overlap_for_coloring(
+            mapping = self._prepare_paint_mapping(
                 self._token_map, obj_name, self._pred_data
+            )
+            if not self._confirm_token_overlap_for_coloring(
+                self._token_map,
+                obj_name,
+                self._pred_data,
+                mapping=mapping,
             ):
                 return
             if metrics.is_domain_label_metric(key):
@@ -141,6 +150,7 @@ class ColoringController:
                     obj_name,
                     self._token_map,
                     values,
+                    mapping=mapping,
                 )
                 delete_colorbar()
             else:
@@ -152,6 +162,7 @@ class ColoringController:
                     reverse_palette=reverse_palette,
                     vmin=vmin,
                     vmax=vmax,
+                    mapping=mapping,
                 )
                 show_colorbar(
                     palette,
@@ -206,26 +217,33 @@ class ColoringController:
         palette, reverse_palette = self._selected_palette()
         vmin, vmax = self._get_vmin_vmax()
         used_vmin = used_vmax = None
-        member_values: list[tuple[object, np.ndarray]] = []
+        member_values: list[tuple[object, np.ndarray, object]] = []
         for member in target_members:
             self._validate_token_count(values, member.token_map, member.obj_name)
-            if not self._confirm_token_overlap_for_coloring(
+            mapping = self._prepare_paint_mapping(
                 member.token_map, member.obj_name, member.data
+            )
+            if not self._confirm_token_overlap_for_coloring(
+                member.token_map,
+                member.obj_name,
+                member.data,
+                mapping=mapping,
             ):
                 return
-            member_values.append((member, values))
+            member_values.append((member, values, mapping))
 
-        for member, values in member_values:
-            used_vmin, used_vmax = paint_property_bulk(
-                member.obj_name,
-                member.token_map,
-                values,
-                palette=palette,
-                reverse_palette=reverse_palette,
-                vmin=vmin,
-                vmax=vmax,
-                rebuild=False,
-            )
+        result = paint_properties_bulk(
+            [
+                PaintTarget(member.obj_name, member.token_map, item_values, mapping)
+                for member, item_values, mapping in member_values
+            ],
+            palette=palette,
+            reverse_palette=reverse_palette,
+            vmin=vmin,
+            vmax=vmax,
+            rebuild=False,
+        )
+        used_vmin, used_vmax = result.vmin, result.vmax
         show_colorbar(
             palette,
             reverse_palette,
@@ -251,7 +269,7 @@ class ColoringController:
         user_vmin, user_vmax = self._get_vmin_vmax()
         ref_sel = self._ref_edit.text().strip() or None
 
-        member_values: list[tuple[object, np.ndarray]] = []
+        member_values: list[tuple[object, np.ndarray, object]] = []
         for member in target_members:
             self._ensure_member_data_for_property(member, prop)
             values = self._compute_property_for(
@@ -260,33 +278,28 @@ class ColoringController:
             if values is None:
                 return
             self._validate_token_count(values, member.token_map, member.obj_name)
-            member_values.append((member, values))
-
-        for member, _values in member_values:
-            if not self._confirm_token_overlap_for_coloring(
+            mapping = self._prepare_paint_mapping(
                 member.token_map, member.obj_name, member.data
+            )
+            if not self._confirm_token_overlap_for_coloring(
+                member.token_map,
+                member.obj_name,
+                member.data,
+                mapping=mapping,
             ):
                 return
+            member_values.append((member, values, mapping))
 
         if metrics.is_domain_label_metric(key):
-            used_ranges = []
-            for member, values in member_values:
-                used_ranges.append(
-                    paint_categorical_labels_bulk(
-                        member.obj_name,
-                        member.token_map,
-                        values,
-                        rebuild=False,
-                    )
-                )
+            result = paint_categorical_labels_batch(
+                [
+                    PaintTarget(member.obj_name, member.token_map, values, mapping)
+                    for member, values, mapping in member_values
+                ],
+                rebuild=False,
+            )
             delete_colorbar()
-            finite_ranges = [
-                (vmin, vmax)
-                for vmin, vmax in used_ranges
-                if np.isfinite(vmin) and np.isfinite(vmax)
-            ]
-            shared_vmin = min((vmin for vmin, _vmax in finite_ranges), default=0.0)
-            shared_vmax = max((vmax for _vmin, vmax in finite_ranges), default=1.0)
+            shared_vmin, shared_vmax = result.vmin, result.vmax
             label = (
                 self._ensemble_group_name
                 if len(target_members) > 1
@@ -298,13 +311,13 @@ class ColoringController:
             self._update_statistics_for_members(
                 key,
                 label,
-                member_values,
+                [(member, values) for member, values, _mapping in member_values],
                 include_domain_labels=True,
             )
             return
 
         finite = np.concatenate(
-            [values[np.isfinite(values)] for _, values in member_values]
+            [values[np.isfinite(values)] for _, values, _mapping in member_values]
         )
         shared_vmin = user_vmin
         shared_vmax = user_vmax
@@ -315,23 +328,25 @@ class ColoringController:
         if shared_vmin == shared_vmax:
             shared_vmax = shared_vmin + 1.0
 
-        for member, values in member_values:
-            paint_property_bulk(
-                member.obj_name,
-                member.token_map,
-                values,
-                palette=palette,
-                reverse_palette=reverse_palette,
-                vmin=shared_vmin,
-                vmax=shared_vmax,
-                rebuild=False,
-            )
+        paint_properties_bulk(
+            [
+                PaintTarget(member.obj_name, member.token_map, values, mapping)
+                for member, values, mapping in member_values
+            ],
+            palette=palette,
+            reverse_palette=reverse_palette,
+            vmin=shared_vmin,
+            vmax=shared_vmax,
+            rebuild=False,
+        )
         show_colorbar(
             palette,
             reverse_palette,
             shared_vmin,
             shared_vmax,
-            object_names=[member.obj_name for member, _values in member_values],
+            object_names=[
+                member.obj_name for member, _values, _mapping in member_values
+            ],
         )
         label = (
             self._ensemble_group_name
@@ -344,7 +359,7 @@ class ColoringController:
         self._update_statistics_for_members(
             key,
             label,
-            member_values,
+            [(member, values) for member, values, _mapping in member_values],
             include_chain_stats=key == "pde_chain_mean",
         )
 
@@ -352,7 +367,7 @@ class ColoringController:
         self, key: str, target_members: list
     ) -> None:
         """Apply quality-class pLDDT coloring to selected ensemble targets."""
-        member_values: list[tuple[object, np.ndarray]] = []
+        member_values: list[tuple[object, np.ndarray, object]] = []
         for member in target_members:
             self._ensure_member_data_for_property(
                 member, metrics.PROPERTY_BY_KEY["plddt_class"]
@@ -366,21 +381,25 @@ class ColoringController:
                 )
                 return
             self._validate_token_count(values, member.token_map, member.obj_name)
-            member_values.append((member, values))
-
-        for member, _values in member_values:
-            if not self._confirm_token_overlap_for_coloring(
+            mapping = self._prepare_paint_mapping(
                 member.token_map, member.obj_name, member.data
+            )
+            if not self._confirm_token_overlap_for_coloring(
+                member.token_map,
+                member.obj_name,
+                member.data,
+                mapping=mapping,
             ):
                 return
+            member_values.append((member, values, mapping))
 
-        for member, values in member_values:
-            paint_plddt_class_coloring(
-                member.obj_name,
-                values=values,
-                token_map=member.token_map,
-                rebuild=False,
-            )
+        paint_plddt_class_batch(
+            [
+                PaintTarget(member.obj_name, member.token_map, values, mapping)
+                for member, values, mapping in member_values
+            ],
+            rebuild=False,
+        )
         delete_colorbar()
         label = (
             self._ensemble_group_name
@@ -389,7 +408,10 @@ class ColoringController:
         )
         self.setWindowTitle(f"{APP_TITLE} - pLDDT quality classes on {label}")
         self._update_statistics_for_members(
-            key, label, member_values, include_plddt_classes=True
+            key,
+            label,
+            [(member, values) for member, values, _mapping in member_values],
+            include_plddt_classes=True,
         )
 
     def _with_viewer_updates_suspended(self, func):
@@ -412,14 +434,21 @@ class ColoringController:
             return
         self._build_token_map_if_needed(obj_name)
         self._validate_token_count(values, self._token_map, obj_name)
-        if not self._confirm_token_overlap_for_coloring(
+        mapping = self._prepare_paint_mapping(
             self._token_map, obj_name, self._pred_data
+        )
+        if not self._confirm_token_overlap_for_coloring(
+            self._token_map,
+            obj_name,
+            self._pred_data,
+            mapping=mapping,
         ):
             return
         paint_plddt_class_coloring(
             obj_name,
             values=values,
             token_map=self._token_map,
+            mapping=mapping,
         )
 
         delete_colorbar()

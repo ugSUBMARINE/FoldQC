@@ -10,7 +10,8 @@ from . import compute, metrics
 from .compat import MessageBoxStandardButton, QtWidgets
 from .gui_state import MetricContext
 from .mol_viewer import (
-    compare_token_map_to_object,
+    ObjectPaintMapping,
+    ensure_object_paint_mapping,
     get_viewer_name,
     selection_to_token_indices,
     tokens_within_distance,
@@ -310,24 +311,21 @@ class MetricController:
         data=None,
         *,
         threshold: float = 0.50,
+        mapping: ObjectPaintMapping | None = None,
     ) -> bool:
         """Warn when the selected viewer object barely overlaps the token map."""
         if token_map is None:
             return True
 
-        structure_path = getattr(data, "structure_path", None)
-        if structure_path is None:
-            structure_path = getattr(
-                getattr(self, "_pred_data", None), "structure_path", ""
-            )
-        cache_key = (str(structure_path), str(obj_name))
+        cache_key = self._paint_mapping_cache_key(data, obj_name)
+        try:
+            if mapping is None:
+                mapping = self._prepare_paint_mapping(token_map, obj_name, data)
+            overlap = mapping.overlap
+        except Exception:
+            return True
         accepted = getattr(self, "_accepted_token_overlap_warnings", set())
         if cache_key in accepted:
-            return True
-
-        try:
-            overlap = compare_token_map_to_object(token_map, obj_name)
-        except Exception:
             return True
 
         if overlap.target_tokens <= 0 or overlap.target_coverage >= threshold:
@@ -360,6 +358,48 @@ class MetricController:
         accepted.add(cache_key)
         self._accepted_token_overlap_warnings = accepted
         return True
+
+    def _paint_mapping_cache_key(self, data, obj_name: str) -> tuple[str, str]:
+        structure_path = getattr(data, "structure_path", None)
+        if structure_path is None:
+            structure_path = getattr(
+                getattr(self, "_pred_data", None), "structure_path", ""
+            )
+        return str(structure_path), str(obj_name)
+
+    def _prepare_paint_mapping(
+        self,
+        token_map,
+        obj_name: str,
+        data=None,
+    ) -> ObjectPaintMapping:
+        """Return a valid cached atom-index mapping for one viewer object."""
+        cache_key = self._paint_mapping_cache_key(data, obj_name)
+        member = next(
+            (
+                item
+                for item in getattr(self, "_ensemble_members", None) or []
+                if getattr(item, "obj_name", None) == obj_name
+            ),
+            None,
+        )
+        existing = (
+            getattr(member, "paint_mapping", None)
+            if member is not None
+            else getattr(self, "_paint_mappings", {}).get(cache_key)
+        )
+        mapping, rebuilt = ensure_object_paint_mapping(obj_name, token_map, existing)
+        if member is not None:
+            member.paint_mapping = mapping
+        else:
+            mappings = dict(getattr(self, "_paint_mappings", {}))
+            mappings[cache_key] = mapping
+            self._paint_mappings = mappings
+        if rebuilt:
+            accepted = set(getattr(self, "_accepted_token_overlap_warnings", set()))
+            accepted.discard(cache_key)
+            self._accepted_token_overlap_warnings = accepted
+        return mapping
 
     def _binding_site_token_indices(
         self,

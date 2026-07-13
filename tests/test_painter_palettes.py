@@ -20,6 +20,7 @@ def _token(idx: int):
         token_idx=idx,
         chain_id="A",
         res_num=idx + 1,
+        res_name="ALA",
         is_hetatm=False,
         atom_name=None,
     )
@@ -31,12 +32,19 @@ class _Cmd:
         self.spectrum_calls: list[tuple] = []
         self.color_calls: list[tuple[str, str]] = []
         self.alter_calls: list[tuple[str, str]] = []
+        self.alter_spaces: list[dict] = []
         self.delete_calls: list[str] = []
         self.ramp_new_calls: list[tuple[tuple, dict]] = []
         self.rebuild_calls = 0
+        self.recolor_calls: list[str] = []
+        self.color_indices = {"grey70": 1}
 
     def set_color(self, name: str, rgb: list[float]) -> None:
         self.set_color_calls.append((name, rgb))
+        self.color_indices.setdefault(name, len(self.color_indices) + 1)
+
+    def get_color_index(self, name: str) -> int:
+        return self.color_indices.get(name, -1)
 
     def spectrum(self, *args, **kwargs) -> None:
         self.spectrum_calls.append((args, kwargs))
@@ -44,8 +52,30 @@ class _Cmd:
     def color(self, color_name: str, selection: str) -> None:
         self.color_calls.append((color_name, selection))
 
-    def alter(self, obj_name: str, expr: str) -> None:
+    def alter(self, obj_name: str, expr: str, *, space=None) -> None:
         self.alter_calls.append((obj_name, expr))
+        self.alter_spaces.append(space or {})
+
+    def get_model(self, _obj_name: str):
+        return types.SimpleNamespace(
+            atom=[
+                types.SimpleNamespace(
+                    index=index,
+                    chain="A",
+                    resi=str(index),
+                    resn="ALA",
+                    name="CA",
+                    hetatm=False,
+                )
+                for index in range(1, 4)
+            ]
+        )
+
+    def index(self, _obj_name: str):
+        return [("obj", index) for index in range(1, 4)]
+
+    def recolor(self, selection: str) -> None:
+        self.recolor_calls.append(selection)
 
     def rebuild(self) -> None:
         self.rebuild_calls += 1
@@ -84,11 +114,11 @@ class PainterPaletteTests(unittest.TestCase):
 
         self.assertEqual(self.cmd.set_color_calls, [])
         args, kwargs = self.cmd.spectrum_calls[0]
-        self.assertEqual(args[:3], ("b", "red_white_blue", "obj"))
+        self.assertEqual(args[:3], ("b", "red_white_blue", "(obj)"))
         self.assertEqual(kwargs["minimum"], 1.0)
         self.assertEqual(kwargs["maximum"], 2.0)
 
-    def test_viridis_registers_custom_colors_before_spectrum(self) -> None:
+    def test_viridis_quantizes_colors_without_spectrum(self) -> None:
         mol_viewer.paint_property_bulk(
             "obj",
             [_token(0), _token(1)],
@@ -97,11 +127,69 @@ class PainterPaletteTests(unittest.TestCase):
             rebuild=False,
         )
 
-        self.assertGreater(len(self.cmd.set_color_calls), 0)
-        args, _kwargs = self.cmd.spectrum_calls[0]
-        palette = args[1]
-        self.assertIn("foldqc_viridis_f_00", palette)
-        self.assertEqual(len(palette.split()), len(self.cmd.set_color_calls))
+        self.assertEqual(len(self.cmd.set_color_calls), 256)
+        self.assertEqual(self.cmd.spectrum_calls, [])
+        self.assertEqual(self.cmd.recolor_calls, ["(obj)"])
+        self.assertIn("color = foldqc_atom_colors[index]", self.cmd.alter_calls[0][1])
+        self.assertEqual(
+            self.cmd.alter_spaces[0]["foldqc_atom_values"][1:3], [1.0, 2.0]
+        )
+
+        self.cmd.set_color_calls.clear()
+        mol_viewer.paint_property_bulk(
+            "obj",
+            [_token(0), _token(1)],
+            np.array([1.0, 2.0], dtype=np.float32),
+            palette="viridis",
+            rebuild=False,
+        )
+        self.assertEqual(self.cmd.set_color_calls, [])
+
+    def test_native_batch_uses_one_spectrum_for_all_objects(self) -> None:
+        result = mol_viewer.paint_properties_bulk(
+            [
+                mol_viewer.PaintTarget(
+                    "obj_0",
+                    [_token(0), _token(1)],
+                    np.array([0.0, 1.0], dtype=np.float32),
+                ),
+                mol_viewer.PaintTarget(
+                    "obj_1",
+                    [_token(0), _token(1)],
+                    np.array([2.0, 3.0], dtype=np.float32),
+                ),
+            ],
+            palette="blue_white_red",
+            rebuild=False,
+        )
+
+        self.assertEqual((result.vmin, result.vmax), (0.0, 3.0))
+        self.assertEqual(len(self.cmd.alter_calls), 2)
+        self.assertEqual(len(self.cmd.spectrum_calls), 1)
+        args, kwargs = self.cmd.spectrum_calls[0]
+        self.assertEqual(args[:3], ("b", "blue_white_red", "(obj_0) or (obj_1)"))
+        self.assertEqual(kwargs, {"minimum": 0.0, "maximum": 3.0})
+
+    def test_custom_palette_clips_range_reverses_and_uses_nan_color(self) -> None:
+        mol_viewer.paint_property_bulk(
+            "obj",
+            [_token(0), _token(1), _token(2)],
+            np.array([-5.0, np.nan, 5.0], dtype=np.float32),
+            palette="viridis",
+            reverse_palette=True,
+            vmin=0.0,
+            vmax=1.0,
+            rebuild=False,
+        )
+
+        first_name, first_rgb = self.cmd.set_color_calls[0]
+        last_name, _last_rgb = self.cmd.set_color_calls[-1]
+        self.assertIn("_r_q256_", first_name)
+        np.testing.assert_allclose(first_rgb, palettes.VIRIDIS_STOPS[-1])
+        atom_colors = self.cmd.alter_spaces[0]["foldqc_atom_colors"]
+        self.assertEqual(atom_colors[1], self.cmd.color_indices[first_name])
+        self.assertEqual(atom_colors[2], self.cmd.color_indices["grey70"])
+        self.assertEqual(atom_colors[3], self.cmd.color_indices[last_name])
 
     def test_categorical_labels_color_exact_integer_b_factors(self) -> None:
         mol_viewer.paint_categorical_labels_bulk(
@@ -120,9 +208,41 @@ class PainterPaletteTests(unittest.TestCase):
             self.cmd.set_color_calls[0][1],
             list(palettes.categorical_color(0)),
         )
-        self.assertIn(("foldqc_category_000", "obj and b = 0"), self.cmd.color_calls)
-        self.assertIn(("foldqc_category_001", "obj and b = 1"), self.cmd.color_calls)
-        self.assertIn(("grey70", "obj and b < 0"), self.cmd.color_calls)
+        self.assertIn(
+            ("foldqc_category_000", "((obj)) and b = 0"), self.cmd.color_calls
+        )
+        self.assertIn(
+            ("foldqc_category_001", "((obj)) and b = 1"), self.cmd.color_calls
+        )
+        self.assertIn(("grey70", "((obj)) and b < 0"), self.cmd.color_calls)
+
+    def test_categorical_batch_registers_shared_labels_once(self) -> None:
+        mol_viewer.paint_categorical_labels_batch(
+            [
+                mol_viewer.PaintTarget(
+                    "obj_0",
+                    [_token(0), _token(1)],
+                    np.array([0.0, 1.0], dtype=np.float32),
+                ),
+                mol_viewer.PaintTarget(
+                    "obj_1",
+                    [_token(0), _token(1)],
+                    np.array([1.0, 2.0], dtype=np.float32),
+                ),
+            ],
+            rebuild=False,
+        )
+
+        self.assertEqual(len(self.cmd.alter_calls), 2)
+        self.assertEqual(
+            [name for name, _rgb in self.cmd.set_color_calls],
+            [
+                "foldqc_category_000",
+                "foldqc_category_001",
+                "foldqc_category_002",
+            ],
+        )
+        self.assertEqual(len(self.cmd.color_calls), 4)
 
     def test_plddt_class_coloring_uses_shared_palette_definitions(self) -> None:
         mol_viewer.paint_plddt_class_coloring("obj", rebuild=False)
@@ -147,6 +267,37 @@ class PainterPaletteTests(unittest.TestCase):
                 ("plddt_very_low", "obj and ((b<50 and b>0) or b=0)"),
                 ("plddt_nan", "obj and (b<0)"),
             ],
+        )
+
+    def test_plddt_class_batch_registers_and_colors_classes_once(self) -> None:
+        mol_viewer.paint_plddt_class_batch(
+            [
+                mol_viewer.PaintTarget(
+                    "obj_0", [_token(0)], np.array([0.9], dtype=np.float32)
+                ),
+                mol_viewer.PaintTarget(
+                    "obj_1", [_token(0)], np.array([0.6], dtype=np.float32)
+                ),
+            ],
+            rebuild=False,
+        )
+
+        self.assertEqual(len(self.cmd.alter_calls), 2)
+        self.assertEqual(
+            len(self.cmd.set_color_calls), len(palettes.PLDDT_CLASS_COLORS)
+        )
+        self.assertEqual(len(self.cmd.color_calls), len(palettes.PLDDT_CLASS_COLORS))
+        self.assertTrue(
+            all(
+                "(obj_0) or (obj_1)" in selection
+                for _name, selection in self.cmd.color_calls
+            )
+        )
+        self.assertAlmostEqual(
+            self.cmd.alter_spaces[0]["foldqc_atom_values"][1], 90.0, places=5
+        )
+        self.assertAlmostEqual(
+            self.cmd.alter_spaces[1]["foldqc_atom_values"][1], 60.0, places=5
         )
 
     def test_show_colorbar_replaces_single_named_ramp_object(self) -> None:

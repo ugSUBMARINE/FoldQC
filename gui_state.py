@@ -45,6 +45,7 @@ class GuiState:
     token_map: object | None = None
     token_map_obj: str | None = None
     token_map_structure_path: object | None = None
+    paint_mappings: dict[tuple[str, str], object] = field(default_factory=dict)
     ensemble_members: list | None = None
     ensemble_group_name: str | None = None
     ensemble_aligned: bool = False
@@ -79,6 +80,7 @@ for _private_name, _state_name in {
     "_token_map": "token_map",
     "_token_map_obj": "token_map_obj",
     "_token_map_structure_path": "token_map_structure_path",
+    "_paint_mappings": "paint_mappings",
     "_ensemble_members": "ensemble_members",
     "_ensemble_group_name": "ensemble_group_name",
     "_ensemble_aligned": "ensemble_aligned",

@@ -8,6 +8,7 @@ plain Python and in tests with a fake viewer.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
@@ -57,6 +58,45 @@ class _ColorDef:
 class _PaletteResolution:
     palette: str
     custom_colors: tuple[_ColorDef, ...] = ()
+
+
+@dataclass(frozen=True)
+class ObjectPaintMapping:
+    """Stable mapping from one PyMOL object's atom indices to prediction tokens."""
+
+    obj_name: str
+    atom_index_fingerprint: tuple[int, ...]
+    atom_token_indices: np.ndarray
+    atom_count: int
+    max_atom_index: int
+    overlap: TokenOverlapSummary
+
+
+@dataclass(frozen=True)
+class ObjectTokenInspection:
+    """One object snapshot reused for painting metadata and representative coordinates."""
+
+    paint_mapping: ObjectPaintMapping
+    representative_coords: np.ndarray
+
+
+@dataclass(frozen=True)
+class PaintTarget:
+    """One object and per-token array participating in a paint operation."""
+
+    obj_name: str
+    token_map: Sequence[TokenInfo]
+    values: np.ndarray
+    mapping: ObjectPaintMapping | None = None
+
+
+@dataclass(frozen=True)
+class PaintBatchResult:
+    """Resolved range and mappings from a batch paint operation."""
+
+    vmin: float
+    vmax: float
+    mappings: tuple[ObjectPaintMapping, ...]
 
 
 def get_viewer_name() -> str:
@@ -396,12 +436,9 @@ def _model_token_identities(model: Any) -> set[tuple[str, int, str, str | None]]
     return identities
 
 
-def compare_token_map_to_object(
-    token_map: list[TokenInfo], obj_name: str
+def _overlap_summary_from_model(
+    token_map: Sequence[TokenInfo], model: Any
 ) -> TokenOverlapSummary:
-    """Compare prediction-token identities with a loaded viewer object."""
-    from pymol import cmd
-
     prediction_identities = {
         (
             str(token.chain_id),
@@ -411,7 +448,7 @@ def compare_token_map_to_object(
         )
         for token in token_map
     }
-    target_identities = _model_token_identities(cmd.get_model(obj_name))
+    target_identities = _model_token_identities(model)
     matched_total = len(prediction_identities & target_identities)
     prediction_total = len(prediction_identities)
     target_total = len(target_identities)
@@ -425,6 +462,110 @@ def compare_token_map_to_object(
             matched_total / prediction_total if prediction_total else 1.0
         ),
     )
+
+
+def _atom_indices(model: Any) -> tuple[int, ...]:
+    indices: list[int] = []
+    for fallback, atom in enumerate(getattr(model, "atom", []) or [], start=1):
+        index = int(getattr(atom, "index", fallback))
+        if index <= 0:
+            raise ValueError(f"PyMOL atom index must be positive, got {index}.")
+        indices.append(index)
+    if len(indices) != len(set(indices)):
+        raise ValueError("PyMOL object contains duplicate atom indices.")
+    return tuple(indices)
+
+
+def _paint_mapping_from_model(
+    obj_name: str,
+    token_map: Sequence[TokenInfo],
+    model: Any,
+) -> ObjectPaintMapping:
+    polymer_tokens = {
+        (str(token.chain_id), int(token.res_num)): int(token.token_idx)
+        for token in token_map
+        if not token.is_hetatm
+    }
+    hetatm_tokens = {
+        (str(token.chain_id), int(token.res_num), str(token.atom_name or "")): int(
+            token.token_idx
+        )
+        for token in token_map
+        if token.is_hetatm
+    }
+    indices = _atom_indices(model)
+    max_index = max(indices, default=0)
+    atom_token_indices = np.full(max_index + 1, -1, dtype=np.int32)
+    for atom, index in zip(getattr(model, "atom", []) or [], indices):
+        try:
+            residue_number = int(atom.resi)
+        except (TypeError, ValueError):
+            continue
+        chain_id = str(getattr(atom, "chain", ""))
+        if bool(getattr(atom, "hetatm", False)):
+            token_idx = hetatm_tokens.get(
+                (chain_id, residue_number, str(getattr(atom, "name", ""))), -1
+            )
+        else:
+            token_idx = polymer_tokens.get((chain_id, residue_number), -1)
+        atom_token_indices[index] = token_idx
+    return ObjectPaintMapping(
+        obj_name=str(obj_name),
+        atom_index_fingerprint=indices,
+        atom_token_indices=atom_token_indices,
+        atom_count=len(indices),
+        max_atom_index=max_index,
+        overlap=_overlap_summary_from_model(token_map, model),
+    )
+
+
+def prepare_object_paint_mapping(
+    obj_name: str,
+    token_map: Sequence[TokenInfo],
+    *,
+    model: Any | None = None,
+) -> ObjectPaintMapping:
+    """Inspect one object and prepare reusable atom-index painting metadata."""
+    if model is None:
+        from pymol import cmd
+
+        model = cmd.get_model(obj_name)
+    return _paint_mapping_from_model(obj_name, token_map, model)
+
+
+def object_paint_mapping_is_valid(mapping: ObjectPaintMapping) -> bool:
+    """Return whether an object's current atom-index order matches *mapping*."""
+    from pymol import cmd
+
+    try:
+        current = tuple(int(index) for _model, index in cmd.index(mapping.obj_name))
+    except Exception:
+        return False
+    return current == mapping.atom_index_fingerprint
+
+
+def ensure_object_paint_mapping(
+    obj_name: str,
+    token_map: Sequence[TokenInfo],
+    mapping: ObjectPaintMapping | None = None,
+) -> tuple[ObjectPaintMapping, bool]:
+    """Reuse a valid mapping or rebuild it, returning ``(mapping, rebuilt)``."""
+    if (
+        mapping is not None
+        and mapping.obj_name == obj_name
+        and object_paint_mapping_is_valid(mapping)
+    ):
+        return mapping, False
+    return prepare_object_paint_mapping(obj_name, token_map), True
+
+
+def compare_token_map_to_object(
+    token_map: list[TokenInfo], obj_name: str
+) -> TokenOverlapSummary:
+    """Compare prediction-token identities with a loaded viewer object."""
+    from pymol import cmd
+
+    return _overlap_summary_from_model(token_map, cmd.get_model(obj_name))
 
 
 def selection_to_token_indices(
@@ -495,30 +636,58 @@ def token_bfactor_keys(token_map: list[TokenInfo]) -> list[tuple[str, str, str]]
     ]
 
 
+def _expand_token_values_for_atoms(
+    mapping: ObjectPaintMapping,
+    token_values: np.ndarray,
+    *,
+    default: float | int,
+) -> list[float] | list[int]:
+    atom_values = np.full(
+        mapping.max_atom_index + 1,
+        default,
+        dtype=token_values.dtype,
+    )
+    if mapping.atom_token_indices.size:
+        atom_indices = np.flatnonzero(mapping.atom_token_indices >= 0)
+        if atom_indices.size:
+            token_indices = mapping.atom_token_indices[atom_indices]
+            atom_values[atom_indices] = token_values[token_indices]
+    return atom_values.tolist()
+
+
+def _scaled_bfactor_values(values: np.ndarray, scale: float) -> np.ndarray:
+    arr = np.asarray(values, dtype=np.float64)
+    return np.where(np.isfinite(arr), arr * float(scale), -1.0)
+
+
 def _write_bfactors_bulk(
     obj_name: str,
     token_map: list[TokenInfo],
     values: np.ndarray,
     *,
     scale: float = 1.0,
-) -> None:
-    from pymol import cmd, stored
+    mapping: ObjectPaintMapping | None = None,
+) -> ObjectPaintMapping:
+    from pymol import cmd
 
     if len(values) != len(token_map):
         raise ValueError(
             f"values length {len(values)} does not match token_map length "
             f"{len(token_map)}."
         )
-    bmap: dict[tuple[str, str, str], float] = {}
-    for token, key in zip(token_map, token_bfactor_keys(token_map)):
-        value = float(values[token.token_idx])
-        bmap[key] = value * scale if np.isfinite(value) else -1.0
-    stored.foldqc_bmap = bmap
+    if mapping is None or mapping.obj_name != obj_name:
+        mapping = prepare_object_paint_mapping(obj_name, token_map)
+    atom_values = _expand_token_values_for_atoms(
+        mapping,
+        _scaled_bfactor_values(values, scale),
+        default=-1.0,
+    )
     cmd.alter(
         obj_name,
-        "b = stored.foldqc_bmap.get((chain, resi, name), "
-        "stored.foldqc_bmap.get((chain, resi, ''), -1.0))",
+        "b = foldqc_atom_values[index]",
+        space={"foldqc_atom_values": atom_values},
     )
+    return mapping
 
 
 def _reverse_color_list(colors: str) -> str:
@@ -554,6 +723,7 @@ def paint_property(
     vmin: float | None = None,
     vmax: float | None = None,
     nan_color: str = NAN_COLOR_DEFAULT,
+    mapping: ObjectPaintMapping | None = None,
 ) -> tuple[float, float]:
     return paint_property_bulk(
         obj_name,
@@ -565,6 +735,158 @@ def paint_property(
         vmax=vmax,
         nan_color=nan_color,
         rebuild=True,
+        mapping=mapping,
+    )
+
+
+def _object_union_selection(object_names: Sequence[str]) -> str:
+    return " or ".join(f"({name})" for name in dict.fromkeys(object_names))
+
+
+def _quantized_custom_colors(
+    palette_key: str,
+    colors: Sequence[_ColorDef],
+    *,
+    bins: int = 256,
+) -> tuple[_ColorDef, ...]:
+    stops = np.asarray([color.rgb for color in colors], dtype=np.float64)
+    source_positions = np.linspace(0.0, 1.0, len(stops))
+    target_positions = np.linspace(0.0, 1.0, bins)
+    interpolated = np.column_stack(
+        [
+            np.interp(target_positions, source_positions, stops[:, channel])
+            for channel in range(3)
+        ]
+    )
+    digest = hashlib.sha256(stops.astype(np.float32).tobytes()).hexdigest()[:8]
+    direction = "r" if colors and "_r_" in colors[0].name else "f"
+    safe_key = re.sub(r"[^A-Za-z0-9_]", "_", palette_key)
+    prefix = f"foldqc_{safe_key}_{direction}_q{bins}_{digest}"
+    return tuple(
+        _ColorDef(f"{prefix}_{index:03d}", tuple(float(v) for v in rgb))
+        for index, rgb in enumerate(interpolated)
+    )
+
+
+def _ensure_color_indices(colors: Sequence[_ColorDef]) -> list[int]:
+    from pymol import cmd
+
+    indices = [int(cmd.get_color_index(color.name)) for color in colors]
+    if any(index < 0 for index in indices):
+        for color in colors:
+            cmd.set_color(color.name, list(color.rgb))
+        indices = [int(cmd.get_color_index(color.name)) for color in colors]
+    if any(index < 0 for index in indices):
+        raise ValueError("PyMOL did not register the FoldQC custom palette colors.")
+    return indices
+
+
+def _token_color_indices(
+    values: np.ndarray,
+    color_indices: Sequence[int],
+    *,
+    vmin: float,
+    vmax: float,
+    nan_color_index: int,
+) -> np.ndarray:
+    arr = np.asarray(values, dtype=np.float64)
+    result = np.full(arr.shape, int(nan_color_index), dtype=np.int64)
+    finite = np.isfinite(arr)
+    if finite.any():
+        normalized = np.clip((arr[finite] - vmin) / (vmax - vmin), 0.0, 1.0)
+        bins = np.rint(normalized * (len(color_indices) - 1)).astype(np.int64)
+        palette_indices = np.asarray(color_indices, dtype=np.int64)
+        result[finite] = palette_indices[bins]
+    return result
+
+
+def paint_properties_bulk(
+    targets: Sequence[PaintTarget],
+    palette: str = "blue_white_red",
+    reverse_palette: bool = False,
+    vmin: float | None = None,
+    vmax: float | None = None,
+    nan_color: str = NAN_COLOR_DEFAULT,
+    rebuild: bool = True,
+) -> PaintBatchResult:
+    """Paint one or more objects with one shared range and palette operation."""
+    from pymol import cmd
+
+    if not targets:
+        raise ValueError("At least one paint target is required.")
+    arrays = [np.asarray(target.values) for target in targets]
+    combined = np.concatenate(arrays) if len(arrays) > 1 else arrays[0]
+    used_vmin, used_vmax = _resolve_color_range(combined, vmin, vmax)
+
+    resolved_targets: list[tuple[PaintTarget, ObjectPaintMapping]] = []
+    for target in targets:
+        if len(target.values) != len(target.token_map):
+            raise ValueError(
+                f"values length {len(target.values)} does not match token_map length "
+                f"{len(target.token_map)}."
+            )
+        mapping = target.mapping
+        if mapping is None or mapping.obj_name != target.obj_name:
+            mapping = prepare_object_paint_mapping(target.obj_name, target.token_map)
+        resolved_targets.append((target, mapping))
+
+    resolved = _resolve_pymol_palette(palette, reverse_palette)
+    selection = _object_union_selection(
+        [target.obj_name for target, _mapping in resolved_targets]
+    )
+    if resolved.custom_colors:
+        quantized = _quantized_custom_colors(palette, resolved.custom_colors)
+        color_indices = _ensure_color_indices(quantized)
+        nan_color_index = int(cmd.get_color_index(nan_color))
+        if nan_color_index < 0:
+            raise ValueError(f"Unknown PyMOL NaN color: {nan_color!r}.")
+        for target, mapping in resolved_targets:
+            atom_values = _expand_token_values_for_atoms(
+                mapping,
+                _scaled_bfactor_values(target.values, 1.0),
+                default=-1.0,
+            )
+            token_colors = _token_color_indices(
+                target.values,
+                color_indices,
+                vmin=used_vmin,
+                vmax=used_vmax,
+                nan_color_index=nan_color_index,
+            )
+            atom_colors = _expand_token_values_for_atoms(
+                mapping, token_colors, default=nan_color_index
+            )
+            cmd.alter(
+                target.obj_name,
+                "b = foldqc_atom_values[index]; color = foldqc_atom_colors[index]",
+                space={
+                    "foldqc_atom_values": atom_values,
+                    "foldqc_atom_colors": atom_colors,
+                },
+            )
+        cmd.recolor(selection)
+    else:
+        for target, mapping in resolved_targets:
+            _write_bfactors_bulk(
+                target.obj_name,
+                list(target.token_map),
+                target.values,
+                mapping=mapping,
+            )
+        cmd.spectrum(
+            "b",
+            resolved.palette,
+            selection,
+            minimum=used_vmin,
+            maximum=used_vmax,
+        )
+        cmd.color(nan_color, f"({selection}) and b < 0")
+    if rebuild:
+        cmd.rebuild()
+    return PaintBatchResult(
+        used_vmin,
+        used_vmax,
+        tuple(mapping for _target, mapping in resolved_targets),
     )
 
 
@@ -578,19 +900,18 @@ def paint_property_bulk(
     vmax: float | None = None,
     nan_color: str = NAN_COLOR_DEFAULT,
     rebuild: bool = True,
+    mapping: ObjectPaintMapping | None = None,
 ) -> tuple[float, float]:
-    from pymol import cmd
-
-    vmin, vmax = _resolve_color_range(values, vmin, vmax)
-    _write_bfactors_bulk(obj_name, token_map, values)
-    resolved = _resolve_pymol_palette(palette, reverse_palette)
-    for color in resolved.custom_colors:
-        cmd.set_color(color.name, list(color.rgb))
-    cmd.spectrum("b", resolved.palette, obj_name, minimum=vmin, maximum=vmax)
-    cmd.color(nan_color, f"{obj_name} and b < 0")
-    if rebuild:
-        cmd.rebuild()
-    return vmin, vmax
+    result = paint_properties_bulk(
+        [PaintTarget(obj_name, token_map, values, mapping)],
+        palette=palette,
+        reverse_palette=reverse_palette,
+        vmin=vmin,
+        vmax=vmax,
+        nan_color=nan_color,
+        rebuild=rebuild,
+    )
+    return result.vmin, result.vmax
 
 
 def _category_color_name(label: int) -> str:
@@ -607,21 +928,50 @@ def paint_categorical_labels_bulk(
     values: np.ndarray,
     nan_color: str = NAN_COLOR_DEFAULT,
     rebuild: bool = True,
+    mapping: ObjectPaintMapping | None = None,
 ) -> tuple[float, float]:
+    result = paint_categorical_labels_batch(
+        [PaintTarget(obj_name, token_map, values, mapping)],
+        nan_color=nan_color,
+        rebuild=rebuild,
+    )
+    return result.vmin, result.vmax
+
+
+def paint_categorical_labels_batch(
+    targets: Sequence[PaintTarget],
+    nan_color: str = NAN_COLOR_DEFAULT,
+    rebuild: bool = True,
+) -> PaintBatchResult:
+    """Paint integer labels across targets with shared viewer commands."""
     from pymol import cmd
 
-    arr = np.asarray(values, dtype=np.float32)
-    vmin, vmax = _resolve_color_range(arr)
-    _write_bfactors_bulk(obj_name, token_map, arr)
-    labels = sorted({int(round(float(value))) for value in arr[np.isfinite(arr)]})
+    if not targets:
+        raise ValueError("At least one paint target is required.")
+    arrays = [np.asarray(target.values, dtype=np.float32) for target in targets]
+    combined = np.concatenate(arrays) if len(arrays) > 1 else arrays[0]
+    vmin, vmax = _resolve_color_range(combined)
+    mappings: list[ObjectPaintMapping] = []
+    for target, arr in zip(targets, arrays):
+        mapping = _write_bfactors_bulk(
+            target.obj_name,
+            list(target.token_map),
+            arr,
+            mapping=target.mapping,
+        )
+        mappings.append(mapping)
+    labels = sorted(
+        {int(round(float(value))) for value in combined[np.isfinite(combined)]}
+    )
+    selection = _object_union_selection([target.obj_name for target in targets])
     for label in labels:
         color_name = _category_color_name(label)
         cmd.set_color(color_name, list(categorical_color(label)))
-        cmd.color(color_name, f"{obj_name} and b = {label:g}")
-    cmd.color(nan_color, f"{obj_name} and b < 0")
+        cmd.color(color_name, f"({selection}) and b = {label:g}")
+    cmd.color(nan_color, f"({selection}) and b < 0")
     if rebuild:
         cmd.rebuild()
-    return vmin, vmax
+    return PaintBatchResult(vmin, vmax, tuple(mappings))
 
 
 def delete_colorbar(name: str = COLORBAR_OBJECT_NAME) -> None:
@@ -669,12 +1019,10 @@ def reset_bfactors(obj_name: str, value: float = 100.0) -> None:
     cmd.rebuild()
 
 
-def get_representative_coords(obj_name: str, token_map: list[TokenInfo]) -> np.ndarray:
-    """Return one representative coordinate per prediction token."""
-    from pymol import cmd
-
+def _representative_coords_from_model(
+    model: Any, token_map: Sequence[TokenInfo]
+) -> np.ndarray:
     coords = np.zeros((len(token_map), 3), dtype=np.float32)
-    model = cmd.get_model(obj_name)
     atom_coords: dict[tuple[str, int, str], tuple[float, float, float]] = {}
     first_atom: dict[tuple[str, int], tuple[float, float, float]] = {}
     for atom in model.atom:
@@ -698,6 +1046,24 @@ def get_representative_coords(obj_name: str, token_map: list[TokenInfo]) -> np.n
             )
         coords[token.token_idx] = xyz
     return coords
+
+
+def inspect_object_tokens(
+    obj_name: str, token_map: Sequence[TokenInfo]
+) -> ObjectTokenInspection:
+    """Inspect one object once for reusable painting metadata and coordinates."""
+    from pymol import cmd
+
+    model = cmd.get_model(obj_name)
+    return ObjectTokenInspection(
+        paint_mapping=prepare_object_paint_mapping(obj_name, token_map, model=model),
+        representative_coords=_representative_coords_from_model(model, token_map),
+    )
+
+
+def get_representative_coords(obj_name: str, token_map: list[TokenInfo]) -> np.ndarray:
+    """Return one representative coordinate per prediction token."""
+    return inspect_object_tokens(obj_name, token_map).representative_coords
 
 
 def transform_object(
@@ -746,17 +1112,50 @@ def paint_plddt_class_coloring(
     values: np.ndarray | None = None,
     token_map: list[TokenInfo] | None = None,
     rebuild: bool = True,
+    mapping: ObjectPaintMapping | None = None,
 ) -> None:
     from pymol import cmd
 
     if values is not None and token_map is not None:
-        _write_bfactors_bulk(obj_name, token_map, values, scale=100.0)
+        paint_plddt_class_batch(
+            [PaintTarget(obj_name, token_map, values, mapping)], rebuild=rebuild
+        )
+        return
     for color in PLDDT_CLASS_COLORS:
         color_name = color.key if color.key == "plddt_nan" else f"plddt_{color.key}"
         cmd.set_color(color_name, list(color.rgb))
         cmd.color(color_name, f"{obj_name} and {_plddt_selection(color)}")
     if rebuild:
         cmd.rebuild()
+
+
+def paint_plddt_class_batch(
+    targets: Sequence[PaintTarget],
+    rebuild: bool = True,
+) -> tuple[ObjectPaintMapping, ...]:
+    """Write pLDDT B-factors and apply quality classes across targets."""
+    from pymol import cmd
+
+    if not targets:
+        raise ValueError("At least one paint target is required.")
+    mappings: list[ObjectPaintMapping] = []
+    for target in targets:
+        mapping = _write_bfactors_bulk(
+            target.obj_name,
+            list(target.token_map),
+            target.values,
+            scale=100.0,
+            mapping=target.mapping,
+        )
+        mappings.append(mapping)
+    selection = _object_union_selection([target.obj_name for target in targets])
+    for color in PLDDT_CLASS_COLORS:
+        color_name = color.key if color.key == "plddt_nan" else f"plddt_{color.key}"
+        cmd.set_color(color_name, list(color.rgb))
+        cmd.color(color_name, f"({selection}) and {_plddt_selection(color)}")
+    if rebuild:
+        cmd.rebuild()
+    return tuple(mappings)
 
 
 def update_token_selection(

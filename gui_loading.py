@@ -366,10 +366,11 @@ class GuiLoadingController:
                 return
 
     def _clear_token_map_cache(self) -> None:
-        """Drop cached token-map state after changing prediction context."""
+        """Drop token and viewer mapping state after changing prediction context."""
         self._token_map = None
         self._token_map_obj = None  # type: ignore[attr-defined]
         self._token_map_structure_path = None  # type: ignore[attr-defined]
+        self._paint_mappings = {}
         self._accepted_token_overlap_warnings = set()
 
     def _property_combo_row(self, key: str) -> int | None:
