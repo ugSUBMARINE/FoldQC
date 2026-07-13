@@ -13,17 +13,15 @@ from FoldQC import (
     mol_viewer,  # noqa: E402
     palettes,  # noqa: E402
 )
+from FoldQC.token_map import TokenInfo, TokenMap  # noqa: E402
 
 
-def _token(idx: int):
-    return types.SimpleNamespace(
-        token_idx=idx,
-        chain_id="A",
-        res_num=idx + 1,
-        res_name="ALA",
-        is_hetatm=False,
-        atom_name=None,
-    )
+def _token(idx: int) -> TokenInfo:
+    return TokenInfo(idx, "A", idx + 1, "ALA", False, None)
+
+
+def _token_map(*tokens: TokenInfo) -> TokenMap:
+    return TokenMap(tokens)
 
 
 class _Cmd:
@@ -105,7 +103,7 @@ class PainterPaletteTests(unittest.TestCase):
     ) -> None:
         mol_viewer.paint_property_bulk(
             "obj",
-            [_token(0), _token(1)],
+            _token_map(_token(0), _token(1)),
             np.array([1.0, 2.0], dtype=np.float32),
             palette="blue_white_red",
             reverse_palette=True,
@@ -121,7 +119,7 @@ class PainterPaletteTests(unittest.TestCase):
     def test_viridis_quantizes_colors_without_spectrum(self) -> None:
         mol_viewer.paint_property_bulk(
             "obj",
-            [_token(0), _token(1)],
+            _token_map(_token(0), _token(1)),
             np.array([1.0, 2.0], dtype=np.float32),
             palette="viridis",
             rebuild=False,
@@ -138,7 +136,7 @@ class PainterPaletteTests(unittest.TestCase):
         self.cmd.set_color_calls.clear()
         mol_viewer.paint_property_bulk(
             "obj",
-            [_token(0), _token(1)],
+            _token_map(_token(0), _token(1)),
             np.array([1.0, 2.0], dtype=np.float32),
             palette="viridis",
             rebuild=False,
@@ -150,12 +148,12 @@ class PainterPaletteTests(unittest.TestCase):
             [
                 mol_viewer.PaintTarget(
                     "obj_0",
-                    [_token(0), _token(1)],
+                    _token_map(_token(0), _token(1)),
                     np.array([0.0, 1.0], dtype=np.float32),
                 ),
                 mol_viewer.PaintTarget(
                     "obj_1",
-                    [_token(0), _token(1)],
+                    _token_map(_token(0), _token(1)),
                     np.array([2.0, 3.0], dtype=np.float32),
                 ),
             ],
@@ -173,7 +171,7 @@ class PainterPaletteTests(unittest.TestCase):
     def test_custom_palette_clips_range_reverses_and_uses_nan_color(self) -> None:
         mol_viewer.paint_property_bulk(
             "obj",
-            [_token(0), _token(1), _token(2)],
+            _token_map(_token(0), _token(1), _token(2)),
             np.array([-5.0, np.nan, 5.0], dtype=np.float32),
             palette="viridis",
             reverse_palette=True,
@@ -194,7 +192,7 @@ class PainterPaletteTests(unittest.TestCase):
     def test_categorical_labels_color_exact_integer_b_factors(self) -> None:
         mol_viewer.paint_categorical_labels_bulk(
             "obj",
-            [_token(0), _token(1), _token(2)],
+            _token_map(_token(0), _token(1), _token(2)),
             np.array([0.0, 1.0, np.nan], dtype=np.float32),
             rebuild=False,
         )
@@ -221,12 +219,12 @@ class PainterPaletteTests(unittest.TestCase):
             [
                 mol_viewer.PaintTarget(
                     "obj_0",
-                    [_token(0), _token(1)],
+                    _token_map(_token(0), _token(1)),
                     np.array([0.0, 1.0], dtype=np.float32),
                 ),
                 mol_viewer.PaintTarget(
                     "obj_1",
-                    [_token(0), _token(1)],
+                    _token_map(_token(0), _token(1)),
                     np.array([1.0, 2.0], dtype=np.float32),
                 ),
             ],
@@ -273,10 +271,10 @@ class PainterPaletteTests(unittest.TestCase):
         mol_viewer.paint_plddt_class_batch(
             [
                 mol_viewer.PaintTarget(
-                    "obj_0", [_token(0)], np.array([0.9], dtype=np.float32)
+                    "obj_0", _token_map(_token(0)), np.array([0.9], dtype=np.float32)
                 ),
                 mol_viewer.PaintTarget(
-                    "obj_1", [_token(0)], np.array([0.6], dtype=np.float32)
+                    "obj_1", _token_map(_token(0)), np.array([0.6], dtype=np.float32)
                 ),
             ],
             rebuild=False,

@@ -4,6 +4,7 @@ import sys
 import tempfile
 import types
 import unittest
+from dataclasses import FrozenInstanceError
 from pathlib import Path
 
 import numpy as np
@@ -16,6 +17,7 @@ from FoldQC.mol_viewer import (  # noqa: E402
 )
 from FoldQC.token_map import (  # noqa: E402
     TokenInfo,
+    TokenMap,
     build_token_map,
     extract_structure_plddt,
     parse_structure_atoms,
@@ -65,6 +67,56 @@ class TokenMapTests(unittest.TestCase):
             atom_name=atom_name,
         )
 
+    def test_token_info_is_frozen(self) -> None:
+        token = self._token(0)
+
+        with self.assertRaises(FrozenInstanceError):
+            token.res_num = 2  # type: ignore[misc]
+
+    def test_token_map_sequence_hash_and_metadata(self) -> None:
+        tokens = (
+            self._token(0, chain_id="A", res_num=1),
+            self._token(1, chain_id="A", res_num=2),
+            self._token(
+                2,
+                chain_id="L",
+                res_num=3,
+                res_name="LIG",
+                is_hetatm=True,
+                atom_name="C1",
+            ),
+        )
+        token_map = TokenMap(tokens)
+
+        self.assertEqual(len(token_map), 3)
+        self.assertIs(token_map[1], tokens[1])
+        self.assertEqual(token_map[1:], tokens[1:])
+        self.assertEqual(tuple(token_map), tokens)
+        self.assertEqual(token_map, TokenMap(tokens))
+        self.assertEqual(hash(token_map), hash(TokenMap(tokens)))
+        self.assertEqual(token_map.chain_order, ("A", "L"))
+        self.assertEqual(token_map.chain_to_indices, {"A": (0, 1), "L": (2,)})
+        self.assertEqual(token_map.chain_id_to_index, {"A": 0, "L": 1})
+        self.assertEqual(token_map.polymer_indices, (0, 1))
+        self.assertEqual(token_map.polymer_token_by_residue, {("A", 1): 0, ("A", 2): 1})
+        self.assertEqual(token_map.hetatm_token_by_atom, {("L", 3, "C1"): 2})
+        self.assertEqual(
+            token_map.token_identities,
+            frozenset(
+                {
+                    ("A", 1, "ALA", None),
+                    ("A", 2, "ALA", None),
+                    ("L", 3, "LIG", "C1"),
+                }
+            ),
+        )
+        with self.assertRaises(TypeError):
+            token_map.chain_to_indices["B"] = (3,)  # type: ignore[index]
+
+    def test_token_map_rejects_non_dense_indices(self) -> None:
+        with self.assertRaisesRegex(ValueError, "dense token indices"):
+            TokenMap((self._token(1),))
+
     def test_cif_parser_unquotes_atom_names_with_apostrophes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "quoted.cif"
@@ -75,6 +127,7 @@ class TokenMapTests(unittest.TestCase):
             plddt = extract_structure_plddt(path)
 
         self.assertEqual([atom["name"] for atom in atoms], ["C1'", "O5'"])
+        self.assertIsInstance(token_map, TokenMap)
         self.assertEqual([tok.atom_name for tok in token_map], ["C1'", "O5'"])
         self.assertFalse(hasattr(token_map[0], "pymol_selection"))
         np.testing.assert_allclose(plddt, np.array([0.986, 0.9842], dtype=np.float32))
@@ -111,10 +164,12 @@ class TokenMapTests(unittest.TestCase):
         )
 
     def test_token_overlap_full_match(self) -> None:
-        token_map = [
-            self._token(0, chain_id="A", res_num=1, res_name="ALA"),
-            self._token(1, chain_id="A", res_num=2, res_name="GLY"),
-        ]
+        token_map = TokenMap(
+            (
+                self._token(0, chain_id="A", res_num=1, res_name="ALA"),
+                self._token(1, chain_id="A", res_num=2, res_name="GLY"),
+            )
+        )
 
         overlap = self._compare_overlap(
             token_map,
@@ -133,10 +188,12 @@ class TokenMapTests(unittest.TestCase):
         self.assertEqual(overlap.prediction_coverage, 1.0)
 
     def test_token_overlap_target_subset_keeps_full_target_coverage(self) -> None:
-        token_map = [
-            self._token(0, chain_id="A", res_num=1, res_name="ALA"),
-            self._token(1, chain_id="A", res_num=2, res_name="GLY"),
-        ]
+        token_map = TokenMap(
+            (
+                self._token(0, chain_id="A", res_num=1, res_name="ALA"),
+                self._token(1, chain_id="A", res_num=2, res_name="GLY"),
+            )
+        )
 
         overlap = self._compare_overlap(
             token_map,
@@ -149,7 +206,7 @@ class TokenMapTests(unittest.TestCase):
         self.assertEqual(overlap.prediction_coverage, 0.5)
 
     def test_token_overlap_residue_name_mismatch_does_not_match(self) -> None:
-        token_map = [self._token(0, chain_id="A", res_num=1, res_name="ALA")]
+        token_map = TokenMap((self._token(0, chain_id="A", res_num=1, res_name="ALA"),))
 
         overlap = self._compare_overlap(
             token_map,
@@ -161,16 +218,18 @@ class TokenMapTests(unittest.TestCase):
         self.assertEqual(overlap.target_coverage, 0.0)
 
     def test_token_overlap_hetatm_requires_residue_and_atom_name(self) -> None:
-        token_map = [
-            self._token(
-                0,
-                chain_id="L",
-                res_num=1,
-                res_name="LIG",
-                is_hetatm=True,
-                atom_name="C1",
+        token_map = TokenMap(
+            (
+                self._token(
+                    0,
+                    chain_id="L",
+                    res_num=1,
+                    res_name="LIG",
+                    is_hetatm=True,
+                    atom_name="C1",
+                ),
             )
-        ]
+        )
 
         wrong_atom = self._compare_overlap(
             token_map,
@@ -190,14 +249,16 @@ class TokenMapTests(unittest.TestCase):
         self.assertEqual(matched.matched_target_tokens, 1)
 
     def test_compact_selection_collapses_unordered_residue_ranges(self) -> None:
-        token_map = [
-            self._token(0, res_num=-2),
-            self._token(1, res_num=-1),
-            self._token(2, res_num=0),
-            self._token(3, res_num=2),
-            self._token(4, res_num=3),
-            self._token(5, res_num=5),
-        ]
+        token_map = TokenMap(
+            (
+                self._token(0, res_num=-2),
+                self._token(1, res_num=-1),
+                self._token(2, res_num=0),
+                self._token(3, res_num=2),
+                self._token(4, res_num=3),
+                self._token(5, res_num=5),
+            )
+        )
 
         expression = compact_selection_expression(
             [5, 3, 0, 4, 2, 1, 3, -1, 99],
@@ -212,52 +273,56 @@ class TokenMapTests(unittest.TestCase):
     def test_compact_selection_groups_objects_chains_and_ligand_residues(
         self,
     ) -> None:
-        first_map = [
-            self._token(0, chain_id="A", res_num=10, obj_name="model_0"),
-            self._token(1, chain_id="A", res_num=11, obj_name="model_0"),
-            self._token(2, chain_id="B", res_num=4, obj_name="model_0"),
-            self._token(
-                3,
-                chain_id="X",
-                res_num=1,
-                res_name="LIG",
-                is_hetatm=True,
-                atom_name="C1",
-                obj_name="model_0",
-            ),
-            self._token(
-                4,
-                chain_id="X",
-                res_num=1,
-                res_name="LIG",
-                is_hetatm=True,
-                atom_name="N3",
-                obj_name="model_0",
-            ),
-        ]
-        second_map = [
-            self._token(0, chain_id="A", res_num=10, obj_name="model_1"),
-            self._token(1, chain_id="A", res_num=11, obj_name="model_1"),
-            self._token(2, chain_id="B", res_num=4, obj_name="model_1"),
-            self._token(
-                3,
-                chain_id="X",
-                res_num=1,
-                res_name="LIG",
-                is_hetatm=True,
-                atom_name="C1",
-                obj_name="model_1",
-            ),
-            self._token(
-                4,
-                chain_id="X",
-                res_num=1,
-                res_name="LIG",
-                is_hetatm=True,
-                atom_name="N3",
-                obj_name="model_1",
-            ),
-        ]
+        first_map = TokenMap(
+            (
+                self._token(0, chain_id="A", res_num=10, obj_name="model_0"),
+                self._token(1, chain_id="A", res_num=11, obj_name="model_0"),
+                self._token(2, chain_id="B", res_num=4, obj_name="model_0"),
+                self._token(
+                    3,
+                    chain_id="X",
+                    res_num=1,
+                    res_name="LIG",
+                    is_hetatm=True,
+                    atom_name="C1",
+                    obj_name="model_0",
+                ),
+                self._token(
+                    4,
+                    chain_id="X",
+                    res_num=1,
+                    res_name="LIG",
+                    is_hetatm=True,
+                    atom_name="N3",
+                    obj_name="model_0",
+                ),
+            )
+        )
+        second_map = TokenMap(
+            (
+                self._token(0, chain_id="A", res_num=10, obj_name="model_1"),
+                self._token(1, chain_id="A", res_num=11, obj_name="model_1"),
+                self._token(2, chain_id="B", res_num=4, obj_name="model_1"),
+                self._token(
+                    3,
+                    chain_id="X",
+                    res_num=1,
+                    res_name="LIG",
+                    is_hetatm=True,
+                    atom_name="C1",
+                    obj_name="model_1",
+                ),
+                self._token(
+                    4,
+                    chain_id="X",
+                    res_num=1,
+                    res_name="LIG",
+                    is_hetatm=True,
+                    atom_name="N3",
+                    obj_name="model_1",
+                ),
+            )
+        )
 
         expression = compact_selection_expression(
             [0, 1, 2, 3, 4],
@@ -277,25 +342,27 @@ class TokenMapTests(unittest.TestCase):
     def test_compact_selection_supports_blank_chain_and_apostrophe_atom_names(
         self,
     ) -> None:
-        token_map = [
-            self._token(0, chain_id="", res_num=7),
-            self._token(
-                1,
-                chain_id="X",
-                res_num=2,
-                res_name="FAD",
-                is_hetatm=True,
-                atom_name="C1'",
-            ),
-            self._token(
-                2,
-                chain_id="X",
-                res_num=2,
-                res_name="FAD",
-                is_hetatm=True,
-                atom_name="O5'",
-            ),
-        ]
+        token_map = TokenMap(
+            (
+                self._token(0, chain_id="", res_num=7),
+                self._token(
+                    1,
+                    chain_id="X",
+                    res_num=2,
+                    res_name="FAD",
+                    is_hetatm=True,
+                    atom_name="C1'",
+                ),
+                self._token(
+                    2,
+                    chain_id="X",
+                    res_num=2,
+                    res_name="FAD",
+                    is_hetatm=True,
+                    atom_name="O5'",
+                ),
+            )
+        )
 
         expression = compact_selection_expression([0, 1, 2], [("model", token_map)])
 
@@ -306,27 +373,29 @@ class TokenMapTests(unittest.TestCase):
         )
 
     def test_compact_selection_keeps_partial_chain_and_ligand_details(self) -> None:
-        token_map = [
-            self._token(0, res_num=1),
-            self._token(1, res_num=2),
-            self._token(2, res_num=3),
-            self._token(
-                3,
-                chain_id="X",
-                res_num=1,
-                res_name="LIG",
-                is_hetatm=True,
-                atom_name="C1",
-            ),
-            self._token(
-                4,
-                chain_id="X",
-                res_num=1,
-                res_name="LIG",
-                is_hetatm=True,
-                atom_name="N3",
-            ),
-        ]
+        token_map = TokenMap(
+            (
+                self._token(0, res_num=1),
+                self._token(1, res_num=2),
+                self._token(2, res_num=3),
+                self._token(
+                    3,
+                    chain_id="X",
+                    res_num=1,
+                    res_name="LIG",
+                    is_hetatm=True,
+                    atom_name="C1",
+                ),
+                self._token(
+                    4,
+                    chain_id="X",
+                    res_num=1,
+                    res_name="LIG",
+                    is_hetatm=True,
+                    atom_name="N3",
+                ),
+            )
+        )
 
         expression = compact_selection_expression([0, 1, 3], [("model", token_map)])
 
@@ -337,17 +406,19 @@ class TokenMapTests(unittest.TestCase):
         )
 
     def test_compact_selection_falls_back_for_unsafe_identifiers(self) -> None:
-        token_map = [
-            self._token(0, res_num=1),
-            self._token(
-                1,
-                chain_id="X",
-                res_num=2,
-                res_name="LIG",
-                is_hetatm=True,
-                atom_name="C,1",
-            ),
-        ]
+        token_map = TokenMap(
+            (
+                self._token(0, res_num=1),
+                self._token(
+                    1,
+                    chain_id="X",
+                    res_num=2,
+                    res_name="LIG",
+                    is_hetatm=True,
+                    atom_name="C,1",
+                ),
+            )
+        )
 
         expression = compact_selection_expression(
             [0, 1], [("unsafe-object", token_map)]
@@ -359,7 +430,7 @@ class TokenMapTests(unittest.TestCase):
         )
 
     def test_compact_selection_requires_object_name_and_tokeninfo_fields(self) -> None:
-        token_map = [self._token(0)]
+        token_map = TokenMap((self._token(0),))
 
         with self.assertRaisesRegex(ValueError, "non-empty object name"):
             compact_selection_expression([0], [(None, token_map)])
@@ -371,11 +442,17 @@ class TokenMapTests(unittest.TestCase):
             )
 
     def test_compact_selection_rejects_invalid_structured_values(self) -> None:
-        token = self._token(0)
-        token.res_num = "not-a-residue-number"
+        token = TokenInfo(
+            token_idx=0,
+            chain_id="A",
+            res_num="not-a-residue-number",  # type: ignore[arg-type]
+            res_name="ALA",
+            is_hetatm=False,
+            atom_name=None,
+        )
 
         with self.assertRaisesRegex(ValueError, "invalid res_num"):
-            compact_selection_expression([0], [("model", [token])])
+            compact_selection_expression([0], [("model", TokenMap((token,)))])
 
 
 if __name__ == "__main__":

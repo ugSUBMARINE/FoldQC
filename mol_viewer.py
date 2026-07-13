@@ -23,7 +23,7 @@ from .palettes import (
     PLDDT_CLASS_COLORS,
     categorical_color,
 )
-from .token_map import TokenInfo, TokenOverlapSummary
+from .token_map import TokenMap, TokenOverlapSummary
 
 T = TypeVar("T")
 
@@ -85,7 +85,7 @@ class PaintTarget:
     """One object and per-token array participating in a paint operation."""
 
     obj_name: str
-    token_map: Sequence[TokenInfo]
+    token_map: TokenMap
     values: np.ndarray
     mapping: ObjectPaintMapping | None = None
 
@@ -288,7 +288,7 @@ def _exact_token_selection(object_name: str, token: Any) -> str:
 
 def compact_selection_expression(
     token_indices: Iterable[int],
-    object_token_maps: Sequence[tuple[str, Sequence[Any]]],
+    object_token_maps: Sequence[tuple[str, TokenMap]],
 ) -> str:
     """Build a compact PyMOL expression for tokens across viewer objects."""
     indices = list(dict.fromkeys(int(index) for index in token_indices))
@@ -436,21 +436,10 @@ def _model_token_identities(model: Any) -> set[tuple[str, int, str, str | None]]
     return identities
 
 
-def _overlap_summary_from_model(
-    token_map: Sequence[TokenInfo], model: Any
-) -> TokenOverlapSummary:
-    prediction_identities = {
-        (
-            str(token.chain_id),
-            int(token.res_num),
-            str(token.res_name),
-            str(token.atom_name or "") if token.is_hetatm else None,
-        )
-        for token in token_map
-    }
+def _overlap_summary_from_model(token_map: TokenMap, model: Any) -> TokenOverlapSummary:
     target_identities = _model_token_identities(model)
-    matched_total = len(prediction_identities & target_identities)
-    prediction_total = len(prediction_identities)
+    matched_total = len(token_map.token_identities & target_identities)
+    prediction_total = len(token_map.token_identities)
     target_total = len(target_identities)
     return TokenOverlapSummary(
         prediction_tokens=prediction_total,
@@ -478,21 +467,9 @@ def _atom_indices(model: Any) -> tuple[int, ...]:
 
 def _paint_mapping_from_model(
     obj_name: str,
-    token_map: Sequence[TokenInfo],
+    token_map: TokenMap,
     model: Any,
 ) -> ObjectPaintMapping:
-    polymer_tokens = {
-        (str(token.chain_id), int(token.res_num)): int(token.token_idx)
-        for token in token_map
-        if not token.is_hetatm
-    }
-    hetatm_tokens = {
-        (str(token.chain_id), int(token.res_num), str(token.atom_name or "")): int(
-            token.token_idx
-        )
-        for token in token_map
-        if token.is_hetatm
-    }
     indices = _atom_indices(model)
     max_index = max(indices, default=0)
     atom_token_indices = np.full(max_index + 1, -1, dtype=np.int32)
@@ -503,11 +480,13 @@ def _paint_mapping_from_model(
             continue
         chain_id = str(getattr(atom, "chain", ""))
         if bool(getattr(atom, "hetatm", False)):
-            token_idx = hetatm_tokens.get(
+            token_idx = token_map.hetatm_token_by_atom.get(
                 (chain_id, residue_number, str(getattr(atom, "name", ""))), -1
             )
         else:
-            token_idx = polymer_tokens.get((chain_id, residue_number), -1)
+            token_idx = token_map.polymer_token_by_residue.get(
+                (chain_id, residue_number), -1
+            )
         atom_token_indices[index] = token_idx
     return ObjectPaintMapping(
         obj_name=str(obj_name),
@@ -521,7 +500,7 @@ def _paint_mapping_from_model(
 
 def prepare_object_paint_mapping(
     obj_name: str,
-    token_map: Sequence[TokenInfo],
+    token_map: TokenMap,
     *,
     model: Any | None = None,
 ) -> ObjectPaintMapping:
@@ -546,7 +525,7 @@ def object_paint_mapping_is_valid(mapping: ObjectPaintMapping) -> bool:
 
 def ensure_object_paint_mapping(
     obj_name: str,
-    token_map: Sequence[TokenInfo],
+    token_map: TokenMap,
     mapping: ObjectPaintMapping | None = None,
 ) -> tuple[ObjectPaintMapping, bool]:
     """Reuse a valid mapping or rebuild it, returning ``(mapping, rebuilt)``."""
@@ -560,7 +539,7 @@ def ensure_object_paint_mapping(
 
 
 def compare_token_map_to_object(
-    token_map: list[TokenInfo], obj_name: str
+    token_map: TokenMap, obj_name: str
 ) -> TokenOverlapSummary:
     """Compare prediction-token identities with a loaded viewer object."""
     from pymol import cmd
@@ -569,7 +548,7 @@ def compare_token_map_to_object(
 
 
 def selection_to_token_indices(
-    token_map: list[TokenInfo], selection: str, obj_name: str = "all"
+    token_map: TokenMap, selection: str, obj_name: str = "all"
 ) -> list[int]:
     """Resolve a viewer selection to sorted prediction-token indices."""
     from pymol import cmd
@@ -596,7 +575,7 @@ def selection_to_token_indices(
 
 
 def tokens_within_distance(
-    token_map: list[TokenInfo],
+    token_map: TokenMap,
     obj_name: str,
     reference_selection: str,
     cutoff: float,
@@ -625,7 +604,7 @@ def _resolve_color_range(
     return vmin, vmax
 
 
-def token_bfactor_keys(token_map: list[TokenInfo]) -> list[tuple[str, str, str]]:
+def token_bfactor_keys(token_map: TokenMap) -> list[tuple[str, str, str]]:
     return [
         (
             token.chain_id,
@@ -662,7 +641,7 @@ def _scaled_bfactor_values(values: np.ndarray, scale: float) -> np.ndarray:
 
 def _write_bfactors_bulk(
     obj_name: str,
-    token_map: list[TokenInfo],
+    token_map: TokenMap,
     values: np.ndarray,
     *,
     scale: float = 1.0,
@@ -716,7 +695,7 @@ def _resolve_pymol_palette(key: str, reverse: bool = False) -> _PaletteResolutio
 
 def paint_property(
     obj_name: str,
-    token_map: list[TokenInfo],
+    token_map: TokenMap,
     values: np.ndarray,
     palette: str = "blue_white_red",
     reverse_palette: bool = False,
@@ -869,7 +848,7 @@ def paint_properties_bulk(
         for target, mapping in resolved_targets:
             _write_bfactors_bulk(
                 target.obj_name,
-                list(target.token_map),
+                target.token_map,
                 target.values,
                 mapping=mapping,
             )
@@ -892,7 +871,7 @@ def paint_properties_bulk(
 
 def paint_property_bulk(
     obj_name: str,
-    token_map: list[TokenInfo],
+    token_map: TokenMap,
     values: np.ndarray,
     palette: str = "blue_white_red",
     reverse_palette: bool = False,
@@ -924,7 +903,7 @@ def _category_color_name(label: int) -> str:
 
 def paint_categorical_labels_bulk(
     obj_name: str,
-    token_map: list[TokenInfo],
+    token_map: TokenMap,
     values: np.ndarray,
     nan_color: str = NAN_COLOR_DEFAULT,
     rebuild: bool = True,
@@ -955,7 +934,7 @@ def paint_categorical_labels_batch(
     for target, arr in zip(targets, arrays):
         mapping = _write_bfactors_bulk(
             target.obj_name,
-            list(target.token_map),
+            target.token_map,
             arr,
             mapping=target.mapping,
         )
@@ -1019,9 +998,7 @@ def reset_bfactors(obj_name: str, value: float = 100.0) -> None:
     cmd.rebuild()
 
 
-def _representative_coords_from_model(
-    model: Any, token_map: Sequence[TokenInfo]
-) -> np.ndarray:
+def _representative_coords_from_model(model: Any, token_map: TokenMap) -> np.ndarray:
     coords = np.zeros((len(token_map), 3), dtype=np.float32)
     atom_coords: dict[tuple[str, int, str], tuple[float, float, float]] = {}
     first_atom: dict[tuple[str, int], tuple[float, float, float]] = {}
@@ -1048,9 +1025,7 @@ def _representative_coords_from_model(
     return coords
 
 
-def inspect_object_tokens(
-    obj_name: str, token_map: Sequence[TokenInfo]
-) -> ObjectTokenInspection:
+def inspect_object_tokens(obj_name: str, token_map: TokenMap) -> ObjectTokenInspection:
     """Inspect one object once for reusable painting metadata and coordinates."""
     from pymol import cmd
 
@@ -1061,7 +1036,7 @@ def inspect_object_tokens(
     )
 
 
-def get_representative_coords(obj_name: str, token_map: list[TokenInfo]) -> np.ndarray:
+def get_representative_coords(obj_name: str, token_map: TokenMap) -> np.ndarray:
     """Return one representative coordinate per prediction token."""
     return inspect_object_tokens(obj_name, token_map).representative_coords
 
@@ -1110,7 +1085,7 @@ def _plddt_selection(color: Any) -> str:
 def paint_plddt_class_coloring(
     obj_name: str,
     values: np.ndarray | None = None,
-    token_map: list[TokenInfo] | None = None,
+    token_map: TokenMap | None = None,
     rebuild: bool = True,
     mapping: ObjectPaintMapping | None = None,
 ) -> None:
@@ -1142,7 +1117,7 @@ def paint_plddt_class_batch(
     for target in targets:
         mapping = _write_bfactors_bulk(
             target.obj_name,
-            list(target.token_map),
+            target.token_map,
             target.values,
             scale=100.0,
             mapping=target.mapping,
@@ -1161,7 +1136,7 @@ def paint_plddt_class_batch(
 def update_token_selection(
     selection_name: str,
     token_indices: Iterable[int],
-    object_token_maps: Sequence[tuple[str, Sequence[Any]]],
+    object_token_maps: Sequence[tuple[str, TokenMap]],
     *,
     enable: bool = True,
     refresh_view: bool = True,
@@ -1180,7 +1155,7 @@ def update_token_selection(
 def show_token_selection(
     selection_name: str,
     token_indices: Iterable[int],
-    object_token_maps: Sequence[tuple[str, Sequence[Any]]],
+    object_token_maps: Sequence[tuple[str, TokenMap]],
 ) -> None:
     """Select tokens and display/zoom them as sticks."""
     from pymol import cmd
@@ -1195,7 +1170,7 @@ def show_token_selection(
 
 def show_token_groups(
     selection_name: str,
-    token_groups: Sequence[tuple[Iterable[int], str, Sequence[Any]]],
+    token_groups: Sequence[tuple[Iterable[int], str, TokenMap]],
 ) -> None:
     """Combine per-object token groups, then display and zoom the selection."""
     from pymol import cmd

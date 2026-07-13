@@ -10,6 +10,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from FoldQC import export
+from FoldQC.token_map import TokenInfo, TokenMap
 
 
 def _token(
@@ -18,8 +19,8 @@ def _token(
     chain_id: str = "A",
     res_num: int | None = None,
     is_hetatm: bool = False,
-):
-    return types.SimpleNamespace(
+) -> TokenInfo:
+    return TokenInfo(
         token_idx=idx,
         chain_id=chain_id,
         res_num=idx + 1 if res_num is None else res_num,
@@ -87,7 +88,7 @@ def test_build_token_rows_formats_base_metadata_and_token_values(
         display_label="rank 0",
         structure_path=tmp_path / "target_model_0.cif",
     )
-    token_map = [_token(0), _token(1, chain_id="L", is_hetatm=True)]
+    token_map = TokenMap((_token(0), _token(1, chain_id="L", is_hetatm=True)))
 
     rows = export.build_token_rows(
         pred_files=pred_files,
@@ -150,7 +151,7 @@ def test_build_token_rows_adds_ensemble_metadata(tmp_path: Path) -> None:
     rows = export.build_token_rows(
         pred_files=pred_files,
         data=data,
-        token_map=[_token(0)],
+        token_map=TokenMap((_token(0),)),
         values=np.array([0.5], dtype=np.float32),
         metric_key="ensemble_plddt_std",
         metric_label="custom label",

@@ -13,6 +13,23 @@ from FoldQC import (
     palettes,  # noqa: E402
     plots,  # noqa: E402
 )
+from FoldQC.token_map import TokenInfo, TokenMap  # noqa: E402
+
+
+def _token_map(items) -> TokenMap:
+    return TokenMap(
+        tuple(
+            TokenInfo(
+                index,
+                item.chain_id,
+                item.res_num,
+                getattr(item, "res_name", "ALA"),
+                bool(getattr(item, "is_hetatm", False)),
+                getattr(item, "atom_name", None),
+            )
+            for index, item in enumerate(items)
+        )
+    )
 
 
 class PlotTests(unittest.TestCase):
@@ -22,10 +39,12 @@ class PlotTests(unittest.TestCase):
             [("values", np.array([0.5, 0.7], dtype=np.float32), None)],
         )
         try:
-            token_map = [
-                types.SimpleNamespace(chain_id="A", res_num=1, is_hetatm=False),
-                types.SimpleNamespace(chain_id="A", res_num=2, is_hetatm=False),
-            ]
+            token_map = _token_map(
+                [
+                    types.SimpleNamespace(chain_id="A", res_num=1, is_hetatm=False),
+                    types.SimpleNamespace(chain_id="A", res_num=2, is_hetatm=False),
+                ]
+            )
             plots.attach_viewer_selection_metadata(
                 fig,
                 kind="line",
@@ -43,6 +62,8 @@ class PlotTests(unittest.TestCase):
                 fig._foldqc_viewer_selection["token_map_obj_names"],
                 ["obj"],
             )
+            self.assertIs(fig._foldqc_viewer_selection["token_map"], token_map)
+            self.assertIs(fig._foldqc_viewer_selection["token_maps"][0], token_map)
         finally:
             plots.plt.close(fig)
 
@@ -56,9 +77,13 @@ class PlotTests(unittest.TestCase):
                 plots.attach_viewer_selection_metadata(
                     fig,
                     kind="line",
-                    token_map=[object()],
+                    token_map=_token_map(
+                        [types.SimpleNamespace(chain_id="A", res_num=1)]
+                    ),
                     obj_name="obj",
-                    token_maps=[[object()]],
+                    token_maps=[
+                        _token_map([types.SimpleNamespace(chain_id="A", res_num=1)])
+                    ],
                     token_map_obj_names=["obj", "other"],
                     token_indices=[0],
                 )
@@ -75,9 +100,13 @@ class PlotTests(unittest.TestCase):
                 plots.attach_viewer_selection_metadata(
                     fig,
                     kind="line",
-                    token_map=[object()],
+                    token_map=_token_map(
+                        [types.SimpleNamespace(chain_id="A", res_num=1)]
+                    ),
                     obj_name="obj",
-                    token_maps=[[object()]],
+                    token_maps=[
+                        _token_map([types.SimpleNamespace(chain_id="A", res_num=1)])
+                    ],
                     token_indices=[0],
                 )
         finally:
@@ -206,10 +235,12 @@ class PlotTests(unittest.TestCase):
             plots.plt.close(fig)
 
     def test_matrix_plot_uses_palette_mapping_and_chain_boundaries(self) -> None:
-        token_map = [
-            types.SimpleNamespace(chain_id="A", res_num=1, is_hetatm=False),
-            types.SimpleNamespace(chain_id="B", res_num=2, is_hetatm=False),
-        ]
+        token_map = _token_map(
+            [
+                types.SimpleNamespace(chain_id="A", res_num=1, is_hetatm=False),
+                types.SimpleNamespace(chain_id="B", res_num=2, is_hetatm=False),
+            ]
+        )
         fig = plots.make_matrix_plot(
             np.arange(4, dtype=np.float32).reshape(2, 2),
             token_map=token_map,
@@ -435,10 +466,12 @@ class PlotTests(unittest.TestCase):
             plots.plt.close(fig)
 
     def test_binding_site_fingerprint_labels_include_residue_name(self) -> None:
-        token_map = [
-            types.SimpleNamespace(chain_id="A", res_num=42, res_name="ASP"),
-            types.SimpleNamespace(chain_id="B", res_num=107, res_name="TYR"),
-        ]
+        token_map = _token_map(
+            [
+                types.SimpleNamespace(chain_id="A", res_num=42, res_name="ASP"),
+                types.SimpleNamespace(chain_id="B", res_num=107, res_name="TYR"),
+            ]
+        )
         fig = plots.make_binding_site_fingerprint(
             token_map,
             [0, 1],
@@ -451,10 +484,12 @@ class PlotTests(unittest.TestCase):
             plots.plt.close(fig)
 
     def test_binding_site_fingerprint_height_uses_golden_ratio(self) -> None:
-        token_map = [
-            types.SimpleNamespace(chain_id="A", res_num=i, res_name="ASP")
-            for i in range(10)
-        ]
+        token_map = _token_map(
+            [
+                types.SimpleNamespace(chain_id="A", res_num=i, res_name="ASP")
+                for i in range(10)
+            ]
+        )
         fig = plots.make_binding_site_fingerprint(
             token_map,
             list(range(10)),
@@ -467,10 +502,12 @@ class PlotTests(unittest.TestCase):
             plots.plt.close(fig)
 
     def test_binding_site_fingerprint_splits_scores_from_error_metrics(self) -> None:
-        token_map = [
-            types.SimpleNamespace(chain_id="A", res_num=42, res_name="ASP"),
-            types.SimpleNamespace(chain_id="B", res_num=107, res_name="TYR"),
-        ]
+        token_map = _token_map(
+            [
+                types.SimpleNamespace(chain_id="A", res_num=42, res_name="ASP"),
+                types.SimpleNamespace(chain_id="B", res_num=107, res_name="TYR"),
+            ]
+        )
         fig = plots.make_binding_site_fingerprint(
             token_map,
             [0, 1],
@@ -500,10 +537,12 @@ class PlotTests(unittest.TestCase):
             plots.plt.close(fig)
 
     def test_binding_site_fingerprint_accepts_error_bars(self) -> None:
-        token_map = [
-            types.SimpleNamespace(chain_id="A", res_num=42, res_name="ASP"),
-            types.SimpleNamespace(chain_id="B", res_num=107, res_name="TYR"),
-        ]
+        token_map = _token_map(
+            [
+                types.SimpleNamespace(chain_id="A", res_num=42, res_name="ASP"),
+                types.SimpleNamespace(chain_id="B", res_num=107, res_name="TYR"),
+            ]
+        )
         fig = plots.make_binding_site_fingerprint(
             token_map,
             [0, 1],
@@ -518,10 +557,12 @@ class PlotTests(unittest.TestCase):
             plots.plt.close(fig)
 
     def test_binding_site_fingerprint_accepts_interaction_probability(self) -> None:
-        token_map = [
-            types.SimpleNamespace(chain_id="A", res_num=42, res_name="ASP"),
-            types.SimpleNamespace(chain_id="B", res_num=107, res_name="TYR"),
-        ]
+        token_map = _token_map(
+            [
+                types.SimpleNamespace(chain_id="A", res_num=42, res_name="ASP"),
+                types.SimpleNamespace(chain_id="B", res_num=107, res_name="TYR"),
+            ]
+        )
         fig = plots.make_binding_site_fingerprint(
             token_map,
             [0, 1],

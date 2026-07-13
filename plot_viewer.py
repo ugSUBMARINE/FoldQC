@@ -10,7 +10,7 @@ so plugin startup and non-GUI tests do not depend on QtAgg availability.
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
@@ -23,6 +23,9 @@ from .mol_viewer import (
     show_token_groups,
     update_token_selection,
 )
+
+if TYPE_CHECKING:
+    from .token_map import TokenMap
 
 MAX_INITIAL_CANVAS_DIMENSION = 900
 SELECTION_COLOR = "#ff8c00"
@@ -788,7 +791,7 @@ class PlotDialog(QtWidgets.QDialog):
             prefix = "foldqc_plot"
         return f"{prefix}_{suffix}"
 
-    def _selection_object_token_maps(self) -> list[tuple[str, object]]:
+    def _selection_object_token_maps(self) -> list[tuple[str, TokenMap]]:
         metadata = self._selection_metadata or {}
         token_maps = metadata.get("token_maps")
         if token_maps is not None:
@@ -821,7 +824,7 @@ class PlotDialog(QtWidgets.QDialog):
 
     def _selection_groups_for_member_sites(
         self, member_indices: list[int]
-    ) -> list[tuple[list[int], str, object]]:
+    ) -> list[tuple[list[int], str, TokenMap]]:
         metadata = self._selection_metadata or {}
         object_names = metadata.get("member_obj_names") or []
         token_maps = metadata.get("member_token_maps") or []
@@ -836,7 +839,7 @@ class PlotDialog(QtWidgets.QDialog):
                 "Ensemble site member_site_indices must correspond one-to-one "
                 "with member_token_maps."
             )
-        groups: list[tuple[list[int], str, object]] = []
+        groups: list[tuple[list[int], str, TokenMap]] = []
         for member_idx in member_indices:
             if member_idx < 0 or member_idx >= len(token_maps):
                 continue

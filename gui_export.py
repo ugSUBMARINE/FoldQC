@@ -8,6 +8,7 @@ from . import export, metrics
 from .compat import QtWidgets
 from .gui_state import MetricContext
 from .gui_state import ResolvedTarget as _PlotTarget
+from .token_map import TokenMap
 
 APP_TITLE = "FoldQC"
 
@@ -213,7 +214,7 @@ class ExportController:
         self,
         key: str,
         prop: dict,
-        token_map,
+        token_map: TokenMap,
         obj_name: str,
     ) -> MetricContext | None:
         """Resolve reference/contact provenance for one export computation."""
@@ -266,7 +267,7 @@ class ExportController:
         self,
         key: str,
         data,
-        token_map,
+        token_map: TokenMap,
         values,
         context: MetricContext,
         *,

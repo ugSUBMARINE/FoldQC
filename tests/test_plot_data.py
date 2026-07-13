@@ -10,23 +10,29 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from FoldQC import palettes, plot_data
+from FoldQC.token_map import TokenInfo, TokenMap
 
 
-def _token(idx: int, *, chain_id: str = "A", is_hetatm: bool = False):
-    return types.SimpleNamespace(
+def _token(idx: int, *, chain_id: str = "A", is_hetatm: bool = False) -> TokenInfo:
+    return TokenInfo(
         token_idx=idx,
         chain_id=chain_id,
+        res_num=idx + 1,
+        res_name="LIG" if is_hetatm else "ALA",
         is_hetatm=is_hetatm,
+        atom_name=f"C{idx}" if is_hetatm else None,
     )
 
 
 def test_chain_boundaries_preserve_selected_positions_and_blank_labels() -> None:
-    token_map = [
-        _token(0, chain_id="A"),
-        _token(1, chain_id="A"),
-        _token(2, chain_id=""),
-        _token(3, chain_id="B"),
-    ]
+    token_map = TokenMap(
+        (
+            _token(0, chain_id="A"),
+            _token(1, chain_id="A"),
+            _token(2, chain_id=""),
+            _token(3, chain_id="B"),
+        )
+    )
 
     boundaries, labels = plot_data.chain_boundaries(
         token_map, [0, 2, 3], original_x=True
@@ -39,10 +45,10 @@ def test_chain_boundaries_preserve_selected_positions_and_blank_labels() -> None
 
 def test_has_multiple_token_chains_counts_hetatm_chains() -> None:
     assert plot_data.has_multiple_token_chains(
-        [_token(0, chain_id="A"), _token(1, chain_id="L", is_hetatm=True)]
+        TokenMap((_token(0, chain_id="A"), _token(1, chain_id="L", is_hetatm=True)))
     )
     assert not plot_data.has_multiple_token_chains(
-        [_token(0, chain_id="A"), _token(1, chain_id="A", is_hetatm=True)]
+        TokenMap((_token(0, chain_id="A"), _token(1, chain_id="A", is_hetatm=True)))
     )
 
 
@@ -91,11 +97,13 @@ def test_nan_mean_std_handles_vectors_matrices_and_missing_arrays() -> None:
 
 
 def test_summary_series_for_single_model_returns_expected_labels_and_values() -> None:
-    token_map = [
-        _token(0, chain_id="A"),
-        _token(1, chain_id="A"),
-        _token(2, chain_id="B"),
-    ]
+    token_map = TokenMap(
+        (
+            _token(0, chain_id="A"),
+            _token(1, chain_id="A"),
+            _token(2, chain_id="B"),
+        )
+    )
     data = types.SimpleNamespace(
         pae=np.array(
             [
@@ -125,7 +133,7 @@ def test_summary_series_for_single_model_returns_expected_labels_and_values() ->
 
 
 def test_summary_series_for_ensemble_aggregates_mean_and_std() -> None:
-    token_map = [_token(0, chain_id="A"), _token(1, chain_id="B")]
+    token_map = TokenMap((_token(0, chain_id="A"), _token(1, chain_id="B")))
     data_items = [
         types.SimpleNamespace(pde=np.array([[0.0, 2.0], [4.0, 0.0]], dtype=np.float32)),
         types.SimpleNamespace(pde=np.array([[0.0, 4.0], [8.0, 0.0]], dtype=np.float32)),
@@ -299,7 +307,7 @@ def test_site_summary_values_use_finite_site_means() -> None:
 
 
 def test_chain_iptm_matrix_plot_data_single_and_ensemble() -> None:
-    token_map = [_token(0, chain_id="A"), _token(1, chain_id="B")]
+    token_map = TokenMap((_token(0, chain_id="A"), _token(1, chain_id="B")))
     data = types.SimpleNamespace(
         confidence={
             "pair_chains_iptm": {
@@ -376,7 +384,7 @@ def test_chain_iptm_matrix_plot_data_single_and_ensemble() -> None:
 
 
 def test_chain_iptm_matrix_plot_data_uses_chain_ptm_diagonal_for_ensemble() -> None:
-    token_map = [_token(0, chain_id="A"), _token(1, chain_id="B")]
+    token_map = TokenMap((_token(0, chain_id="A"), _token(1, chain_id="B")))
     members = [
         types.SimpleNamespace(
             rank=0,

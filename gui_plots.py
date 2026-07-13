@@ -8,6 +8,7 @@ from . import gui_rules, metrics, plot_data
 from .compat import QtWidgets
 from .gui_state import ResolvedTarget as _PlotTarget
 from .mol_viewer import get_viewer_name, selection_to_token_indices
+from .token_map import TokenMap
 
 APP_TITLE = "FoldQC"
 VIEWER_NAME = get_viewer_name()
@@ -70,7 +71,7 @@ class PlotController:
 
     def _resolve_reference_indices(
         self,
-        token_map,
+        token_map: TokenMap,
         obj_name: str,
         *,
         required: bool = False,

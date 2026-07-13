@@ -236,6 +236,7 @@ from FoldQC.gui import (  # noqa: E402
     _PlotTarget,
 )
 from FoldQC.gui_state import GuiState  # noqa: E402
+from FoldQC.token_map import TokenInfo, TokenMap  # noqa: E402
 
 
 def _new_dialog() -> FoldQCPluginDialog:
@@ -556,8 +557,8 @@ def _token(
     chain_id: str = "A",
     res_num: int | None = None,
     is_hetatm: bool = False,
-):
-    return types.SimpleNamespace(
+) -> TokenInfo:
+    return TokenInfo(
         token_idx=idx,
         chain_id=chain_id,
         res_num=idx + 1 if res_num is None else res_num,
@@ -565,6 +566,10 @@ def _token(
         is_hetatm=is_hetatm,
         atom_name=f"C{idx}" if is_hetatm else None,
     )
+
+
+def _token_map(*tokens: TokenInfo) -> TokenMap:
+    return TokenMap(tokens)
 
 
 def _atom(
@@ -1651,7 +1656,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         dialog = _new_dialog()
         structure_values = np.array([0.9, 0.8], dtype=np.float32)
         provider_values = np.array([0.1, 0.2], dtype=np.float32)
-        token_map = [_token(0), _token(1)]
+        token_map = _token_map(_token(0), _token(1))
         dialog._pred_data = types.SimpleNamespace(
             structure_plddt=structure_values,
             plddt=provider_values,
@@ -1733,7 +1738,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
             plddt=None,
         )
         dialog._pred_files = object()
-        dialog._token_map = [_token(0, res_num=1), _token(1, res_num=2)]
+        dialog._token_map = _token_map(_token(0, res_num=1), _token(1, res_num=2))
         dialog._get_obj_name = lambda: obj_name
         dialog._prop_combo = types.SimpleNamespace(currentData=lambda: "plddt")
         dialog._selected_palette = lambda: ("blue_white_red", False)
@@ -1853,7 +1858,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
 
     def test_clearing_token_context_also_clears_paint_mappings(self) -> None:
         dialog = _new_dialog()
-        dialog._token_map = [_token(0)]
+        dialog._token_map = _token_map(_token(0))
         dialog._token_map_obj = "target_model_0"
         dialog._token_map_structure_path = Path("/tmp/target_model_0.cif")
         dialog._paint_mappings = {("path", "target_model_0"): object()}
@@ -1879,7 +1884,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
             structure_plddt=np.array([0.8, 0.9], dtype=np.float32),
             plddt=None,
         )
-        dialog._token_map = [_token(0, res_num=1), _token(1, res_num=2)]
+        dialog._token_map = _token_map(_token(0, res_num=1), _token(1, res_num=2))
         dialog._build_token_map_if_needed = lambda _obj_name: None
         dialog.setWindowTitle = lambda _title: None
         dialog._update_statistics_for_single = lambda *_args, **_kwargs: None
@@ -3122,11 +3127,11 @@ class GuiModelSwitchingTests(unittest.TestCase):
         self,
     ) -> None:
         dialog = _new_dialog()
-        token_map = [
+        token_map = _token_map(
             _token(0, chain_id="A"),
             _token(1, chain_id="A"),
             _token(2, chain_id="B"),
-        ]
+        )
         dialog._pred_files = types.SimpleNamespace(has_pae=True, has_pde=False)
         dialog._pred_data = types.SimpleNamespace(
             rank=0,
@@ -3182,7 +3187,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
 
     def test_pde_summary_plot_data_lazy_loads_ensemble_member(self) -> None:
         dialog = _new_dialog()
-        token_map = [_token(0, chain_id="A"), _token(1, chain_id="B")]
+        token_map = _token_map(_token(0, chain_id="A"), _token(1, chain_id="B"))
         member = types.SimpleNamespace(
             rank=1,
             obj_name="target_model_1",
@@ -3216,7 +3221,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
 
     def test_summary_plot_handler_uses_line_metadata_and_reference_scope(self) -> None:
         dialog = _new_dialog()
-        token_map = [_token(0, chain_id="A"), _token(1, chain_id="B")]
+        token_map = _token_map(_token(0, chain_id="A"), _token(1, chain_id="B"))
         target = _PlotTarget(
             kind="single",
             label="target_model_0",
@@ -3264,7 +3269,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         self,
     ) -> None:
         dialog = _new_dialog()
-        token_map = [_token(0, chain_id="A"), _token(1, chain_id="B")]
+        token_map = _token_map(_token(0, chain_id="A"), _token(1, chain_id="B"))
         members = [
             types.SimpleNamespace(
                 rank=0,
@@ -3612,11 +3617,11 @@ class GuiModelSwitchingTests(unittest.TestCase):
 
     def test_chain_iptm_matrix_plot_data_uses_confidence_json(self) -> None:
         dialog = _new_dialog()
-        token_map = [
+        token_map = _token_map(
             _token(0, chain_id="A"),
             _token(1, chain_id="A"),
             _token(2, chain_id="L", is_hetatm=True),
-        ]
+        )
         target = _PlotTarget(
             kind="single",
             label="target_model_0",
@@ -3657,7 +3662,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
 
     def test_ensemble_chain_iptm_matrix_plot_data_uses_mean_and_std(self) -> None:
         dialog = _new_dialog()
-        token_map = [_token(0, chain_id="A"), _token(1, chain_id="B")]
+        token_map = _token_map(_token(0, chain_id="A"), _token(1, chain_id="B"))
         members = [
             types.SimpleNamespace(
                 rank=0,
@@ -3736,7 +3741,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         self,
     ) -> None:
         dialog = _new_dialog()
-        token_map = [_token(0, chain_id="A"), _token(1, chain_id="B")]
+        token_map = _token_map(_token(0, chain_id="A"), _token(1, chain_id="B"))
         target = _PlotTarget(
             kind="single",
             label="target_model_0",

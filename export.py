@@ -19,7 +19,7 @@ from . import metrics
 
 if TYPE_CHECKING:
     from .loader import PredictionData
-    from .token_map import TokenInfo
+    from .token_map import TokenMap
 
 SCHEMA_VERSION = "1"
 
@@ -92,7 +92,7 @@ def build_token_rows(
     *,
     pred_files,
     data: PredictionData,
-    token_map: list[TokenInfo],
+    token_map: TokenMap,
     values,
     metric_key: str,
     metric_label: str | None = None,

@@ -11,6 +11,16 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from FoldQC import properties as P  # noqa: E402
+from FoldQC.token_map import TokenInfo, TokenMap  # noqa: E402
+
+
+def _token_map(*chain_ids: str) -> TokenMap:
+    return TokenMap(
+        tuple(
+            TokenInfo(index, chain_id, index + 1, "ALA", False, None)
+            for index, chain_id in enumerate(chain_ids)
+        )
+    )
 
 
 class PropertiesTests(unittest.TestCase):
@@ -93,11 +103,7 @@ class PropertiesTests(unittest.TestCase):
             ],
             dtype=np.float32,
         )
-        token_map = [
-            types.SimpleNamespace(token_idx=0, chain_id="A"),
-            types.SimpleNamespace(token_idx=1, chain_id="A"),
-            types.SimpleNamespace(token_idx=2, chain_id="B"),
-        ]
+        token_map = _token_map("A", "A", "B")
 
         row_within, row_other, col_within, col_other = P.pae_chain_summary(
             pae, token_map
@@ -187,12 +193,7 @@ class PropertiesTests(unittest.TestCase):
             ],
             dtype=np.float32,
         )
-        token_map = [
-            types.SimpleNamespace(token_idx=0, chain_id="A"),
-            types.SimpleNamespace(token_idx=1, chain_id="A"),
-            types.SimpleNamespace(token_idx=2, chain_id="B"),
-            types.SimpleNamespace(token_idx=3, chain_id="B"),
-        ]
+        token_map = _token_map("A", "A", "B", "B")
 
         within, other = P.pde_chain_summary(pde, token_map)
 
@@ -305,11 +306,7 @@ class PropertiesTests(unittest.TestCase):
             P.contact_probability_to_selection(np.zeros((2, 2), dtype=np.float32), [])
 
     def test_pair_chains_iptm_matrix_uses_token_map_chain_order(self) -> None:
-        token_map = [
-            types.SimpleNamespace(chain_id="A"),
-            types.SimpleNamespace(chain_id="A"),
-            types.SimpleNamespace(chain_id="L"),
-        ]
+        token_map = _token_map("A", "A", "L")
         confidence = {
             "pair_chains_iptm": {
                 "0": {"0": 0.9, "1": 0.7},
@@ -327,10 +324,7 @@ class PropertiesTests(unittest.TestCase):
         )
 
     def test_pair_chains_iptm_matrix_fills_zero_diagonal_from_chain_ptm(self) -> None:
-        token_map = [
-            types.SimpleNamespace(chain_id="A"),
-            types.SimpleNamespace(chain_id="B"),
-        ]
+        token_map = _token_map("A", "B")
         confidence = {
             "chain_ptm": [0.91, 0.82],
             "chain_pair_iptm": [[0.0, 0.7], [0.0, 0.0]],

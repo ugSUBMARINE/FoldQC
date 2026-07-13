@@ -26,7 +26,7 @@ from .mol_viewer import (
 )
 
 if TYPE_CHECKING:
-    from .token_map import TokenInfo
+    from .token_map import TokenMap
 
 
 @dataclass
@@ -36,7 +36,7 @@ class EnsembleMember:
     rank: int
     obj_name: str
     data: Any
-    token_map: list[TokenInfo]
+    token_map: TokenMap
     paint_mapping: ObjectPaintMapping | None = None
 
 
@@ -180,7 +180,7 @@ def prepare_metrics(
 
 
 def select_alignment_core(
-    token_map: list[TokenInfo],
+    token_map: TokenMap,
     plddt: np.ndarray,
     threshold: float = 0.8,
     min_tokens: int = 3,

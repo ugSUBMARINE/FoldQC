@@ -26,7 +26,7 @@ from FoldQC.mol_viewer import (  # noqa: E402
     load_models_as_objects,
     load_models_as_states,
 )
-from FoldQC.token_map import TokenInfo  # noqa: E402
+from FoldQC.token_map import TokenInfo, TokenMap  # noqa: E402
 
 
 def _token(idx: int, is_hetatm: bool = False) -> TokenInfo:
@@ -81,13 +81,17 @@ class EnsembleTests(unittest.TestCase):
         )
 
     def test_alignment_core_uses_only_high_confidence_polymer_tokens(self) -> None:
-        token_map = [_token(0), _token(1), _token(2), _token(3, is_hetatm=True)]
+        token_map = TokenMap(
+            (_token(0), _token(1), _token(2), _token(3, is_hetatm=True))
+        )
         plddt = np.array([0.9, 0.81, 0.7, 0.99], dtype=np.float32)
 
         self.assertEqual(select_alignment_core(token_map, plddt, min_tokens=2), [0, 1])
 
     def test_alignment_core_falls_back_to_all_polymer_tokens(self) -> None:
-        token_map = [_token(0), _token(1), _token(2), _token(3, is_hetatm=True)]
+        token_map = TokenMap(
+            (_token(0), _token(1), _token(2), _token(3, is_hetatm=True))
+        )
         plddt = np.array([0.9, 0.5, 0.4, 0.99], dtype=np.float32)
 
         self.assertEqual(select_alignment_core(token_map, plddt), [0, 1, 2])
@@ -154,7 +158,7 @@ def _member(
             plddt=plddt,
             structure_plddt=structure_plddt,
         ),
-        token_map=[_token(i) for i in range(token_count)],
+        token_map=TokenMap(tuple(_token(i) for i in range(token_count))),
     )
 
 

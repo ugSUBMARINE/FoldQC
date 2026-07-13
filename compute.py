@@ -17,7 +17,7 @@ from . import properties as P
 
 if TYPE_CHECKING:
     from .loader import PredictionData
-    from .token_map import TokenInfo
+    from .token_map import TokenMap
 
 
 class MetricComputationError(Exception):
@@ -158,7 +158,7 @@ def pae_domain_method(key: str) -> str:
 def compute_metric(
     key: str,
     data: PredictionData,
-    token_map: list[TokenInfo],
+    token_map: TokenMap,
     *,
     ref_indices: list[int] | None = None,
     contact_indices: list[int] | None = None,

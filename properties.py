@@ -11,12 +11,11 @@ metric is undefined (e.g. no predicted contact within the cutoff distance).
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from collections.abc import Mapping
 
 import numpy as np
 
-if TYPE_CHECKING:
-    from .token_map import TokenInfo
+from .token_map import TokenMap
 
 # ---------------------------------------------------------------------------
 # pLDDT
@@ -54,8 +53,8 @@ def pae_col_mean(pae: np.ndarray) -> np.ndarray:
 
 
 def _chain_index_groups(
-    matrix: np.ndarray, token_map: list[TokenInfo]
-) -> tuple[np.ndarray, dict[str, list[int]]]:
+    matrix: np.ndarray, token_map: TokenMap
+) -> tuple[np.ndarray, Mapping[str, tuple[int, ...]]]:
     """Validate a token matrix and return token indices grouped by chain."""
     arr = np.asarray(matrix, dtype=np.float32)
     if arr.ndim != 2 or arr.shape[0] != arr.shape[1]:
@@ -66,18 +65,12 @@ def _chain_index_groups(
             f"token_map length {len(token_map)} does not match matrix size {n}."
         )
 
-    chain_to_indices: dict[str, list[int]] = {}
-    for tok in token_map:
-        idx = int(tok.token_idx)
-        if idx < 0 or idx >= n:
-            raise ValueError(f"token index {idx} is outside matrix size {n}.")
-        chain_to_indices.setdefault(str(tok.chain_id), []).append(idx)
-    return arr, chain_to_indices
+    return arr, token_map.chain_to_indices
 
 
 def pae_chain_summary(
     pae: np.ndarray,
-    token_map: list[TokenInfo],
+    token_map: TokenMap,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Return per-token PAE row/column means within and outside each chain.
 
@@ -352,7 +345,7 @@ def pde_mean(pde: np.ndarray) -> np.ndarray:
 
 def pde_mean_within_chain(
     pde: np.ndarray,
-    token_map: list[TokenInfo],
+    token_map: TokenMap,
 ) -> np.ndarray:
     """Mean PDE for each token against tokens from the same chain.
 
@@ -366,13 +359,9 @@ def pde_mean_within_chain(
             f"token_map length {len(token_map)} does not match PDE size {n}."
         )
 
-    chain_to_indices: dict[str, list[int]] = {}
-    for tok in token_map:
-        chain_to_indices.setdefault(tok.chain_id, []).append(tok.token_idx)
-
     out = np.full(n, np.nan, dtype=np.float32)
     for tok in token_map:
-        ref = np.array(chain_to_indices[tok.chain_id], dtype=int)
+        ref = np.array(token_map.chain_to_indices[tok.chain_id], dtype=int)
         out[tok.token_idx] = pde[tok.token_idx, ref].mean()
 
     return out
@@ -380,7 +369,7 @@ def pde_mean_within_chain(
 
 def pde_chain_summary(
     pde: np.ndarray,
-    token_map: list[TokenInfo],
+    token_map: TokenMap,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Return per-token PDE means against same-chain and other-chain tokens."""
     arr, chain_to_indices = _chain_index_groups(pde, token_map)
@@ -532,20 +521,13 @@ def contact_probability_to_selection(
 # ---------------------------------------------------------------------------
 
 
-def _chain_order_from_token_map(token_map: list[TokenInfo]) -> list[str]:
+def _chain_order_from_token_map(token_map: TokenMap) -> list[str]:
     """Return chain IDs in token-map order, collapsing contiguous runs."""
-    labels: list[str] = []
-    last_chain: str | None = None
-    for tok in token_map:
-        chain_id = str(getattr(tok, "chain_id", "") or "(blank)")
-        if chain_id != last_chain:
-            labels.append(chain_id)
-            last_chain = chain_id
-    return labels
+    return [chain_id or "(blank)" for chain_id in token_map.chain_order]
 
 
 def pair_chains_iptm_matrix(
-    confidence: dict, token_map: list[TokenInfo]
+    confidence: dict, token_map: TokenMap
 ) -> tuple[np.ndarray, list[str]]:
     """Return the pairwise chain ipTM matrix and chain labels.
 
@@ -614,7 +596,7 @@ def _fill_pair_iptm_diagonal_from_chain_ptm(
 
 def chain_iptm_values(
     confidence: dict,
-    token_map: list[TokenInfo],
+    token_map: TokenMap,
     ref_chain_key: str | None = None,
 ) -> np.ndarray:
     """Assign each token its chain's ipTM score.
@@ -652,19 +634,8 @@ def chain_iptm_values(
         else:
             chain_scores = {int(k): v for k, v in scores.items()}
 
-    # Map chain_idx (0-based in JSON) to structure chain ID via token_map.
-    # Build chain_id → chain_idx mapping from token_map
-    chain_id_to_idx: dict[str, int] = {}
-    current_idx = 0
-    last_chain: str | None = None
     for tok in token_map:
-        if tok.chain_id != last_chain:
-            chain_id_to_idx[tok.chain_id] = current_idx
-            current_idx += 1
-            last_chain = tok.chain_id
-
-    for tok in token_map:
-        idx = chain_id_to_idx.get(tok.chain_id)
+        idx = token_map.chain_id_to_index.get(tok.chain_id)
         if idx is not None and idx in chain_scores:
             out[tok.token_idx] = float(chain_scores[idx])
 

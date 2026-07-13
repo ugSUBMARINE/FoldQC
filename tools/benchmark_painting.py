@@ -28,7 +28,7 @@ from FoldQC.mol_viewer import (  # noqa: E402
     prepare_object_paint_mapping,
 )
 from FoldQC.palettes import VIRIDIS_STOPS  # noqa: E402
-from FoldQC.token_map import TokenInfo  # noqa: E402
+from FoldQC.token_map import TokenInfo, TokenMap  # noqa: E402
 
 
 def _build_object(name: str, residues: int, atoms_per_residue: int) -> None:
@@ -65,10 +65,12 @@ def main() -> None:
     args = parser.parse_args()
 
     pymol.finish_launching(["pymol", "-cq"])
-    token_map = [
-        TokenInfo(index, "A", index + 1, "ALA", False, None)
-        for index in range(args.residues)
-    ]
+    token_map = TokenMap(
+        tuple(
+            TokenInfo(index, "A", index + 1, "ALA", False, None)
+            for index in range(args.residues)
+        )
+    )
     names = [f"foldqc_benchmark_{index}" for index in range(args.models)]
     values = [
         np.linspace(0.0, 1.0, args.residues, dtype=np.float32)

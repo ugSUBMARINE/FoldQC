@@ -9,6 +9,16 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from FoldQC import reports  # noqa: E402
+from FoldQC.token_map import TokenInfo, TokenMap  # noqa: E402
+
+
+def _token_map(*chain_ids: str) -> TokenMap:
+    return TokenMap(
+        tuple(
+            TokenInfo(index, chain_id, index + 1, "ALA", False, None)
+            for index, chain_id in enumerate(chain_ids)
+        )
+    )
 
 
 def test_numeric_statistics_basic_summary() -> None:
@@ -69,12 +79,7 @@ def test_plddt_class_statistics_reports_no_finite_values() -> None:
 
 
 def test_chain_statistics_groups_values_by_chain_order() -> None:
-    token_map = [
-        types.SimpleNamespace(chain_id="A"),
-        types.SimpleNamespace(chain_id="A"),
-        types.SimpleNamespace(chain_id=""),
-        types.SimpleNamespace(chain_id="B"),
-    ]
+    token_map = _token_map("A", "A", "", "B")
 
     lines = reports.format_chain_statistics(
         np.array([1.0, 3.0, 5.0, 10.0], dtype=np.float32),
@@ -151,11 +156,7 @@ def test_statistics_report_ensemble_level_single_array() -> None:
 
 
 def test_statistics_report_includes_chain_statistics() -> None:
-    token_map = [
-        types.SimpleNamespace(chain_id="A"),
-        types.SimpleNamespace(chain_id="A"),
-        types.SimpleNamespace(chain_id="B"),
-    ]
+    token_map = _token_map("A", "A", "B")
 
     report = reports.format_statistics_report(
         "pde_chain_mean",

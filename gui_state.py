@@ -7,11 +7,14 @@ This module is deliberately independent of Qt and PyMOL.  The dialog owns one
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 
 from .session import PendingSessionRestore
+
+if TYPE_CHECKING:
+    from .token_map import TokenMap
 
 
 @dataclass
@@ -22,7 +25,7 @@ class ResolvedTarget:
     label: str
     obj_name: str
     data: object | None
-    token_map: object
+    token_map: TokenMap
     members: list | None = None
 
 
@@ -42,7 +45,7 @@ class GuiState:
 
     pred_files: object | None = None
     pred_data: object | None = None
-    token_map: object | None = None
+    token_map: TokenMap | None = None
     token_map_obj: str | None = None
     token_map_structure_path: object | None = None
     paint_mappings: dict[tuple[str, str], object] = field(default_factory=dict)

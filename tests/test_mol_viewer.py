@@ -7,7 +7,7 @@ from pathlib import Path
 
 import numpy as np
 from FoldQC import mol_viewer
-from FoldQC.token_map import TokenInfo
+from FoldQC.token_map import TokenInfo, TokenMap
 
 
 def _token(
@@ -113,11 +113,13 @@ def test_object_paint_mapping_handles_polymer_ligand_order_and_sparse_indices(
         index=lambda _name: [("obj", atom.index) for atom in atoms],
     )
     monkeypatch.setitem(sys.modules, "pymol", types.SimpleNamespace(cmd=cmd))
-    token_map = [
-        _token(0),
-        TokenInfo(1, "L", 2, "LIG", True, "C1"),
-        TokenInfo(2, "L", 2, "LIG", True, "C2"),
-    ]
+    token_map = TokenMap(
+        (
+            _token(0),
+            TokenInfo(1, "L", 2, "LIG", True, "C1"),
+            TokenInfo(2, "L", 2, "LIG", True, "C2"),
+        )
+    )
 
     mapping = mol_viewer.prepare_object_paint_mapping("obj", token_map)
 
@@ -168,7 +170,7 @@ def test_ensure_object_paint_mapping_rebuilds_after_index_change(monkeypatch) ->
         ],
     )
     monkeypatch.setitem(sys.modules, "pymol", types.SimpleNamespace(cmd=cmd))
-    token_map = [_token(0)]
+    token_map = TokenMap((_token(0),))
     mapping = mol_viewer.prepare_object_paint_mapping("obj", token_map)
 
     same, rebuilt = mol_viewer.ensure_object_paint_mapping("obj", token_map, mapping)
@@ -191,7 +193,7 @@ def test_tokens_within_distance_builds_backend_expression(monkeypatch) -> None:
         get_model=lambda expression: captured.append(expression) or model
     )
     monkeypatch.setitem(sys.modules, "pymol", types.SimpleNamespace(cmd=cmd))
-    token_map = [_token(0), _token(1)]
+    token_map = TokenMap((_token(0), _token(1)))
 
     assert mol_viewer.tokens_within_distance(
         token_map, "model_0", "resname LIG", 7.5
@@ -217,10 +219,12 @@ def test_coordinates_transform_and_plot_selection_are_viewer_operations(
     monkeypatch.setitem(
         sys.modules, "pymol", types.SimpleNamespace(cmd=cmd, stored=stored)
     )
-    token_map = [
-        _token(0),
-        _token(1, chain="L", hetatm=True, atom_name="C1"),
-    ]
+    token_map = TokenMap(
+        (
+            _token(0),
+            _token(1, chain="L", hetatm=True, atom_name="C1"),
+        )
+    )
 
     np.testing.assert_array_equal(
         mol_viewer.get_representative_coords("model", token_map),

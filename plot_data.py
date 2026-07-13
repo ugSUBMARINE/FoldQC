@@ -14,12 +14,13 @@ import numpy as np
 
 from . import metrics, properties
 from .palettes import categorical_color
+from .token_map import TokenMap
 
 MAX_HISTOGRAM_BINS = 50
 
 
 def chain_boundaries(
-    token_map,
+    token_map: TokenMap,
     indices: list[int] | None = None,
     *,
     original_x: bool = False,
@@ -57,7 +58,7 @@ def chain_boundaries(
     return boundaries, labels
 
 
-def has_multiple_token_chains(token_map) -> bool:
+def has_multiple_token_chains(token_map: TokenMap) -> bool:
     """Return True when a token map contains more than one chain ID."""
     chains = {str(getattr(tok, "chain_id", "") or "(blank)") for tok in token_map}
     return len(chains) > 1
@@ -111,7 +112,7 @@ def nan_mean_std(
 def summary_series_for_data(
     kind: str,
     data,
-    token_map,
+    token_map: TokenMap,
 ) -> list[
     tuple[str, np.ndarray, np.ndarray | None]
     | tuple[str, np.ndarray, np.ndarray | None, str]
@@ -142,8 +143,8 @@ def summary_series_for_data(
 def summary_series_for_ensemble(
     kind: str,
     data_items: list,
-    token_map,
-    token_maps: list | None = None,
+    token_map: TokenMap,
+    token_maps: list[TokenMap] | None = None,
 ) -> list[
     tuple[str, np.ndarray, np.ndarray | None]
     | tuple[str, np.ndarray, np.ndarray | None, str]
@@ -458,7 +459,7 @@ def chain_iptm_matrix_plot_data(
     *,
     target_kind: str,
     data,
-    token_map,
+    token_map: TokenMap,
     title: str,
     label: str,
     members: list | None = None,

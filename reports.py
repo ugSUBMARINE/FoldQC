@@ -14,7 +14,7 @@ import numpy as np
 from . import metrics
 
 if TYPE_CHECKING:
-    from .token_map import TokenInfo
+    from .token_map import TokenMap
 
 
 def provider_display_label(provider: str) -> str:
@@ -199,7 +199,7 @@ def format_plddt_class_statistics(values: np.ndarray) -> list[str]:
 
 
 def format_chain_statistics(
-    values: np.ndarray, token_map: list[TokenInfo] | None
+    values: np.ndarray, token_map: TokenMap | None
 ) -> list[str]:
     """Return per-chain numeric summaries for a token-indexed array."""
     if token_map is None:

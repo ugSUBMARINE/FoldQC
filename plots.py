@@ -22,7 +22,7 @@ import platform
 import subprocess
 import tempfile
 from collections.abc import Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 # Force non-interactive Agg backend before any pyplot import.
 # Must happen before 'import matplotlib.pyplot'.
@@ -34,6 +34,9 @@ import numpy as np
 
 from .palettes import PLDDT_CLASS_BAR_COLORS, resolve_matplotlib_cmap
 from .plot_data import MAX_HISTOGRAM_BINS, compute_histogram_bins
+
+if TYPE_CHECKING:
+    from .token_map import TokenMap
 
 MAX_TICKS = 60
 GOLDEN_RATIO = (1.0 + 5.0**0.5) / 2.0
@@ -90,9 +93,9 @@ def attach_viewer_selection_metadata(
     fig: plt.Figure,
     *,
     kind: str,
-    token_map: Sequence[Any],
+    token_map: TokenMap,
     obj_name: str,
-    token_maps: Sequence[Sequence[Any]] | None = None,
+    token_maps: Sequence[TokenMap] | None = None,
     token_map_obj_names: Sequence[str] | None = None,
     token_indices: Sequence[int] | None = None,
     x_positions: Sequence[float] | None = None,
@@ -126,7 +129,7 @@ def attach_viewer_selection_metadata(
             raise ValueError(
                 "token_map_obj_names must correspond one-to-one with token_maps."
             )
-        metadata["token_maps"] = [list(tm) for tm in token_maps]
+        metadata["token_maps"] = list(token_maps)
         metadata["token_map_obj_names"] = [str(name) for name in token_map_obj_names]
     if token_indices is not None:
         metadata["token_indices"] = [int(i) for i in token_indices]
@@ -163,7 +166,7 @@ def attach_ensemble_site_summary_metadata(
     metadata: dict[str, Any] = {
         "kind": "ensemble_site_summary",
         "member_obj_names": [str(member.obj_name) for member in member_list],
-        "member_token_maps": [list(member.token_map) for member in member_list],
+        "member_token_maps": [member.token_map for member in member_list],
         "member_site_indices": [[int(i) for i in indices] for indices in site_indices],
         "member_x_positions": [float(i) for i in range(len(member_list))],
         "member_widths": [0.9 for _member in member_list],
@@ -593,7 +596,7 @@ def make_ensemble_site_summary_plot(
 def make_matrix_plot(
     matrix: np.ndarray,
     title: str = "Matrix",
-    token_map=None,
+    token_map: TokenMap | None = None,
     row_indices: Sequence[int] | None = None,
     col_indices: Sequence[int] | None = None,
     row_labels: Sequence[str] | None = None,
@@ -705,7 +708,7 @@ def make_matrix_plot(
 
 
 def make_binding_site_fingerprint(
-    token_map,  # list[TokenInfo]
+    token_map: TokenMap,
     binding_site_indices: list[int],
     plddt: np.ndarray | None = None,
     plddt_std: np.ndarray | None = None,

@@ -16,6 +16,7 @@ from .mol_viewer import (
     selection_to_token_indices,
     tokens_within_distance,
 )
+from .token_map import TokenMap
 
 APP_TITLE = "FoldQC"
 VIEWER_NAME = get_viewer_name()
@@ -52,7 +53,7 @@ class MetricController:
         key: str,
         ref_sel: str | None,
         data,
-        tm,
+        tm: TokenMap,
         obj_name: str,
     ):
         """Resolve GUI/viewer context and dispatch one per-model metric."""
@@ -147,7 +148,7 @@ class MetricController:
         self,
         key: str,
         data,
-        tm,
+        tm: TokenMap,
         context: MetricContext,
     ):
         """Dispatch a metric using already-resolved export context."""
@@ -169,7 +170,7 @@ class MetricController:
         self,
         key: str,
         data,
-        tm,
+        tm: TokenMap,
         *,
         ref_indices: list[int] | None = None,
         contact_indices: list[int] | None = None,
@@ -293,7 +294,7 @@ class MetricController:
 
         raise ValueError(f"Unknown ensemble property: {key}")
 
-    def _validate_token_count(self, values, token_map, obj_name: str) -> None:
+    def _validate_token_count(self, values, token_map: TokenMap, obj_name: str) -> None:
         """Raise a helpful error if a property array does not match a token map."""
         if values is None or token_map is None:
             raise ValueError("No values or token map available for coloring.")
@@ -306,7 +307,7 @@ class MetricController:
 
     def _confirm_token_overlap_for_coloring(
         self,
-        token_map,
+        token_map: TokenMap,
         obj_name: str,
         data=None,
         *,
@@ -369,7 +370,7 @@ class MetricController:
 
     def _prepare_paint_mapping(
         self,
-        token_map,
+        token_map: TokenMap,
         obj_name: str,
         data=None,
     ) -> ObjectPaintMapping:
@@ -403,7 +404,7 @@ class MetricController:
 
     def _binding_site_token_indices(
         self,
-        token_map,
+        token_map: TokenMap,
         obj_name: str,
         ref_sel: str,
         ref_indices: list[int],
