@@ -34,23 +34,32 @@ Development of FoldQC has included coding assistance from OpenAI's Codex.
    In addition, you can also install it through PyMOL's plugin manager, where you can also define custom plugin directories. The plugin manager is accessible from the menu: `Plugin -> Plugin Manager...`, then choose `Install New Plugin` or
    `Settings`.
 
-2. Start PyMOL.
+2. Start PyMOL and open the plugin from:
 
-3. Install missing Python dependencies from the PyMOL command line:
+   ```text
+   Plugins -> FoldQC...
+   ```
+
+3. FoldQC checks optional dependencies only when a feature needs them. If
+   Matplotlib, SciPy, or scikit-learn is missing, FoldQC offers to install the
+   required package into PyMOL's Python environment and shows installation
+   progress. The feature can usually be retried immediately after a successful
+   installation; a PyMOL restart may be necessary if it is not yet available.
+
+   FoldQC does not automatically use `pip --user`. If PyMOL's environment is
+   not writable or automatic installation fails, the dialog provides copyable
+   conda and pip user-installation commands. User-site packages can mix across
+   conda environments, so prefer conda when it is available.
+
+   As a manual alternative, run the standalone installer from the PyMOL command
+   line:
 
    ```text
    run /path/to/FoldQC/tools/install_deps.py
    ```
 
-   You can also run the script from the menu: `File -> Run Script...` and select `install_deps.py` from the plugin `tools` folder.
-
-4. Restart PyMOL.
-
-5. Open the plugin from:
-
-   ```text
-   Plugins -> FoldQC...
-   ```
+   You can also select `install_deps.py` from the plugin's `tools` folder using
+   `File -> Run Script...`.
 
 ## Usage
 

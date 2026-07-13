@@ -79,3 +79,11 @@ else:
 MessageBoxStandardButton = getattr(
     QtWidgets.QMessageBox, "StandardButton", QtWidgets.QMessageBox
 )
+MessageBoxButtonRole = getattr(
+    QtWidgets.QMessageBox, "ButtonRole", QtWidgets.QMessageBox
+)
+MessageBoxIcon = getattr(QtWidgets.QMessageBox, "Icon", QtWidgets.QMessageBox)
+
+# QProcess error enum
+_QProcess = getattr(QtCore, "QProcess", object)
+QProcessError = getattr(_QProcess, "ProcessError", _QProcess)

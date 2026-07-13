@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import importlib.util
-
 import numpy as np
 
 from . import compute, metrics
@@ -234,34 +232,19 @@ class MetricController:
             return None
 
     def _pae_domain_dependency_available(self, method: str) -> bool:
-        """Warn and return False when a PAE domain-label dependency is missing."""
-        if method == "complete_linkage":
-            if importlib.util.find_spec("scipy") is None:
-                QtWidgets.QMessageBox.warning(
-                    self,
-                    APP_TITLE,
-                    "PAE domain labels (complete linkage) require SciPy. "
-                    f"Install scipy in the Python environment used by {VIEWER_NAME}.",
-                )
-                return False
+        """Offer to install a missing PAE domain-label dependency."""
+        feature = {
+            "complete_linkage": "pae_domain_complete",
+            "spectral": "pae_domain_spectral",
+        }.get(method)
+        if feature is None:
             return True
-        if method == "spectral":
-            missing = []
-            if importlib.util.find_spec("scipy") is None:
-                missing.append("SciPy")
-            if importlib.util.find_spec("sklearn") is None:
-                missing.append("scikit-learn")
-            if missing:
-                QtWidgets.QMessageBox.warning(
-                    self,
-                    APP_TITLE,
-                    "PAE domain labels (spectral clustering) require "
-                    f"{' and '.join(missing)}. Install the missing package(s) "
-                    f"in the Python environment used by {VIEWER_NAME}.",
-                )
-                return False
-            return True
-        return True
+        label = (
+            "complete-linkage PAE domain labels"
+            if method == "complete_linkage"
+            else "spectral PAE domain labels"
+        )
+        return self._ensure_feature_dependencies((feature,), feature_label=label)
 
     def _compute_ensemble_property(self, key: str) -> np.ndarray:
         """Return an ensemble-level per-token array."""

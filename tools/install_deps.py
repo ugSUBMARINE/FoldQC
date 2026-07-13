@@ -1,55 +1,71 @@
-"""
-install_deps.py — run once from PyMOL to install missing dependencies.
+"""Install all missing optional FoldQC dependencies from within PyMOL.
 
 Usage (from the PyMOL command line or via File → Run Script…):
     run /path/to/FoldQC/tools/install_deps.py
 
 The script installs packages into the same Python that PyMOL is running on
 by using sys.executable, so no knowledge of PyMOL's Python path is required.
-Restart PyMOL after running this script.
+A restart may be necessary if the new packages are not immediately available.
 """
 
 import subprocess
 import sys
+from pathlib import Path
 
-REQUIRED: dict[str, str] = {
-    # import_name  : pip_package_name
-    "matplotlib": "matplotlib",
-    "scipy": "scipy",
-    "sklearn": "scikit-learn",  # import name differs from pip name
-}
+# ``run /path/to/FoldQC/tools/install_deps.py`` does not establish package
+# context, so make the directory containing the FoldQC package importable.
+package_parent = str(Path(__file__).resolve().parents[2])
+if package_parent not in sys.path:
+    sys.path.insert(0, package_parent)
 
-OPTIONAL: dict[str, str] = {}
+from FoldQC import dependencies  # noqa: E402
 
-print(f"Python interpreter: {sys.executable}")
-print()
 
-all_ok = True
+def main() -> int:
+    all_keys = tuple(dependency.key for dependency in dependencies.DEPENDENCIES)
+    missing = dependencies.missing_dependency_keys(all_keys)
 
-for packages, label in [(REQUIRED, "[required]"), (OPTIONAL, "[optional]")]:
-    for import_name, pip_name in packages.items():
-        try:
-            __import__(import_name)
-            print(f"  OK       {pip_name}")
-        except ImportError:
-            print(f"  Installing {pip_name} {label} ...", end="", flush=True)
-            result = subprocess.run(
-                [sys.executable, "-m", "pip", "install", pip_name],
-                capture_output=True,
-                text=True,
-            )
-            if result.returncode == 0:
-                print(" done.")
-            else:
-                print(" FAILED.")
-                print(f"    stderr: {result.stderr.strip()}")
-                if label == "[required]":
-                    all_ok = False
+    print(f"Python interpreter: {sys.executable}")
+    print(f"Environment prefix: {sys.prefix}")
+    print()
+    if not missing:
+        print("All optional FoldQC dependencies are installed.")
+        return 0
 
-print()
-if all_ok:
-    print("All required dependencies are installed.")
-    print("Please restart PyMOL for the changes to take effect.")
-else:
-    print("Some required packages could not be installed.")
-    print("Check the error messages above and install them manually.")
+    names = ", ".join(
+        dependency.distribution_name
+        for dependency in dependencies.dependency_specs(missing)
+    )
+    print(f"Missing packages: {names}")
+    if not dependencies.environment_is_writable():
+        print("The PyMOL Python environment does not appear to be writable.")
+        print()
+        print(dependencies.manual_install_instructions(missing))
+        return 1
+
+    command = [sys.executable, *dependencies.pip_install_args(missing)]
+    print(f"Running: {dependencies.format_shell_command(command)}")
+    result = subprocess.run(command, check=False)
+    if result.returncode != 0:
+        print()
+        print("Installation failed. Manual alternatives:")
+        print(dependencies.manual_install_instructions(missing))
+        return result.returncode
+
+    validation = subprocess.run(
+        [sys.executable, *dependencies.validation_args(missing)], check=False
+    )
+    if validation.returncode != 0:
+        print("The packages were installed, but import verification failed.")
+        print(dependencies.manual_install_instructions(missing))
+        return validation.returncode
+
+    print()
+    print("All optional FoldQC dependencies were installed and verified.")
+    print("You can retry the FoldQC feature now.")
+    print("A PyMOL restart may be necessary if it is not immediately available.")
+    return 0
+
+
+# PyMOL's ``run`` command need not assign the usual ``__main__`` module name.
+main()

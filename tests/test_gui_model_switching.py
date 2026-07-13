@@ -60,6 +60,41 @@ def _install_fake_pymol() -> types.SimpleNamespace:
             cls.delays.append(delay)
             callback()
 
+    class _QProcess:
+        ProcessError = types.SimpleNamespace(FailedToStart=0)
+        instances = []
+
+        def __init__(self, _parent=None) -> None:
+            self.readyReadStandardOutput = _QtSignal()
+            self.readyReadStandardError = _QtSignal()
+            self.errorOccurred = _QtSignal()
+            self.finished = _QtSignal()
+            self.program = None
+            self.arguments = None
+            self.stdout = b""
+            self.stderr = b""
+            self.error_text = ""
+            self.deleted = False
+            self.instances.append(self)
+
+        def start(self, program, arguments) -> None:
+            self.program = program
+            self.arguments = list(arguments)
+
+        def readAllStandardOutput(self):
+            value, self.stdout = self.stdout, b""
+            return value
+
+        def readAllStandardError(self):
+            value, self.stderr = self.stderr, b""
+            return value
+
+        def errorString(self) -> str:
+            return self.error_text
+
+        def deleteLater(self) -> None:
+            self.deleted = True
+
     flag = types.SimpleNamespace(
         AlignLeft=1,
         AlignRight=2,
@@ -85,6 +120,7 @@ def _install_fake_pymol() -> types.SimpleNamespace:
         QRunnable=_QRunnable,
         QThreadPool=_QThreadPool,
         QTimer=_QTimer,
+        QProcess=_QProcess,
         pyqtSignal=lambda *_args: _SignalDescriptor(),
     )
 
@@ -115,6 +151,7 @@ def _install_fake_pymol() -> types.SimpleNamespace:
             self.raised = False
             self.activated = False
             self.closed = False
+            self.window_flags = {}
 
         def setWindowTitle(self, title: str) -> None:
             self.title = title
@@ -134,6 +171,9 @@ def _install_fake_pymol() -> types.SimpleNamespace:
         def close(self) -> None:
             self.closed = True
             self.visible = False
+
+        def setWindowFlag(self, flag_value, enabled: bool) -> None:
+            self.window_flags[flag_value] = bool(enabled)
 
         def raise_(self) -> None:
             self.raised = True
@@ -188,7 +228,7 @@ def _install_fake_pymol() -> types.SimpleNamespace:
             self.widgets.append(widget)
 
     class _PushButton:
-        def __init__(self, text: str = "") -> None:
+        def __init__(self, text: str = "", _parent=None) -> None:
             self.text = text
             self.tooltip = ""
             self.fixed_width = None
@@ -207,11 +247,71 @@ def _install_fake_pymol() -> types.SimpleNamespace:
         def setToolTip(self, text: str) -> None:
             self.tooltip = text
 
+        def setText(self, text: str) -> None:
+            self.text = text
+
         def setEnabled(self, enabled: bool) -> None:
             self.enabled = bool(enabled)
 
         def isEnabled(self) -> bool:
             return self.enabled
+
+    class _Label:
+        def __init__(self, _parent=None) -> None:
+            self.text = ""
+            self.word_wrap = False
+
+        def setText(self, text: str) -> None:
+            self.text = text
+
+        def setWordWrap(self, enabled: bool) -> None:
+            self.word_wrap = bool(enabled)
+
+    class _ProgressBar:
+        def __init__(self, _parent=None) -> None:
+            self.value_range = None
+            self.value = None
+
+        def setRange(self, minimum: int, maximum: int) -> None:
+            self.value_range = (minimum, maximum)
+
+        def setValue(self, value: int) -> None:
+            self.value = value
+
+    class _PlainTextEdit:
+        class _Cursor:
+            End = 1
+
+        def __init__(self, _parent=None) -> None:
+            self.text = ""
+            self.read_only = False
+            self.visible = True
+            self.minimum_height = None
+            self.cursor = self._Cursor()
+
+        def setReadOnly(self, enabled: bool) -> None:
+            self.read_only = bool(enabled)
+
+        def setVisible(self, visible: bool) -> None:
+            self.visible = bool(visible)
+
+        def isVisible(self) -> bool:
+            return self.visible
+
+        def setMinimumHeight(self, height: int) -> None:
+            self.minimum_height = height
+
+        def textCursor(self):
+            return self.cursor
+
+        def moveCursor(self, _position) -> None:
+            pass
+
+        def insertPlainText(self, text: str) -> None:
+            self.text += text
+
+        def setPlainText(self, text: str) -> None:
+            self.text = text
 
     class _TextBrowser:
         def __init__(self) -> None:
@@ -236,11 +336,69 @@ def _install_fake_pymol() -> types.SimpleNamespace:
         Yes = 1
         Cancel = 2
         StandardButton = types.SimpleNamespace(Yes=Yes, Cancel=Cancel)
+        ButtonRole = types.SimpleNamespace(AcceptRole=1, ActionRole=2, RejectRole=3)
+        Information = 1
+        Warning = 2
+        Icon = types.SimpleNamespace(Information=Information, Warning=Warning)
         warnings: list[tuple[str, str]] = []
         criticals: list[tuple[str, str]] = []
         infos: list[tuple[str, str]] = []
         questions: list[tuple[str, str]] = []
         question_response = Yes
+        next_clicked_text = "Cancel"
+        instances = []
+
+        def __init__(self, _parent=None) -> None:
+            self.title = ""
+            self.text = ""
+            self.informative_text = ""
+            self.detailed_text = ""
+            self.icon = None
+            self.buttons = []
+            self.clicked = None
+            self.default_button = None
+            self.escape_button = None
+            self.instances.append(self)
+
+        def setWindowTitle(self, title: str) -> None:
+            self.title = title
+
+        def setText(self, text: str) -> None:
+            self.text = text
+
+        def setInformativeText(self, text: str) -> None:
+            self.informative_text = text
+
+        def setDetailedText(self, text: str) -> None:
+            self.detailed_text = text
+
+        def setIcon(self, icon) -> None:
+            self.icon = icon
+
+        def addButton(self, text: str, role):
+            button = types.SimpleNamespace(text=text, role=role)
+            self.buttons.append(button)
+            return button
+
+        def setDefaultButton(self, button) -> None:
+            self.default_button = button
+
+        def setEscapeButton(self, button) -> None:
+            self.escape_button = button
+
+        def exec(self) -> int:
+            self.clicked = next(
+                (
+                    button
+                    for button in self.buttons
+                    if button.text == type(self).next_clicked_text
+                ),
+                None,
+            )
+            return 0
+
+        def clickedButton(self):
+            return self.clicked
 
         @classmethod
         def warning(cls, _parent, title: str, message: str) -> None:
@@ -306,6 +464,9 @@ def _install_fake_pymol() -> types.SimpleNamespace:
     qt_widgets = types.SimpleNamespace(
         QDialog=_QDialog,
         QProgressDialog=_QProgressDialog,
+        QLabel=_Label,
+        QProgressBar=_ProgressBar,
+        QPlainTextEdit=_PlainTextEdit,
         QFormLayout=_QFormLayout,
         QMessageBox=_MessageBox,
         QMenu=_Menu,
@@ -343,6 +504,7 @@ from FoldQC.token_map import TokenInfo, TokenMap  # noqa: E402
 def _new_dialog() -> FoldQCPluginDialog:
     dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
     dialog._state = GuiState()
+    dialog._initialize_dependency_controller()
     return dialog
 
 
@@ -3608,7 +3770,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         self.assertIsNotNone(values)
         self.assertEqual(values.shape, (3,))
 
-    def test_pae_domain_dependency_warning_for_missing_scipy(self) -> None:
+    def test_pae_domain_dependency_prompt_for_missing_scipy(self) -> None:
         dialog = _new_dialog()
         dialog._cutoff_edit = _LineEdit("5.0")
         data = types.SimpleNamespace(
@@ -3616,21 +3778,23 @@ class GuiModelSwitchingTests(unittest.TestCase):
             structure_plddt=None,
             plddt=None,
         )
-        msg = _PYMOL.Qt.QtWidgets.QMessageBox
-        msg.warnings.clear()
+        prompts = []
+        dialog._prompt_dependency_action = lambda keys, **kwargs: (
+            prompts.append((tuple(keys), kwargs)) or "cancel"
+        )
 
         with mock.patch(
-            "FoldQC.gui_metrics.importlib.util.find_spec", return_value=None
+            "FoldQC.dependencies.importlib.util.find_spec", return_value=None
         ):
             values = dialog._compute_property_for(
                 "pae_domain_complete", None, data, [], "target_model_0"
             )
 
         self.assertIsNone(values)
-        self.assertEqual(len(msg.warnings), 1)
-        self.assertIn("SciPy", msg.warnings[0][1])
+        self.assertEqual(prompts[0][0], ("scipy",))
+        self.assertIn("complete-linkage", prompts[0][1]["feature_label"])
 
-    def test_pae_domain_dependency_warning_for_missing_sklearn(self) -> None:
+    def test_pae_domain_dependency_prompt_for_missing_sklearn(self) -> None:
         dialog = _new_dialog()
         dialog._cutoff_edit = _LineEdit("5.0")
         data = types.SimpleNamespace(
@@ -3638,8 +3802,10 @@ class GuiModelSwitchingTests(unittest.TestCase):
             structure_plddt=None,
             plddt=None,
         )
-        msg = _PYMOL.Qt.QtWidgets.QMessageBox
-        msg.warnings.clear()
+        prompts = []
+        dialog._prompt_dependency_action = lambda keys, **kwargs: (
+            prompts.append((tuple(keys), kwargs)) or "cancel"
+        )
 
         def _find_spec(name: str):
             if name == "scipy":
@@ -3647,15 +3813,208 @@ class GuiModelSwitchingTests(unittest.TestCase):
             return None
 
         with mock.patch(
-            "FoldQC.gui_metrics.importlib.util.find_spec", side_effect=_find_spec
+            "FoldQC.dependencies.importlib.util.find_spec", side_effect=_find_spec
         ):
             values = dialog._compute_property_for(
                 "pae_domain_spectral", None, data, [], "target_model_0"
             )
 
         self.assertIsNone(values)
-        self.assertEqual(len(msg.warnings), 1)
-        self.assertIn("scikit-learn", msg.warnings[0][1])
+        self.assertEqual(prompts[0][0], ("sklearn",))
+        self.assertIn("spectral", prompts[0][1]["feature_label"])
+
+    def test_dependency_check_skips_prompt_when_packages_are_available(self) -> None:
+        dialog = _new_dialog()
+        dialog._prompt_dependency_action = lambda *_args, **_kwargs: (
+            _ for _ in ()
+        ).throw(AssertionError("Available dependencies should not prompt"))
+
+        with mock.patch(
+            "FoldQC.dependencies.importlib.util.find_spec", return_value=object()
+        ):
+            available = dialog._ensure_feature_dependencies(
+                ("plot", "pae_domain_spectral"), feature_label="spectral plot"
+            )
+
+        self.assertTrue(available)
+
+    def test_dependency_check_combines_plot_and_metric_requirements(self) -> None:
+        dialog = _new_dialog()
+        prompts = []
+        dialog._prompt_dependency_action = lambda keys, **kwargs: (
+            prompts.append((tuple(keys), kwargs)) or "cancel"
+        )
+
+        with mock.patch(
+            "FoldQC.dependencies.importlib.util.find_spec", return_value=None
+        ):
+            available = dialog._ensure_feature_dependencies(
+                ("plot", "pae_domain_spectral"), feature_label="spectral plot"
+            )
+
+        self.assertFalse(available)
+        self.assertEqual(prompts[0][0], ("matplotlib", "scipy", "sklearn"))
+
+    def test_dependency_prompt_exposes_install_manual_and_cancel(self) -> None:
+        dialog = _new_dialog()
+        msg = _PYMOL.Qt.QtWidgets.QMessageBox
+        msg.instances.clear()
+        msg.next_clicked_text = "Manual instructions"
+
+        action = dialog._prompt_dependency_action(
+            ("scipy", "sklearn"), feature_label="spectral domain labels"
+        )
+
+        self.assertEqual(action, "manual")
+        box = msg.instances[-1]
+        self.assertEqual(
+            [button.text for button in box.buttons],
+            ["Install", "Manual instructions", "Cancel"],
+        )
+        self.assertEqual(box.default_button.text, "Install")
+        self.assertEqual(box.escape_button.text, "Cancel")
+        self.assertIn("SciPy and scikit-learn", box.text)
+        msg.next_clicked_text = "Cancel"
+
+    def test_nonwritable_dependency_environment_uses_manual_fallback(self) -> None:
+        dialog = _new_dialog()
+        manual = []
+        dialog._show_manual_dependency_instructions = lambda keys, **kwargs: (
+            manual.append((tuple(keys), kwargs))
+        )
+        dialog._start_dependency_process = lambda *_args, **_kwargs: (
+            _ for _ in ()
+        ).throw(AssertionError("pip should not start"))
+
+        with mock.patch(
+            "FoldQC.dependencies.environment_is_writable", return_value=False
+        ):
+            dialog._start_dependency_install(("matplotlib",))
+
+        self.assertFalse(dialog._dependency_install_active)
+        self.assertEqual(manual[0][0], ("matplotlib",))
+        self.assertIn("not appear to be writable", manual[0][1]["reason"])
+
+    def test_dependency_process_streams_output_validates_and_allows_retry(self) -> None:
+        dialog = _new_dialog()
+        process_cls = _PYMOL.Qt.QtCore.QProcess
+        process_cls.instances.clear()
+        msg = _PYMOL.Qt.QtWidgets.QMessageBox
+        msg.infos.clear()
+
+        with mock.patch(
+            "FoldQC.dependencies.environment_is_writable", return_value=True
+        ):
+            dialog._start_dependency_install(("matplotlib", "sklearn"))
+
+        install = process_cls.instances[-1]
+        self.assertEqual(install.program, sys.executable)
+        self.assertIn("--no-user", install.arguments)
+        self.assertNotIn("--user", install.arguments)
+        self.assertEqual(install.arguments[-2:], ["matplotlib", "scikit-learn"])
+        install.stdout = b"Collecting matplotlib\n"
+        install.readyReadStandardOutput.emit()
+        self.assertIn("Collecting matplotlib", dialog._dependency_progress_log.text)
+
+        install.finished.emit(0, None)
+        validation = process_cls.instances[-1]
+        self.assertIsNot(validation, install)
+        self.assertEqual(
+            validation.arguments,
+            ["-c", "import matplotlib; import sklearn"],
+        )
+        with mock.patch(
+            "FoldQC.gui_dependencies.importlib.invalidate_caches"
+        ) as invalidate_caches:
+            validation.finished.emit(0, None)
+
+        self.assertFalse(dialog._dependency_install_active)
+        invalidate_caches.assert_called_once_with()
+        self.assertEqual(dialog._dependency_progress_bar.value, 1)
+        self.assertTrue(dialog._dependency_progress_close_button.enabled)
+        self.assertIn("restart may be necessary", msg.infos[-1][1])
+
+        with mock.patch(
+            "FoldQC.dependencies.importlib.util.find_spec", return_value=object()
+        ):
+            self.assertTrue(
+                dialog._ensure_feature_dependencies(
+                    ("plot",), feature_label="the line plot"
+                )
+            )
+
+    def test_dependency_process_failure_shows_log_and_manual_commands(self) -> None:
+        dialog = _new_dialog()
+        process_cls = _PYMOL.Qt.QtCore.QProcess
+        process_cls.instances.clear()
+        msg = _PYMOL.Qt.QtWidgets.QMessageBox
+        msg.instances.clear()
+
+        with mock.patch(
+            "FoldQC.dependencies.environment_is_writable", return_value=True
+        ):
+            dialog._start_dependency_install(("scipy",))
+        install = process_cls.instances[-1]
+        install.stderr = b"Permission denied\n"
+        install.finished.emit(1, None)
+
+        self.assertFalse(dialog._dependency_install_active)
+        manual = msg.instances[-1]
+        self.assertIn("exited with code 1", manual.text)
+        self.assertIn("conda install --prefix", manual.detailed_text)
+        self.assertIn("Permission denied", manual.detailed_text)
+        self.assertIn("--user scipy", manual.detailed_text)
+
+    def test_dependency_validation_failure_uses_manual_fallback(self) -> None:
+        dialog = _new_dialog()
+        process_cls = _PYMOL.Qt.QtCore.QProcess
+        process_cls.instances.clear()
+        manual = []
+        dialog._show_manual_dependency_instructions = lambda keys, **kwargs: (
+            manual.append((tuple(keys), kwargs))
+        )
+
+        with mock.patch(
+            "FoldQC.dependencies.environment_is_writable", return_value=True
+        ):
+            dialog._start_dependency_install(("sklearn",))
+        process_cls.instances[-1].finished.emit(0, None)
+        validation = process_cls.instances[-1]
+        validation.error_text = "Import failed"
+        validation.finished.emit(2, None)
+
+        self.assertEqual(manual[0][0], ("sklearn",))
+        self.assertIn("validate process exited with code 2", manual[0][1]["reason"])
+
+    def test_dependency_process_start_failure_uses_manual_fallback(self) -> None:
+        dialog = _new_dialog()
+        process_cls = _PYMOL.Qt.QtCore.QProcess
+        process_cls.instances.clear()
+        manual = []
+        dialog._show_manual_dependency_instructions = lambda keys, **kwargs: (
+            manual.append((tuple(keys), kwargs))
+        )
+
+        with mock.patch(
+            "FoldQC.dependencies.environment_is_writable", return_value=True
+        ):
+            dialog._start_dependency_install(("matplotlib",))
+        process = process_cls.instances[-1]
+        process.error_text = "No module named pip"
+        process.errorOccurred.emit(process_cls.ProcessError.FailedToStart)
+
+        self.assertFalse(dialog._dependency_install_active)
+        self.assertEqual(manual[0][0], ("matplotlib",))
+        self.assertIn("No module named pip", manual[0][1]["reason"])
+
+    def test_dependency_install_blocks_dialog_close(self) -> None:
+        dialog = _new_dialog()
+        dialog._dependency_install_active = True
+        event = types.SimpleNamespace(ignored=False)
+        event.ignore = lambda: setattr(event, "ignored", True)
+
+        self.assertTrue(dialog._dependency_close_is_blocked(event))
+        self.assertTrue(event.ignored)
 
     def test_pae_domain_line_ylabel_is_domain_label(self) -> None:
         self.assertEqual(metrics.line_ylabel("pae_domain_complete"), "Domain label")

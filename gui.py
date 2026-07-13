@@ -19,6 +19,7 @@ from .compat import (
     QtWidgets,
 )
 from .gui_coloring import ColoringController
+from .gui_dependencies import DependencyController
 from .gui_export import ExportController
 from .gui_layout import build_dialog_ui
 from .gui_loading import GuiLoadingController
@@ -48,6 +49,7 @@ class FoldQCPluginDialog(
     ExportController,
     MetricController,
     PlotController,
+    DependencyController,
     GuiStateBacked,
     QtWidgets.QDialog,
 ):
@@ -80,6 +82,7 @@ class FoldQCPluginDialog(
         self._active_ensemble_viewer_transaction = None
         self._load_progress_dialog = None
         self._progress_show_generation = 0
+        self._initialize_dependency_controller()
 
         self._build_ui()
         self._connect_signals()
@@ -284,6 +287,8 @@ class FoldQCPluginDialog(
 
     def closeEvent(self, event) -> None:
         """Persist session state when the dialog closes."""
+        if self._dependency_close_is_blocked(event):
+            return
         if self._gui_job_is_busy():
             self._abandon_active_gui_job()
         else:

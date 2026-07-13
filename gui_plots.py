@@ -522,6 +522,15 @@ class PlotController:
                 state.reason or f"{plot_type} is not available.",
             )
             return
+        dependency_features = ["plot"]
+        if metrics.is_domain_label_metric(key):
+            dependency_features.append(key)
+        plot_labels = {key: label for label, key in metrics.PLOT_TYPES}
+        plot_label = plot_labels.get(plot_type, plot_type.replace("_", " "))
+        if not self._ensure_feature_dependencies(
+            dependency_features, feature_label=f"The {plot_label.lower()} plot"
+        ):
+            return
         if plot_type == "line":
             self._show_line_plot()
         elif plot_type == "distribution":
