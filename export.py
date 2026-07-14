@@ -67,16 +67,26 @@ def fieldnames(*, include_ensemble: bool = False) -> list[str]:
 
 
 def default_csv_export_path(
-    pred_files, pred_data, metric_key: str | None, *, home: str | Path | None = None
+    pred_files,
+    pred_data,
+    metric_key: str | None,
+    *,
+    ensemble: bool = False,
+    home: str | Path | None = None,
 ) -> str:
     """Return a practical default CSV destination path."""
     metric = metric_key or "metric"
     home_path = Path.home() if home is None else Path(home)
     if pred_files is None:
         return str(home_path / f"foldqc_{metric}.csv")
-    rank = 0 if pred_data is None else getattr(pred_data, "rank", 0)
     name = getattr(pred_files, "name", "prediction")
     pred_dir = getattr(pred_files, "pred_dir", home_path) or home_path
+    if ensemble:
+        filename_metric = (
+            metric if metric.startswith("ensemble_") else f"ensemble_{metric}"
+        )
+        return str(Path(pred_dir) / f"{name}_{filename_metric}.csv")
+    rank = 0 if pred_data is None else getattr(pred_data, "rank", 0)
     return str(Path(pred_dir) / f"{name}_rank{rank}_{metric}.csv")
 
 

@@ -21,7 +21,6 @@ from ..loader_utils import (
     _normalise_confidence,
     _safe_object_name,
 )
-from ..token_map import extract_structure_plddt
 from .base import BaseProvider, has_ancestor_candidate
 
 
@@ -256,6 +255,7 @@ def _load_boltz_model_data(
     load_pde: bool,
     load_embeddings: bool,
     load_token_plddt: bool,
+    structure_index,
 ) -> None:
     if load_token_plddt and model.plddt_path is not None:
         token_plddt = np.asarray(np.load(model.plddt_path)["plddt"], dtype=np.float32)
@@ -264,7 +264,11 @@ def _load_boltz_model_data(
                 f"Boltz token pLDDT array for {model.structure_path.name} must be "
                 f"one-dimensional; got shape {token_plddt.shape}."
             )
-        expected = len(extract_structure_plddt(model.structure_path))
+        if structure_index is None:
+            raise ValueError(
+                f"No StructureIndex available for {model.structure_path.name}."
+            )
+        expected = len(structure_index.token_map)
         if len(token_plddt) != expected:
             raise ValueError(
                 f"Boltz token pLDDT length {len(token_plddt)} does not match "
@@ -385,7 +389,7 @@ class BoltzProvider(BaseProvider):
     detect = staticmethod(_looks_like_boltz)
     scan = staticmethod(_scan_boltz_dir)
 
-    def load_model_data(self, pred_files, model, data, options):
+    def load_model_data(self, pred_files, model, data, options, *, structure_index):
         _load_boltz_model_data(
             pred_files,
             model,
@@ -394,6 +398,7 @@ class BoltzProvider(BaseProvider):
             load_pde=options.load_pde,
             load_embeddings=options.load_embeddings,
             load_token_plddt=options.load_token_plddt,
+            structure_index=structure_index,
         )
 
 

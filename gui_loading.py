@@ -69,7 +69,7 @@ class DataLoadItem:
     flags: tuple[tuple[str, bool], ...]
     model_state: ModelState
     expected_version: int
-    member: object | None = None
+    expected_ensemble: ensemble.EnsembleState | None = None
     phase_arrays: tuple[str, ...] = ()
 
     def load_kwargs(self) -> dict[str, bool]:
@@ -99,12 +99,7 @@ class InitialPredictionSnapshot:
 
     pred_files: object | None
     model_store: ModelStoreSnapshot
-    ensemble_members: list | None
-    ensemble_group_name: str | None
-    ensemble_aligned: bool
-    ensemble_rmsd: np.ndarray | None
-    ensemble_plddt_mean: np.ndarray | None
-    ensemble_plddt_std: np.ndarray | None
+    ensemble_state: ensemble.EnsembleState | None
     display_path: str
     model_items: tuple[tuple[str, object], ...]
     selected_model_rank: object | None
@@ -124,13 +119,9 @@ class EnsembleViewerTransaction:
     group_existed: bool = False
     previous_group_members: tuple[str, ...] = ()
     group_additions: tuple[str, ...] = ()
-    previous_members: list | None = None
-    previous_group_name: str | None = None
-    previous_aligned: bool = False
-    previous_rmsd: np.ndarray | None = None
-    previous_plddt_mean: np.ndarray | None = None
-    previous_plddt_std: np.ndarray | None = None
+    previous_ensemble: ensemble.EnsembleState | None = None
     previous_model_store: ModelStoreSnapshot | None = None
+    previous_viewer_context: tuple | None = None
 
 
 def _session_path_for_candidate(discovery, candidate) -> Path:
@@ -165,7 +156,7 @@ def _scan_and_load_initial_prediction(
     report_phase,
 ) -> InitialLoadResult:
     from .loader import load_prediction_data
-    from .token_map import build_token_map
+    from .structure_index import StructureIndex
 
     display_path = _session_path_for_candidate(discovery, candidate)
     report_phase(f"Scanning {candidate.provider_label} output…")
@@ -180,6 +171,8 @@ def _scan_and_load_initial_prediction(
         else pred_files.models[0].rank
     )
     model = pred_files.model(rank)
+    report_phase(f"Indexing {model.display_label} structure…")
+    structure_index = StructureIndex.from_path(pred_files.structure_path(model.rank))
     report_phase(f"Loading {model.display_label} data…")
     pred_data = load_prediction_data(
         pred_files,
@@ -187,21 +180,26 @@ def _scan_and_load_initial_prediction(
         load_pae=False,
         load_pde=False,
         load_contact_probs=False,
+        structure_index=structure_index,
     )
-    report_phase(f"Preparing {model.display_label} token map…")
-    token_map = build_token_map(pred_data.structure_path)
     return InitialLoadResult(
         pred_files,
-        ModelState(rank=rank, data=pred_data, token_map=token_map),
+        ModelState(
+            rank=rank,
+            data=pred_data,
+            structure_index=structure_index,
+        ),
         display_path,
     )
 
 
 def _load_rank_data(pred_files, rank: int, report_phase) -> ModelSwitchResult:
     from .loader import load_prediction_data
-    from .token_map import build_token_map
+    from .structure_index import StructureIndex
 
     model = pred_files.model(rank)
+    report_phase(f"Indexing {model.display_label} structure…")
+    structure_index = StructureIndex.from_path(pred_files.structure_path(model.rank))
     report_phase(f"Loading {model.display_label} data…")
     data = load_prediction_data(
         pred_files,
@@ -209,12 +207,11 @@ def _load_rank_data(pred_files, rank: int, report_phase) -> ModelSwitchResult:
         load_pae=False,
         load_pde=False,
         load_contact_probs=False,
+        structure_index=structure_index,
     )
-    report_phase(f"Preparing {model.display_label} token map…")
-    token_map = build_token_map(data.structure_path)
     return ModelSwitchResult(
         pred_files,
-        ModelState(rank=rank, data=data, token_map=token_map),
+        ModelState(rank=rank, data=data, structure_index=structure_index),
     )
 
 
@@ -230,6 +227,7 @@ def _load_data_batch(pred_files, items: tuple[DataLoadItem, ...], report_phase):
         data = load_prediction_data(
             pred_files,
             item.rank,
+            structure_index=item.model_state.structure_index,
             **item.load_kwargs(),
         )
         loaded.append((item, data))
@@ -310,7 +308,7 @@ class GuiLoadingController:
                 states[incoming.rank] = canonical
                 self._model_states = states
             elif canonical is not incoming:
-                canonical.validate_token_map(incoming.token_map)
+                canonical.validate_structure_index(incoming.structure_index)
                 canonical.merge_data(incoming.data)
         if activate:
             self._active_model_rank = incoming.rank
@@ -324,12 +322,7 @@ class GuiLoadingController:
         return InitialPredictionSnapshot(
             pred_files=self._pred_files,
             model_store=self._capture_model_store(),
-            ensemble_members=self._ensemble_members,
-            ensemble_group_name=self._ensemble_group_name,
-            ensemble_aligned=self._ensemble_aligned,
-            ensemble_rmsd=self._ensemble_rmsd,
-            ensemble_plddt_mean=self._ensemble_plddt_mean,
-            ensemble_plddt_std=self._ensemble_plddt_std,
+            ensemble_state=self._ensemble,
             display_path=self._dir_edit.text(),
             model_items=model_items,
             selected_model_rank=(
@@ -343,12 +336,7 @@ class GuiLoadingController:
     ) -> None:
         self._pred_files = snapshot.pred_files
         self._restore_model_store(snapshot.model_store)
-        self._ensemble_members = snapshot.ensemble_members
-        self._ensemble_group_name = snapshot.ensemble_group_name
-        self._ensemble_aligned = snapshot.ensemble_aligned
-        self._ensemble_rmsd = snapshot.ensemble_rmsd
-        self._ensemble_plddt_mean = snapshot.ensemble_plddt_mean
-        self._ensemble_plddt_std = snapshot.ensemble_plddt_std
+        self._ensemble = snapshot.ensemble_state
         self._restore_viewer_mapping_context(snapshot.viewer_context)
         self._dir_edit.setText(snapshot.display_path)
         self._model_combo.blockSignals(True)
@@ -511,12 +499,7 @@ class GuiLoadingController:
         try:
             snapshot = self._capture_initial_prediction_context()
             self._pred_files = result.pred_files
-            self._ensemble_members = None
-            self._ensemble_group_name = None
-            self._ensemble_aligned = False
-            self._ensemble_rmsd = None
-            self._ensemble_plddt_mean = None
-            self._ensemble_plddt_std = None
+            self._ensemble = None
             self._dir_edit.setText(str(result.display_path))
 
             self._model_combo.blockSignals(True)
@@ -994,9 +977,11 @@ class GuiLoadingController:
     ) -> list[DataLoadItem]:
         if target is None:
             return []
-        members_by_rank = {
-            member.rank: member for member in getattr(target, "members", ())
-        }
+        expected_ensemble = (
+            self._ensemble if target.kind.startswith("ensemble") else None
+        )
+        if target.kind.startswith("ensemble") and expected_ensemble is None:
+            raise ValueError("The ensemble target is no longer active.")
         slots = []
         for state in target.model_states:
             if self._model_states.get(state.rank) is not state:
@@ -1004,19 +989,19 @@ class GuiLoadingController:
                     f"Model {state.rank} is no longer present in the canonical "
                     "model store."
                 )
-            slots.append((state, members_by_rank.get(state.rank)))
+            slots.append(state)
 
         items = []
         seen = set()
-        for model_state, member in slots:
+        for model_state in slots:
             key = id(model_state)
             if key in seen:
                 continue
             seen.add(key)
             item = self._data_load_item(
                 model_state,
-                member,
                 requested_flags,
+                expected_ensemble=expected_ensemble,
             )
             if item is not None:
                 items.append(item)
@@ -1025,8 +1010,9 @@ class GuiLoadingController:
     def _data_load_item(
         self,
         model_state: ModelState,
-        member,
         requested_flags: dict[str, bool],
+        *,
+        expected_ensemble: ensemble.EnsembleState | None,
     ) -> DataLoadItem | None:
         data = model_state.data
         flag_attrs = {
@@ -1056,7 +1042,7 @@ class GuiLoadingController:
             flags=tuple(flags.items()),
             model_state=model_state,
             expected_version=model_state.version,
-            member=member,
+            expected_ensemble=expected_ensemble,
             phase_arrays=phase_arrays,
         )
 
@@ -1113,10 +1099,10 @@ class GuiLoadingController:
                 return False
             if item.model_state.version != item.expected_version:
                 return False
-            if item.member is not None:
-                if item.member not in (self._ensemble_members or []):
+            if item.expected_ensemble is not None:
+                if self._ensemble is not item.expected_ensemble:
                     return False
-                if item.member.model_state is not item.model_state:
+                if item.rank not in item.expected_ensemble.ranks:
                     return False
         return True
 
@@ -1206,9 +1192,8 @@ class GuiLoadingController:
     def _refresh_objects(self) -> None:
         """Re-populate the molecular-viewer target dropdown."""
         try:
-            additional = (
-                [self._ensemble_group_name] if self._ensemble_group_name else []
-            )
+            ensemble_state = self._ensemble
+            additional = [] if ensemble_state is None else [ensemble_state.group_name]
             names = get_object_list(additional_names=additional)
             names = self._ordered_target_names(names)
         except Exception:
@@ -1231,8 +1216,12 @@ class GuiLoadingController:
 
     def _ordered_target_names(self, names: list[str]) -> list[str]:
         """Return target names in stable display order."""
-        group_name = self._ensemble_group_name
-        members = sorted(self._ensemble_members or [], key=lambda member: member.rank)
+        ensemble_state = self._ensemble
+        group_name = None if ensemble_state is None else ensemble_state.group_name
+        members = sorted(
+            () if ensemble_state is None else ensemble_state.members,
+            key=lambda member: member.rank,
+        )
         member_names = [member.obj_name for member in members]
 
         name_set = set(names)
@@ -1249,7 +1238,8 @@ class GuiLoadingController:
 
     def _style_target_combo_item(self, row: int, name: str) -> None:
         """Visually distinguish the ensemble group in the target dropdown."""
-        if name != self._ensemble_group_name:
+        ensemble_state = self._ensemble
+        if ensemble_state is None or name != ensemble_state.group_name:
             return
         item = self._obj_combo.model().item(row)
         if item is None:
@@ -1290,7 +1280,7 @@ class GuiLoadingController:
             or getattr(data, "summary_confidence", None) is not None
         )
         has_chain_iptm = self._has_chain_iptm_metric_data()
-        has_ensemble = bool(getattr(self, "_ensemble_members", None))
+        has_ensemble = self._ensemble is not None
 
         model = self._prop_combo.model()
         for row, prop in enumerate(metrics.PROPERTIES):
@@ -1381,7 +1371,8 @@ class GuiLoadingController:
             obj_name = None
         if not obj_name:
             return "none"
-        if obj_name == getattr(self, "_ensemble_group_name", None):
+        ensemble_state = getattr(self, "_ensemble", None)
+        if ensemble_state is not None and obj_name == ensemble_state.group_name:
             return "ensemble_group"
         if self._selected_ensemble_member(obj_name) is not None:
             return "ensemble_member"
@@ -1408,10 +1399,12 @@ class GuiLoadingController:
                 or getattr(pred_data, "token_plddt", None) is not None
             ):
                 return True
-        for member in getattr(self, "_ensemble_members", None) or []:
-            data = getattr(member, "data", None)
-            if data is None:
+        ensemble_state = getattr(self, "_ensemble", None)
+        for member in () if ensemble_state is None else ensemble_state.members:
+            member_state = self._model_states.get(member.rank)
+            if member_state is None:
                 continue
+            data = member_state.data
             if (
                 getattr(data, "pae", None) is not None
                 or getattr(data, "pde", None) is not None
@@ -1447,15 +1440,24 @@ class GuiLoadingController:
         if not obj_name:
             return False
 
-        if obj_name == getattr(self, "_ensemble_group_name", None):
-            members = getattr(self, "_ensemble_members", None) or []
+        ensemble_state = getattr(self, "_ensemble", None)
+        if ensemble_state is not None and obj_name == ensemble_state.group_name:
+            members = ensemble_state.members
             if not members:
                 return False
-            return plot_data.has_multiple_token_chains(members[0].token_map)
+            state = self._model_states.get(members[0].rank)
+            return bool(
+                state is not None
+                and plot_data.has_multiple_token_chains(state.token_map)
+            )
 
         member = self._selected_ensemble_member(obj_name)
         if member is not None:
-            return plot_data.has_multiple_token_chains(member.token_map)
+            state = self._model_states.get(member.rank)
+            return bool(
+                state is not None
+                and plot_data.has_multiple_token_chains(state.token_map)
+            )
 
         try:
             state = self._require_active_model_state()
@@ -1471,7 +1473,7 @@ class GuiLoadingController:
         metric_key = self._prop_combo.currentData()
         target_kind = self._current_target_kind()
         has_reference = bool(self._ref_edit.text().strip())
-        has_ensemble = bool(getattr(self, "_ensemble_members", None))
+        has_ensemble = self._ensemble is not None
         has_fingerprint_data = self._has_fingerprint_data()
         has_pae_data = self._has_matrix_data_family("pae")
         has_pde_data = self._has_matrix_data_family("pde")
@@ -1510,7 +1512,7 @@ class GuiLoadingController:
         context = gui_rules.field_context(
             key,
             self._current_target_kind(),
-            bool(getattr(self, "_ensemble_members", None)),
+            self._ensemble is not None,
             self._has_fingerprint_data(),
         )
         self._ref_label.setText(context.ref_label)
@@ -1538,7 +1540,7 @@ class GuiLoadingController:
                 target_kind,
                 ref_sel,
                 cutoff_text,
-                bool(getattr(self, "_ensemble_members", None)),
+                self._ensemble is not None,
             )
         )
 
@@ -1680,13 +1682,9 @@ class GuiLoadingController:
             previous_target=previous_target,
             group_existed=group_existed,
             previous_group_members=previous_group_members,
-            previous_members=self._ensemble_members,
-            previous_group_name=self._ensemble_group_name,
-            previous_aligned=self._ensemble_aligned,
-            previous_rmsd=self._ensemble_rmsd,
-            previous_plddt_mean=self._ensemble_plddt_mean,
-            previous_plddt_std=self._ensemble_plddt_std,
+            previous_ensemble=self._ensemble,
             previous_model_store=self._capture_model_store(),
+            previous_viewer_context=self._capture_viewer_mapping_context(),
         )
         self._active_ensemble_viewer_transaction = transaction
         QtCore.QTimer.singleShot(
@@ -1861,20 +1859,27 @@ class GuiLoadingController:
                 )
                 for member in prepared.members
             }
-            members = [
+            members = tuple(
                 ensemble.EnsembleMember(
+                    rank=member.rank,
                     obj_name=member.obj_name,
-                    model_state=canonical_states[member.rank],
-                    paint_mapping=(transaction.inspections[member.rank].paint_mapping),
                 )
                 for member in prepared.members
-            ]
-            self._ensemble_members = members
-            self._ensemble_group_name = prepared.group_name
-            self._ensemble_aligned = not prepared.skip_alignment
-            self._ensemble_rmsd = rmsd
-            self._ensemble_plddt_mean = prepared.plddt_mean
-            self._ensemble_plddt_std = prepared.plddt_std
+            )
+            for member in members:
+                state = canonical_states[member.rank]
+                key = self._paint_mapping_cache_key(state.data, member.obj_name)
+                self._paint_mappings[key] = transaction.inspections[
+                    member.rank
+                ].paint_mapping
+            self._ensemble = ensemble.EnsembleState(
+                group_name=prepared.group_name,
+                members=members,
+                aligned=not prepared.skip_alignment,
+                rmsd=rmsd,
+                plddt_mean=prepared.plddt_mean,
+                plddt_std=prepared.plddt_std,
+            )
             self._refresh_objects()
             self._select_object(prepared.group_name)
             self._update_property_availability()
@@ -1906,12 +1911,9 @@ class GuiLoadingController:
     ) -> None:
         if transaction.previous_model_store is not None:
             self._restore_model_store(transaction.previous_model_store)
-        self._ensemble_members = transaction.previous_members
-        self._ensemble_group_name = transaction.previous_group_name
-        self._ensemble_aligned = transaction.previous_aligned
-        self._ensemble_rmsd = transaction.previous_rmsd
-        self._ensemble_plddt_mean = transaction.previous_plddt_mean
-        self._ensemble_plddt_std = transaction.previous_plddt_std
+        self._ensemble = transaction.previous_ensemble
+        if transaction.previous_viewer_context is not None:
+            self._restore_viewer_mapping_context(transaction.previous_viewer_context)
 
     def _on_ensemble_preparation_error(self, request_id: int, failure) -> None:
         if not self._data_load_is_active(request_id):

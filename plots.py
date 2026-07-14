@@ -155,21 +155,26 @@ def attach_viewer_selection_metadata(
 def attach_ensemble_site_summary_metadata(
     fig: plt.Figure,
     *,
-    members: Sequence[Any],
+    member_obj_names: Sequence[str],
+    member_token_maps: Sequence[Any],
     site_indices: Sequence[Sequence[int]],
     selection_name: str = "foldqc_ensemble_site",
 ) -> plt.Figure:
     """Attach member-activation metadata for ensemble site summary plots."""
-    member_list = list(members)
-    if len(member_list) != len(site_indices):
-        raise ValueError("members and site_indices must have the same length.")
+    obj_names = [str(name) for name in member_obj_names]
+    token_maps = list(member_token_maps)
+    if len(obj_names) != len(site_indices) or len(token_maps) != len(site_indices):
+        raise ValueError(
+            "member object names, token maps, and site_indices must have the same "
+            "length."
+        )
     metadata: dict[str, Any] = {
         "kind": "ensemble_site_summary",
-        "member_obj_names": [str(member.obj_name) for member in member_list],
-        "member_token_maps": [member.token_map for member in member_list],
+        "member_obj_names": obj_names,
+        "member_token_maps": token_maps,
         "member_site_indices": [[int(i) for i in indices] for indices in site_indices],
-        "member_x_positions": [float(i) for i in range(len(member_list))],
-        "member_widths": [0.9 for _member in member_list],
+        "member_x_positions": [float(i) for i in range(len(obj_names))],
+        "member_widths": [0.9 for _name in obj_names],
         "selection_name": selection_name,
     }
     setattr(fig, "_foldqc_viewer_selection", metadata)

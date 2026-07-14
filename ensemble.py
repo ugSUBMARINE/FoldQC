@@ -4,10 +4,9 @@ Ensemble
 Utilities for working with multiple ranked prediction models.
 
 When a provider produces N models, N structure files can be loaded as one
-object-based ensemble ordered by rank. This module provides tools to:
-- Coordinate viewer-neutral ensemble loading through :mod:`mol_viewer`.
-- Compute per-token RMSD across all samples.
-- Compute per-metric consensus (mean ± std) across samples.
+object-based ensemble ordered by rank. This viewer-independent module prepares
+canonical model states and computes alignment plans, per-token RMSD, and metric
+consensus (mean ± std). Viewer transactions live in :mod:`gui_loading`.
 """
 
 from __future__ import annotations
@@ -21,13 +20,6 @@ import numpy as np
 
 from .compute import plddt_values_for
 from .model_state import ModelState
-from .mol_viewer import (
-    ObjectPaintMapping,
-    inspect_object_tokens,
-    load_models_as_objects,
-    rebuild,
-    transform_object,
-)
 
 if TYPE_CHECKING:
     from .token_map import TokenMap
@@ -36,25 +28,43 @@ if TYPE_CHECKING:
 PhaseReporter = Callable[[str], None]
 
 
-@dataclass
+@dataclass(frozen=True)
 class EnsembleMember:
-    """One loaded prediction model in an object-based ensemble."""
+    """Viewer metadata for one rank in an active object-based ensemble."""
 
+    rank: int
     obj_name: str
-    model_state: ModelState
-    paint_mapping: ObjectPaintMapping | None = None
+
+
+@dataclass(frozen=True)
+class EnsembleState:
+    """All committed ensemble metadata, keyed to canonical model ranks."""
+
+    group_name: str
+    members: tuple[EnsembleMember, ...]
+    aligned: bool
+    rmsd: np.ndarray
+    plddt_mean: np.ndarray
+    plddt_std: np.ndarray
+
+    def __post_init__(self) -> None:
+        members = tuple(self.members)
+        ranks = tuple(member.rank for member in members)
+        if not ranks:
+            raise ValueError("EnsembleState requires at least one member.")
+        if len(ranks) != len(set(ranks)):
+            raise ValueError("EnsembleState member ranks must be unique.")
+        object.__setattr__(self, "members", members)
+        for name in ("rmsd", "plddt_mean", "plddt_std"):
+            values = np.array(getattr(self, name), dtype=np.float32, copy=True)
+            if values.ndim != 1:
+                raise ValueError(f"EnsembleState {name} must be one-dimensional.")
+            values.setflags(write=False)
+            object.__setattr__(self, name, values)
 
     @property
-    def rank(self) -> int:
-        return self.model_state.rank
-
-    @property
-    def data(self):
-        return self.model_state.data
-
-    @property
-    def token_map(self) -> TokenMap:
-        return self.model_state.token_map
+    def ranks(self) -> tuple[int, ...]:
+        return tuple(member.rank for member in self.members)
 
 
 @dataclass(frozen=True)
@@ -115,17 +125,6 @@ class AlignmentPlan:
     rmsd: np.ndarray
 
 
-@dataclass(frozen=True)
-class EnsembleMetrics:
-    """Prepared ensemble-level metrics and display metadata."""
-
-    aligned: bool
-    rmsd: np.ndarray
-    plddt_mean: np.ndarray
-    plddt_std: np.ndarray
-    mode_label: str
-
-
 def default_group_name(pred_files) -> str:
     """Return the default viewer group name for a prediction ensemble."""
     first_obj = pred_files.models[0].object_name
@@ -149,10 +148,24 @@ def validate_prepared_members(
     members: Sequence[PreparedEnsembleMember],
 ) -> None:
     """Validate token order and pLDDT lengths before touching the viewer."""
-    validate_members(list(members))
+    if not members:
+        raise ValueError("No ensemble models were loaded.")
     reference = members[0]
+    reference_length = len(reference.token_map)
     reference_identities = _ordered_token_identities(reference.token_map)
-    for member in members[1:]:
+    for member in members:
+        if len(member.token_map) != reference_length:
+            raise ValueError(
+                f"Token count mismatch: {member.obj_name} maps to "
+                f"{len(member.token_map)} tokens, but {reference.obj_name} maps "
+                f"to {reference_length} tokens."
+            )
+        plddt = _member_plddt(member)
+        if len(plddt) != reference_length:
+            raise ValueError(
+                f"pLDDT length mismatch for model_{member.rank}: "
+                f"{len(plddt)} values for {reference_length} tokens."
+            )
         if _ordered_token_identities(member.token_map) != reference_identities:
             raise ValueError(
                 f"Token order mismatch for model_{member.rank}; ensemble models "
@@ -184,7 +197,7 @@ def prepare_ensemble(
 ) -> PreparedEnsemble:
     """Load and validate ensemble data without accessing Qt or PyMOL."""
     from .loader import load_prediction_data
-    from .token_map import build_token_map
+    from .structure_index import StructureIndex
 
     report = report_phase or (lambda _label: None)
     models = tuple(pred_files.models)
@@ -196,22 +209,28 @@ def prepare_ensemble(
     for index, model in enumerate(models, start=1):
         report(f"Preparing {model.display_label} ensemble data… ({index}/{total})")
         existing = existing_states_by_rank.get(model.rank)
+        structure_path = (
+            pred_files.structure_path(model.rank)
+            if hasattr(pred_files, "structure_path")
+            else model.structure_path
+        )
+        structure_index = (
+            existing.structure_index
+            if existing is not None
+            else StructureIndex.from_path(structure_path)
+        )
         data = None if existing is None else existing.data
         if not _has_plddt(data):
             data = load_prediction_data(
                 pred_files,
                 model.rank,
+                structure_index=structure_index,
                 **_data_load_flags(data),
             )
-        token_map = (
-            existing.token_map
-            if existing is not None
-            else build_token_map(data.structure_path)
-        )
         model_state = (
             existing
             if existing is not None and data is existing.data
-            else ModelState(model.rank, data, token_map)
+            else ModelState(model.rank, data, structure_index)
         )
         prepared.append(
             PreparedEnsembleMember(
@@ -255,107 +274,6 @@ def _member_plddt(member: Any) -> np.ndarray:
     if plddt is None:
         raise ValueError(f"pLDDT data are not available for model_{member.rank}.")
     return plddt
-
-
-def build_members(
-    pred_files,
-    *,
-    group_name: str | None = None,
-) -> tuple[str, list[EnsembleMember]]:
-    """Load/group all models and build per-object data plus token maps."""
-    from .loader import load_prediction_data
-    from .token_map import build_token_map
-
-    first_obj = pred_files.models[0].object_name
-    obj_prefix = first_obj.rsplit("_", 1)[0]
-    group_name = group_name or default_group_name(pred_files)
-    loaded = load_models_as_objects(
-        [(m.rank, m.structure_path) for m in pred_files.models],
-        obj_prefix=obj_prefix,
-        group_name=group_name,
-    )
-
-    members = []
-    reference_token_map = None
-    for rank, obj_name in loaded:
-        data = load_prediction_data(
-            pred_files,
-            rank,
-            load_pae=False,
-            load_pde=False,
-            load_token_plddt=True,
-        )
-        if reference_token_map is None:
-            reference_token_map = build_token_map(data.structure_path)
-            token_map = reference_token_map
-        else:
-            token_map = reference_token_map
-        members.append(
-            EnsembleMember(
-                obj_name=obj_name,
-                model_state=ModelState(rank, data, token_map),
-            )
-        )
-    return group_name, members
-
-
-def validate_members(members: list[EnsembleMember]) -> None:
-    """Ensure all ensemble models have compatible token-indexed data."""
-    if not members:
-        raise ValueError("No ensemble models were loaded.")
-
-    ref = members[0]
-    ref_len = len(ref.token_map)
-    for member in members:
-        if len(member.token_map) != ref_len:
-            raise ValueError(
-                f"Token count mismatch: {member.obj_name} maps to "
-                f"{len(member.token_map)} tokens, but {ref.obj_name} maps "
-                f"to {ref_len} tokens."
-            )
-        if (
-            member.data.token_plddt is not None
-            and len(member.data.token_plddt) != ref_len
-        ):
-            raise ValueError(
-                f"pLDDT length mismatch for model_{member.rank}: "
-                f"{len(member.data.token_plddt)} values for {ref_len} tokens."
-            )
-
-
-def prepare_metrics(
-    members: list[EnsembleMember],
-    *,
-    skip_alignment: bool,
-) -> EnsembleMetrics:
-    """Prepare ensemble RMSD and pLDDT consensus arrays."""
-    ref_member = next((m for m in members if m.rank == 0), members[0])
-    aligned_coords = None
-    if not skip_alignment:
-        plddt, _source = plddt_values_for(ref_member.data)
-        if plddt is None:
-            raise ValueError("Automatic ensemble alignment requires pLDDT data.")
-        core_indices = select_alignment_core(ref_member.token_map, plddt)
-        aligned_coords = align_objects_to_reference(
-            members, core_indices, reference_rank=ref_member.rank
-        )
-
-    rmsd = (
-        compute_per_token_rmsd(aligned_coords)
-        if aligned_coords is not None
-        else compute_aligned_per_token_rmsd(members)
-    )
-    plddt_arrays = [_member_plddt(member) for member in members]
-    plddt_mean, plddt_std = compute_metric_consensus(plddt_arrays)
-    return EnsembleMetrics(
-        aligned=not skip_alignment,
-        rmsd=rmsd,
-        plddt_mean=plddt_mean,
-        plddt_std=plddt_std,
-        mode_label="current coordinates"
-        if skip_alignment
-        else "automatic core alignment",
-    )
 
 
 def select_alignment_core(
@@ -465,59 +383,6 @@ def calculate_alignment_plan(
         transformed_coords=transformed_tuple,
         rmsd=compute_per_token_rmsd(list(transformed_tuple)),
     )
-
-
-def align_objects_to_reference(
-    members: list[EnsembleMember],
-    core_indices: list[int],
-    reference_rank: int = 0,
-) -> list[np.ndarray]:
-    """Align every ensemble object to *reference_rank* using *core_indices*.
-
-    The token maps for all members must be length-compatible, because the same
-    token indices define matching residues in every object. Returns the
-    transformed per-token coordinate arrays in member order.
-    """
-    if len(core_indices) < 3:
-        raise ValueError("At least 3 polymer tokens are required for alignment.")
-
-    ref = next((m for m in members if m.rank == reference_rank), None)
-    if ref is None:
-        raise ValueError(f"Reference rank {reference_rank} is not loaded.")
-
-    target_inspection = inspect_object_tokens(ref.obj_name, ref.token_map)
-    ref.paint_mapping = target_inspection.paint_mapping
-    target_all_coords = target_inspection.representative_coords
-    target_coords = target_all_coords[core_indices]
-    aligned_coords: list[np.ndarray] = []
-    for member in members:
-        if member.rank == reference_rank:
-            aligned_coords.append(target_all_coords)
-            continue
-        mobile_inspection = inspect_object_tokens(member.obj_name, member.token_map)
-        member.paint_mapping = mobile_inspection.paint_mapping
-        mobile_all_coords = mobile_inspection.representative_coords
-        mobile_coords = mobile_all_coords[core_indices]
-        rotation, translation = kabsch_transform(mobile_coords, target_coords)
-        transform_object(member.obj_name, rotation, translation)
-        aligned_coords.append(
-            (mobile_all_coords @ rotation.T + translation).astype(np.float32)
-        )
-
-    rebuild()
-    return aligned_coords
-
-
-def compute_aligned_per_token_rmsd(
-    members: list[EnsembleMember],
-) -> np.ndarray:
-    """Compute per-token RMSD from the current coordinates of ensemble objects."""
-    coords_list = []
-    for member in members:
-        inspection = inspect_object_tokens(member.obj_name, member.token_map)
-        member.paint_mapping = inspection.paint_mapping
-        coords_list.append(inspection.representative_coords)
-    return compute_per_token_rmsd(coords_list)
 
 
 def compute_per_token_rmsd(

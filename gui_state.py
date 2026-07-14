@@ -9,11 +9,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
-import numpy as np
-
 from .session import PendingSessionRestore
 
 if TYPE_CHECKING:
+    from .ensemble import EnsembleState
     from .model_state import ModelState
 
 
@@ -70,12 +69,7 @@ class GuiState:
     model_states: dict[int, ModelState] = field(default_factory=dict)
     active_model_rank: int | None = None
     paint_mappings: dict[tuple[str, str], object] = field(default_factory=dict)
-    ensemble_members: list | None = None
-    ensemble_group_name: str | None = None
-    ensemble_aligned: bool = False
-    ensemble_rmsd: np.ndarray | None = None
-    ensemble_plddt_mean: np.ndarray | None = None
-    ensemble_plddt_std: np.ndarray | None = None
+    ensemble: EnsembleState | None = None
     accepted_token_overlap_warnings: set[tuple[str, str]] = field(default_factory=set)
     loading_prediction: bool = False
     loading_data: bool = False
@@ -107,12 +101,7 @@ for _private_name, _state_name in {
     "_model_states": "model_states",
     "_active_model_rank": "active_model_rank",
     "_paint_mappings": "paint_mappings",
-    "_ensemble_members": "ensemble_members",
-    "_ensemble_group_name": "ensemble_group_name",
-    "_ensemble_aligned": "ensemble_aligned",
-    "_ensemble_rmsd": "ensemble_rmsd",
-    "_ensemble_plddt_mean": "ensemble_plddt_mean",
-    "_ensemble_plddt_std": "ensemble_plddt_std",
+    "_ensemble": "ensemble",
     "_accepted_token_overlap_warnings": "accepted_token_overlap_warnings",
     "_loading_prediction": "loading_prediction",
     "_loading_data": "loading_data",

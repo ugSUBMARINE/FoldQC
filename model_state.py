@@ -6,7 +6,7 @@ from dataclasses import dataclass, field, fields
 from pathlib import Path
 
 from .loader_models import PredictionData
-from .token_map import TokenMap
+from .structure_index import StructureIndex
 
 _ARRAY_FIELDS = (
     "token_plddt",
@@ -27,7 +27,6 @@ class ModelStateSnapshot:
 
     rank: int
     values: tuple[tuple[str, object], ...]
-    token_map: TokenMap
     version: int
 
 
@@ -37,16 +36,27 @@ class ModelState:
 
     rank: int
     data: PredictionData
-    token_map: TokenMap
+    structure_index: StructureIndex
     _version: int = field(default=0, init=False, repr=False)
 
     def __post_init__(self) -> None:
         self._validate_rank(self.data)
+        if not self.structure_index.matches_path(self.data.structure_path):
+            raise ValueError(
+                f"ModelState rank {self.rank} structure path does not match its "
+                f"StructureIndex: {self.data.structure_path!s} != "
+                f"{self.structure_index.path!s}."
+            )
 
     @property
     def version(self) -> int:
         """Monotonic version incremented after each material data merge."""
         return self._version
+
+    @property
+    def token_map(self):
+        """Return the immutable token map owned by this state's structure index."""
+        return self.structure_index.token_map
 
     def _validate_rank(self, data: PredictionData) -> None:
         if int(data.rank) != self.rank:
@@ -86,11 +96,11 @@ class ModelState:
                 f"Partial model_{self.rank} data must provide both embedding arrays."
             )
 
-    def validate_token_map(self, token_map: TokenMap) -> None:
-        """Reject a staged state whose token order differs from this state."""
-        if token_map != self.token_map:
+    def validate_structure_index(self, structure_index: StructureIndex) -> None:
+        """Reject a staged state that did not reuse this canonical index."""
+        if structure_index is not self.structure_index:
             raise ValueError(
-                f"Cannot merge model_{self.rank} data with a different token map."
+                f"Cannot merge model_{self.rank} data with a different StructureIndex."
             )
 
     def merge_data(self, incoming: PredictionData) -> bool:
@@ -138,7 +148,6 @@ class ModelState:
             values=tuple(
                 (name, getattr(self.data, name, None)) for name in _DATA_FIELDS
             ),
-            token_map=self.token_map,
             version=self._version,
         )
 
@@ -150,5 +159,4 @@ class ModelState:
             )
         for name, value in snapshot.values:
             setattr(self.data, name, value)
-        self.token_map = snapshot.token_map
         self._version = snapshot.version

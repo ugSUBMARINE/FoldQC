@@ -6,6 +6,7 @@ import types
 import unittest
 from dataclasses import FrozenInstanceError
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 
@@ -15,13 +16,8 @@ from FoldQC.mol_viewer import (  # noqa: E402
     compact_selection_expression,
     compare_token_map_to_object,
 )
-from FoldQC.token_map import (  # noqa: E402
-    TokenInfo,
-    TokenMap,
-    build_token_map,
-    extract_structure_plddt,
-    parse_structure_atoms,
-)
+from FoldQC.structure_index import StructureIndex  # noqa: E402
+from FoldQC.token_map import TokenInfo, TokenMap  # noqa: E402
 
 QUOTED_ATOM_CIF = """data_test
 loop_
@@ -122,15 +118,50 @@ class TokenMapTests(unittest.TestCase):
             path = Path(tmp) / "quoted.cif"
             path.write_text(QUOTED_ATOM_CIF)
 
-            atoms = parse_structure_atoms(path)
-            token_map = build_token_map(path)
-            plddt = extract_structure_plddt(path)
+            original_open = Path.open
+            with mock.patch.object(
+                Path,
+                "open",
+                autospec=True,
+                side_effect=original_open,
+            ) as open_mock:
+                index = StructureIndex.from_path(path)
 
-        self.assertEqual([atom["name"] for atom in atoms], ["C1'", "O5'"])
+        self.assertEqual(open_mock.call_count, 1)
+        token_map = index.token_map
         self.assertIsInstance(token_map, TokenMap)
         self.assertEqual([tok.atom_name for tok in token_map], ["C1'", "O5'"])
         self.assertFalse(hasattr(token_map[0], "pymol_selection"))
-        np.testing.assert_allclose(plddt, np.array([0.986, 0.9842], dtype=np.float32))
+        self.assertEqual(index.atom_count, 2)
+        self.assertEqual(index.atom_to_token, (0, 1))
+        np.testing.assert_allclose(
+            index.structure_plddt,
+            np.array([0.986, 0.9842], dtype=np.float32),
+        )
+        self.assertFalse(index.structure_plddt.flags.writeable)
+        with self.assertRaises(FrozenInstanceError):
+            index.path = Path("other.cif")  # type: ignore[misc]
+
+    def test_collapse_atom_plddt_averages_polymer_atoms_in_token_order(self) -> None:
+        pdb = """\
+ATOM      1  N   ALA A   1      0.000   0.000   0.000  1.00 90.00           N
+ATOM      2  CA  ALA A   1      1.000   0.000   0.000  1.00 80.00           C
+HETATM    3  C1  LIG L   2      2.000   0.000   0.000  1.00 70.00           C
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "model.pdb"
+            path.write_text(pdb)
+            index = StructureIndex.from_path(path)
+
+        self.assertEqual(index.format, "pdb")
+        self.assertEqual(index.atom_to_token, (0, 0, 1))
+        np.testing.assert_allclose(index.structure_plddt, [0.9, 0.7])
+        np.testing.assert_allclose(
+            index.collapse_atom_plddt(np.array([70.0, 90.0, 60.0])),
+            [0.8, 0.6],
+        )
+        with self.assertRaisesRegex(ValueError, "does not match 3 atoms"):
+            index.collapse_atom_plddt(np.ones(2, dtype=np.float32))
 
     def _compare_overlap(self, token_map, atoms):
         old_pymol = sys.modules.get("pymol")

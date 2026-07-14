@@ -12,7 +12,6 @@ import numpy as np
 from ..loader_models import ModelFiles, PredictionData, PredictionFiles
 from ..loader_utils import (
     STRUCTURE_SUFFIXES,
-    _collapse_atom_plddts_to_tokens,
     _first_present,
     _float_or_none,
     _load_json,
@@ -119,6 +118,7 @@ def _load_protenix_model_data(
     load_pde: bool,
     load_contact_probs: bool,
     load_token_plddt: bool,
+    structure_index,
 ) -> None:
     needs_full = load_pae or load_pde or load_contact_probs or load_token_plddt
     if not needs_full or model.confidence_path is None:
@@ -138,9 +138,12 @@ def _load_protenix_model_data(
     if load_token_plddt:
         atom_plddt = _first_present(full, ("atom_plddt", "atom_plddts"))
         if atom_plddt is not None:
-            data.token_plddt = _collapse_atom_plddts_to_tokens(
-                model.structure_path,
-                np.asarray(atom_plddt, dtype=np.float32),
+            if structure_index is None:
+                raise ValueError(
+                    f"No StructureIndex available for {model.structure_path.name}."
+                )
+            data.token_plddt = structure_index.collapse_atom_plddt(
+                np.asarray(atom_plddt, dtype=np.float32)
             )
             data.token_plddt_source = "provider_atom_mean"
 
@@ -232,7 +235,7 @@ class ProtenixProvider(BaseProvider):
     detect = staticmethod(_looks_like_protenix)
     scan = staticmethod(_scan_protenix_dir)
 
-    def load_model_data(self, pred_files, model, data, options):
+    def load_model_data(self, pred_files, model, data, options, *, structure_index):
         _load_protenix_model_data(
             model,
             data,
@@ -240,6 +243,7 @@ class ProtenixProvider(BaseProvider):
             load_pde=options.load_pde,
             load_contact_probs=options.load_contact_probs,
             load_token_plddt=options.load_token_plddt,
+            structure_index=structure_index,
         )
 
     def is_internal_candidate(self, candidate, candidates):

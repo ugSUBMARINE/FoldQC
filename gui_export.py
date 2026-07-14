@@ -16,11 +16,17 @@ APP_TITLE = "FoldQC"
 class ExportController:
     def _export_csv(self) -> None:
         """Export token-level CSV rows for the current metric and target."""
-        state = self._active_model_state
+        target = self._resolve_plot_target()
+        if target is None:
+            return
+        pred_data = (
+            None if target.kind == "ensemble_group" else target.model_states[0].data
+        )
         default_path = export.default_csv_export_path(
             getattr(self, "_pred_files", None),
-            None if state is None else state.data,
+            pred_data,
             self._prop_combo.currentData(),
+            ensemble=target.kind == "ensemble_group",
         )
         result = QtWidgets.QFileDialog.getSaveFileName(
             self,
@@ -178,9 +184,10 @@ class ExportController:
                 return None
             values = self._compute_ensemble_property(key)
             self._validate_token_count(values, target.token_map, target.label)
+            first_state = self._canonical_state_for_ensemble_member(members[0])
             return self._csv_rows_from_values(
                 key,
-                members[0].data,
+                first_state.data,
                 target.token_map,
                 values,
                 context,
@@ -193,25 +200,26 @@ class ExportController:
         compute_key = metrics.line_compute_key(key)
         for member in members:
             self._ensure_member_data_for_property(member, prop)
+            state = self._canonical_state_for_ensemble_member(member)
             context = self._csv_metric_context(
-                key, prop, member.token_map, member.obj_name
+                key, prop, state.token_map, member.obj_name
             )
             if context is None:
                 return None
             values = self._compute_property_from_context(
                 compute_key,
-                member.data,
-                member.token_map,
+                state.data,
+                state.token_map,
                 context,
             )
             if values is None:
                 return None
-            self._validate_token_count(values, member.token_map, member.obj_name)
+            self._validate_token_count(values, state.token_map, member.obj_name)
             rows.extend(
                 self._csv_rows_from_values(
                     key,
-                    member.data,
-                    member.token_map,
+                    state.data,
+                    state.token_map,
                     values,
                     context,
                     include_ensemble=True,
@@ -295,6 +303,7 @@ class ExportController:
             member_label = export.model_label_for_rank(
                 self._pred_files, member.rank, fallback=f"model_{member.rank}"
             )
+        ensemble_state = getattr(self, "_ensemble", None)
         return build_token_rows(
             pred_files=self._pred_files,
             data=data,
@@ -306,10 +315,14 @@ class ExportController:
             reference_indices=context.reference_indices,
             contact_indices=context.contact_indices,
             include_ensemble=include_ensemble,
-            ensemble_group=getattr(self, "_ensemble_group_name", "") or "",
+            ensemble_group=(
+                "" if ensemble_state is None else ensemble_state.group_name
+            ),
             ensemble_member_rank=member_rank,
             ensemble_member_label=member_label,
-            ensemble_aligned=getattr(self, "_ensemble_aligned", None)
+            ensemble_aligned=(
+                None if ensemble_state is None else ensemble_state.aligned
+            )
             if include_ensemble
             else None,
             aggregate_kind=aggregate_kind,

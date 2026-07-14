@@ -11,6 +11,7 @@ from .loader_models import (
 )
 from .providers.base import LoadOptions
 from .providers.registry import BUILTIN_PROVIDERS
+from .structure_index import StructureIndex
 
 
 def scan_prediction_path(path: str | Path) -> PredictionFiles:
@@ -34,6 +35,7 @@ def load_prediction_data(
     load_embeddings: bool = False,
     load_token_plddt: bool = True,
     load_contact_probs: bool = False,
+    structure_index: StructureIndex | None = None,
 ) -> PredictionData:
     try:
         model = pred_files.model(rank)
@@ -49,4 +51,18 @@ def load_prediction_data(
         load_token_plddt=load_token_plddt,
         load_contact_probs=load_contact_probs,
     )
-    return BUILTIN_PROVIDERS.get(pred_files.provider).load(pred_files, model, options)
+    if structure_index is not None and not structure_index.matches_path(
+        model.structure_path
+    ):
+        raise ValueError(
+            f"StructureIndex path {structure_index.path!s} does not match "
+            f"model_{rank} structure path {model.structure_path!s}."
+        )
+    if load_token_plddt and structure_index is None:
+        structure_index = StructureIndex.from_path(model.structure_path)
+    return BUILTIN_PROVIDERS.get(pred_files.provider).load(
+        pred_files,
+        model,
+        options,
+        structure_index=structure_index,
+    )

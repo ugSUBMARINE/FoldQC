@@ -234,27 +234,18 @@ class MetricController:
 
     def _compute_ensemble_property(self, key: str) -> np.ndarray:
         """Return an ensemble-level per-token array."""
-        members = self._ensemble_members or []
-        if not members:
+        ensemble_state = getattr(self, "_ensemble", None)
+        if ensemble_state is None:
             raise ValueError("No active ensemble.")
 
         if key == "ensemble_rmsd":
-            if self._ensemble_rmsd is None:
-                raise ValueError(
-                    "Ensemble RMSD has not been computed. Use the Ensemble… button again."
-                )
-            return self._ensemble_rmsd
+            return ensemble_state.rmsd
 
         if key in ("ensemble_plddt_mean", "ensemble_plddt_std"):
-            if self._ensemble_plddt_mean is None or self._ensemble_plddt_std is None:
-                raise ValueError(
-                    "Ensemble pLDDT consensus has not been computed. "
-                    "Use the Ensemble… button again."
-                )
             return (
-                self._ensemble_plddt_mean
+                ensemble_state.plddt_mean
                 if key == "ensemble_plddt_mean"
-                else self._ensemble_plddt_std
+                else ensemble_state.plddt_std
             )
 
         raise ValueError(f"Unknown ensemble property: {key}")
@@ -342,26 +333,11 @@ class MetricController:
     ) -> ObjectPaintMapping:
         """Return a valid cached atom-index mapping for one viewer object."""
         cache_key = self._paint_mapping_cache_key(data, obj_name)
-        member = next(
-            (
-                item
-                for item in getattr(self, "_ensemble_members", None) or []
-                if getattr(item, "obj_name", None) == obj_name
-            ),
-            None,
-        )
-        existing = (
-            getattr(member, "paint_mapping", None)
-            if member is not None
-            else getattr(self, "_paint_mappings", {}).get(cache_key)
-        )
+        existing = getattr(self, "_paint_mappings", {}).get(cache_key)
         mapping, rebuilt = ensure_object_paint_mapping(obj_name, token_map, existing)
-        if member is not None:
-            member.paint_mapping = mapping
-        else:
-            mappings = dict(getattr(self, "_paint_mappings", {}))
-            mappings[cache_key] = mapping
-            self._paint_mappings = mappings
+        mappings = dict(getattr(self, "_paint_mappings", {}))
+        mappings[cache_key] = mapping
+        self._paint_mappings = mappings
         if rebuilt:
             accepted = set(getattr(self, "_accepted_token_overlap_warnings", set()))
             accepted.discard(cache_key)
@@ -400,7 +376,8 @@ class MetricController:
         if self._pred_files is None:
             raise ValueError("No prediction output loaded.")
         flags = metrics.metric_load_flags(prop)
-        self._require_loaded_data(member.data, flags)
+        state = self._canonical_state_for_ensemble_member(member)
+        self._require_loaded_data(state.data, flags)
 
     def _ensure_member_data_for_plot(
         self,
@@ -414,8 +391,9 @@ class MetricController:
         """Assert that asynchronous preflight supplied plot arrays."""
         if self._pred_files is None:
             raise ValueError("No prediction output loaded.")
+        state = self._canonical_state_for_ensemble_member(member)
         self._require_loaded_data(
-            member.data,
+            state.data,
             {
                 "load_pae": load_pae,
                 "load_pde": load_pde,

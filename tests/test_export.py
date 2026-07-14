@@ -64,6 +64,26 @@ def test_default_csv_export_path_uses_prediction_metadata(tmp_path: Path) -> Non
     assert path == str(tmp_path / "target_rank1_plddt.csv")
 
 
+def test_default_csv_export_path_uses_ensemble_name_for_group(tmp_path: Path) -> None:
+    pred_files = _PredictionFiles(tmp_path)
+
+    path = export.default_csv_export_path(
+        pred_files,
+        None,
+        "ensemble_rmsd",
+        ensemble=True,
+    )
+
+    assert path == str(tmp_path / "target_ensemble_rmsd.csv")
+    plain_metric_path = export.default_csv_export_path(
+        pred_files,
+        None,
+        "plddt",
+        ensemble=True,
+    )
+    assert plain_metric_path == str(tmp_path / "target_ensemble_plddt.csv")
+
+
 def test_default_csv_export_path_falls_back_to_home(tmp_path: Path) -> None:
     path = export.default_csv_export_path(None, None, None, home=tmp_path)
 

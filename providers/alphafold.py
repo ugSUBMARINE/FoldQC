@@ -11,7 +11,6 @@ import numpy as np
 
 from ..loader_models import ModelFiles, PredictionData, PredictionFiles
 from ..loader_utils import (
-    _collapse_atom_plddts_to_tokens,
     _first,
     _load_json,
     _normalise_confidence,
@@ -202,6 +201,7 @@ def _load_af3_model_data(
     load_pae: bool,
     load_contact_probs: bool,
     load_token_plddt: bool,
+    structure_index,
 ) -> None:
     needs_full = load_pae or load_contact_probs or load_token_plddt
     if not needs_full or model.confidence_path is None:
@@ -222,9 +222,12 @@ def _load_af3_model_data(
     if load_contact_probs and "contact_probs" in full:
         data.contact_probs = np.asarray(full["contact_probs"], dtype=np.float32)
     if load_token_plddt and "atom_plddts" in full:
-        data.token_plddt = _collapse_atom_plddts_to_tokens(
-            model.structure_path,
-            np.asarray(full["atom_plddts"], dtype=np.float32),
+        if structure_index is None:
+            raise ValueError(
+                f"No StructureIndex available for {model.structure_path.name}."
+            )
+        data.token_plddt = structure_index.collapse_atom_plddt(
+            np.asarray(full["atom_plddts"], dtype=np.float32)
         )
         data.token_plddt_source = "provider_atom_mean"
 
@@ -325,13 +328,14 @@ class AlphaFold3Provider(BaseProvider):
     detect = staticmethod(_looks_like_af3)
     scan = staticmethod(_scan_af3_dir)
 
-    def load_model_data(self, pred_files, model, data, options):
+    def load_model_data(self, pred_files, model, data, options, *, structure_index):
         _load_af3_model_data(
             model,
             data,
             load_pae=options.load_pae,
             load_contact_probs=options.load_contact_probs,
             load_token_plddt=options.load_token_plddt,
+            structure_index=structure_index,
         )
 
     def is_internal_candidate(self, candidate, candidates):

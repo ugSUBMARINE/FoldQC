@@ -8,6 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from FoldQC.loader_models import PredictionData
 from FoldQC.model_state import ModelState
+from FoldQC.structure_index import StructureIndex
 from FoldQC.token_map import TokenMap
 
 
@@ -23,9 +24,24 @@ def _data(rank: int, **values) -> PredictionData:
     return PredictionData(**defaults)
 
 
+def _index(data: PredictionData, token_map: TokenMap | None = None) -> StructureIndex:
+    token_map = TokenMap(()) if token_map is None else token_map
+    plddt = np.zeros(len(token_map), dtype=np.float32)
+    plddt.setflags(write=False)
+    return StructureIndex(
+        Path(data.structure_path),
+        "cif",
+        token_map,
+        len(token_map),
+        tuple(range(len(token_map))),
+        plddt,
+    )
+
+
 def test_model_state_requires_matching_data_rank() -> None:
     with pytest.raises(ValueError, match="rank 2 cannot contain rank 1"):
-        ModelState(rank=2, data=_data(1), token_map=TokenMap(()))
+        data = _data(1)
+        ModelState(rank=2, data=data, structure_index=_index(data))
 
 
 def test_merge_is_in_place_monotonic_and_enriches_metadata() -> None:
@@ -35,7 +51,7 @@ def test_merge_is_in_place_monotonic_and_enriches_metadata() -> None:
         pde=original_pde,
         confidence={"summary": 0.7, "keep": True},
     )
-    state = ModelState(rank=2, data=data, token_map=TokenMap(()))
+    state = ModelState(rank=2, data=data, structure_index=_index(data))
     incoming = _data(
         2,
         token_plddt=np.array([0.8], dtype=np.float32),
@@ -72,7 +88,7 @@ def test_merge_is_in_place_monotonic_and_enriches_metadata() -> None:
 )
 def test_invalid_merge_leaves_state_unchanged(incoming) -> None:
     data = _data(2)
-    state = ModelState(rank=2, data=data, token_map=TokenMap(()))
+    state = ModelState(rank=2, data=data, structure_index=_index(data))
 
     with pytest.raises(ValueError):
         state.merge_data(incoming)
@@ -82,7 +98,8 @@ def test_invalid_merge_leaves_state_unchanged(incoming) -> None:
 
 
 def test_merge_rejects_uncoupled_plddt_and_embedding_fields() -> None:
-    state = ModelState(rank=2, data=_data(2), token_map=TokenMap(()))
+    data = _data(2)
+    state = ModelState(rank=2, data=data, structure_index=_index(data))
 
     with pytest.raises(ValueError, match="pLDDT values and provenance together"):
         state.merge_data(_data(2, token_plddt=np.array([0.8])))
@@ -92,26 +109,31 @@ def test_merge_rejects_uncoupled_plddt_and_embedding_fields() -> None:
     assert state.version == 0
 
 
-def test_snapshot_restores_fields_version_and_token_map_in_place() -> None:
+def test_snapshot_restores_fields_version_and_preserves_index_in_place() -> None:
     data = _data(2)
     token_map = TokenMap(())
-    state = ModelState(rank=2, data=data, token_map=token_map)
+    structure_index = _index(data, token_map)
+    state = ModelState(rank=2, data=data, structure_index=structure_index)
     snapshot = state.snapshot()
 
     state.merge_data(_data(2, pae=np.ones((1, 1), dtype=np.float32)))
-    state.token_map = TokenMap(())
     state.restore(snapshot)
 
     assert state.data is data
     assert state.data.pae is None
     assert state.token_map is token_map
+    assert state.structure_index is structure_index
     assert state.version == 0
 
 
-def test_token_map_validation_keeps_canonical_map() -> None:
+def test_structure_index_validation_requires_canonical_identity() -> None:
     token_map = TokenMap(())
-    state = ModelState(rank=2, data=_data(2), token_map=token_map)
+    data = _data(2)
+    structure_index = _index(data, token_map)
+    state = ModelState(rank=2, data=data, structure_index=structure_index)
 
-    state.validate_token_map(TokenMap(()))
+    state.validate_structure_index(structure_index)
+    with pytest.raises(ValueError, match="different StructureIndex"):
+        state.validate_structure_index(_index(data, token_map))
 
     assert state.token_map is token_map

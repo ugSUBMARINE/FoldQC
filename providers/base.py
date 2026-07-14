@@ -13,7 +13,7 @@ from ..loader_models import (
     PredictionFiles,
 )
 from ..loader_utils import _load_json, _normalise_confidence
-from ..token_map import extract_structure_plddt
+from ..structure_index import StructureIndex
 
 
 @dataclass(frozen=True)
@@ -43,6 +43,8 @@ class BaseProvider(ABC):
         pred_files: PredictionFiles,
         model: ModelFiles,
         options: LoadOptions,
+        *,
+        structure_index: StructureIndex | None,
     ) -> PredictionData:
         data = PredictionData(
             name=pred_files.name,
@@ -54,9 +56,19 @@ class BaseProvider(ABC):
         if model.summary_path is not None:
             data.summary_confidence = _load_json(model.summary_path)
             data.confidence = _normalise_confidence(data.summary_confidence)
-        self.load_model_data(pred_files, model, data, options)
+        self.load_model_data(
+            pred_files,
+            model,
+            data,
+            options,
+            structure_index=structure_index,
+        )
         if options.load_token_plddt and data.token_plddt is None:
-            data.token_plddt = extract_structure_plddt(model.structure_path)
+            if structure_index is None:
+                raise ValueError(
+                    f"No StructureIndex available for {model.structure_path.name}."
+                )
+            data.token_plddt = structure_index.structure_plddt
             data.token_plddt_source = "structure_b_factor"
         if data.confidence is None and data.summary_confidence is not None:
             data.confidence = _normalise_confidence(data.summary_confidence)
@@ -68,6 +80,8 @@ class BaseProvider(ABC):
         model: ModelFiles,
         data: PredictionData,
         options: LoadOptions,
+        *,
+        structure_index: StructureIndex | None,
     ) -> None:
         """Populate provider-specific lazy data; default is structure-only."""
 

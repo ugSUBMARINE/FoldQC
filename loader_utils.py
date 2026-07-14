@@ -4,60 +4,12 @@ from __future__ import annotations
 
 import json
 import re
-from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
 
-from .token_map import parse_structure_atoms
-
 STRUCTURE_SUFFIXES = {".cif", ".pdb"}
 ARCHIVE_EXTENSIONS = (".tar.gz", ".zip", ".tgz", ".tar")
-
-
-def _collapse_atom_plddts_to_tokens(
-    structure_path: Path,
-    atom_plddts: np.ndarray,
-) -> np.ndarray:
-    if atom_plddts.ndim != 1:
-        raise ValueError(
-            f"Atom pLDDT array for {structure_path.name} must be one-dimensional; "
-            f"got shape {atom_plddts.shape}."
-        )
-    atoms = parse_structure_atoms(structure_path)
-    if len(atoms) != len(atom_plddts):
-        raise ValueError(
-            f"Atom pLDDT length {len(atom_plddts)} does not match "
-            f"{len(atoms)} atoms in {structure_path.name}."
-        )
-
-    values = np.asarray(atom_plddts, dtype=np.float32)
-    finite = values[np.isfinite(values)]
-    if finite.size and float(np.nanmax(finite)) > 1.5:
-        values = values / 100.0
-
-    # Group per-atom values by residue so providers expose one canonical value per
-    # prediction token. Heterocomponents already use one token per heavy atom.
-    residue_values: dict[tuple[str, int, str], list[float]] = defaultdict(list)
-    for atom, value in zip(atoms, values, strict=True):
-        # skip heterocomponents since they always have one token per atom
-        if not atom["hetatm"]:
-            key = (atom["chain"], atom["resi"], atom["resn"])
-            residue_values[key].append(float(value))
-
-    # Rebuild in structure-token order rather than "all residues then ligands".
-    out: list[float] = []
-    emitted: set[tuple[str, int, str]] = set()
-    for atom, value in zip(atoms, values, strict=True):
-        if atom["hetatm"]:
-            out.append(float(value))
-        else:
-            key = (atom["chain"], atom["resi"], atom["resn"])
-            if key not in emitted:
-                emitted.add(key)
-                out.append(float(np.nanmean(residue_values[key])))
-
-    return np.asarray(out, dtype=np.float32)
 
 
 def _float_or_none(value) -> float | None:

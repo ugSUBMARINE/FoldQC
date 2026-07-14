@@ -606,7 +606,7 @@ def chain_iptm_values(
     confidence:
         Parsed ``confidence_<name>_model_<k>.json``.
     token_map:
-        Built by :func:`token_map.build_token_map`.
+        Built by :meth:`structure_index.StructureIndex.from_path`.
     ref_chain_key:
         Chain index key (string) for the reference chain (e.g. ``"1"`` for the
         ligand).  If *None*, use the per-chain pTM (``chains_ptm`` diagonal).

@@ -17,7 +17,21 @@ from FoldQC.gui_state import (  # noqa: E402
 )
 from FoldQC.loader_models import PredictionData  # noqa: E402
 from FoldQC.model_state import ModelState  # noqa: E402
+from FoldQC.structure_index import StructureIndex  # noqa: E402
 from FoldQC.token_map import TokenMap  # noqa: E402
+
+
+def _index(path: Path, token_map: TokenMap) -> StructureIndex:
+    values = np.zeros(len(token_map), dtype=np.float32)
+    values.setflags(write=False)
+    return StructureIndex(
+        path,
+        "cif",
+        token_map,
+        len(token_map),
+        tuple(range(len(token_map))),
+        values,
+    )
 
 
 def test_gui_state_uses_independent_mutable_defaults() -> None:
@@ -53,7 +67,7 @@ def test_resolved_target_distinguishes_ensemble_group() -> None:
                 rank=rank,
                 structure_path=Path(f"model_{rank}.cif"),
             ),
-            token_map=token_map,
+            structure_index=_index(Path(f"model_{rank}.cif"), token_map),
         )
         for rank in (0, 1)
     )
@@ -78,7 +92,7 @@ def test_resolved_target_exposes_live_state_data_and_is_not_assignable() -> None
         rank=0,
         structure_path=Path("model_0.cif"),
     )
-    state = ModelState(0, data, token_map)
+    state = ModelState(0, data, _index(Path(data.structure_path), token_map))
     target = ResolvedTarget(
         kind="single",
         label="foldqc_model_0",
@@ -111,7 +125,11 @@ def test_state_backed_properties_share_one_state() -> None:
     host._state = GuiState()
     data = PredictionData(name="model", rank=2, structure_path=Path("model.cif"))
     token_map = TokenMap(())
-    model_state = ModelState(rank=2, data=data, token_map=token_map)
+    model_state = ModelState(
+        rank=2,
+        data=data,
+        structure_index=_index(Path(data.structure_path), token_map),
+    )
     host._model_states = {2: model_state}
     host._active_model_rank = 2
 

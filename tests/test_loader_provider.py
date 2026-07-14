@@ -8,6 +8,7 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 
@@ -18,6 +19,7 @@ from FoldQC.loader import (  # noqa: E402
     load_prediction_data,
     scan_prediction_path,
 )
+from FoldQC.structure_index import StructureIndex  # noqa: E402
 
 CIF_TEXT = """data_test
 loop_
@@ -102,6 +104,38 @@ class LoaderProviderTests(unittest.TestCase):
             np.array([0.8, 0.4], dtype=np.float32),
         )
         self.assertEqual(data.token_plddt_source, "structure_b_factor")
+
+    def test_supplied_structure_index_is_reused_without_reading_again(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            structure = Path(tmp) / "model.cif"
+            structure.write_text(CIF_TEXT)
+            files = scan_prediction_path(structure)
+            structure_index = StructureIndex.from_path(structure)
+
+            with mock.patch.object(
+                StructureIndex,
+                "from_path",
+                side_effect=AssertionError("structure was parsed twice"),
+            ):
+                data = load_prediction_data(
+                    files,
+                    structure_index=structure_index,
+                )
+
+        self.assertIs(data.token_plddt, structure_index.structure_plddt)
+        self.assertEqual(data.token_plddt_source, "structure_b_factor")
+
+    def test_supplied_structure_index_must_match_selected_model(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            first = Path(tmp) / "first.cif"
+            second = Path(tmp) / "second.cif"
+            first.write_text(CIF_TEXT)
+            second.write_text(CIF_TEXT)
+            files = scan_prediction_path(first)
+            wrong_index = StructureIndex.from_path(second)
+
+            with self.assertRaisesRegex(ValueError, "does not match model_0"):
+                load_prediction_data(files, structure_index=wrong_index)
 
     def test_boltz_directory_scans_with_legacy_helpers(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

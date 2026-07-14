@@ -38,7 +38,8 @@ class ColoringController:
 
     def _selected_ensemble_member(self, obj_name: str):
         """Return the active ensemble member matching *obj_name*, if any."""
-        for member in getattr(self, "_ensemble_members", None) or []:
+        ensemble_state = getattr(self, "_ensemble", None)
+        for member in () if ensemble_state is None else ensemble_state.members:
             if member.obj_name == obj_name:
                 return member
         return None
@@ -222,25 +223,26 @@ class ColoringController:
         palette, reverse_palette = self._selected_palette()
         vmin, vmax = self._get_vmin_vmax()
         used_vmin = used_vmax = None
-        member_values: list[tuple[object, np.ndarray, object]] = []
+        member_values: list[tuple[object, object, np.ndarray, object]] = []
         for member in target_members:
-            self._validate_token_count(values, member.token_map, member.obj_name)
+            state = self._canonical_state_for_ensemble_member(member)
+            self._validate_token_count(values, state.token_map, member.obj_name)
             mapping = self._prepare_paint_mapping(
-                member.token_map, member.obj_name, member.data
+                state.token_map, member.obj_name, state.data
             )
             if not self._confirm_token_overlap_for_coloring(
-                member.token_map,
+                state.token_map,
                 member.obj_name,
-                member.data,
+                state.data,
                 mapping=mapping,
             ):
                 return
-            member_values.append((member, values, mapping))
+            member_values.append((member, state, values, mapping))
 
         result = paint_properties_bulk(
             [
-                PaintTarget(member.obj_name, member.token_map, item_values, mapping)
-                for member, item_values, mapping in member_values
+                PaintTarget(member.obj_name, state.token_map, item_values, mapping)
+                for member, state, item_values, mapping in member_values
             ],
             palette=palette,
             reverse_palette=reverse_palette,
@@ -256,8 +258,9 @@ class ColoringController:
             used_vmax,
             object_names=[member.obj_name for member in target_members],
         )
+        ensemble_state = self._ensemble
         label = (
-            self._ensemble_group_name
+            ensemble_state.group_name
             if len(target_members) > 1
             else target_members[0].obj_name
         )
@@ -274,39 +277,41 @@ class ColoringController:
         user_vmin, user_vmax = self._get_vmin_vmax()
         ref_sel = self._ref_edit.text().strip() or None
 
-        member_values: list[tuple[object, np.ndarray, object]] = []
+        member_values: list[tuple[object, object, np.ndarray, object]] = []
         for member in target_members:
             self._ensure_member_data_for_property(member, prop)
+            state = self._canonical_state_for_ensemble_member(member)
             values = self._compute_property_for(
-                key, ref_sel, member.data, member.token_map, member.obj_name
+                key, ref_sel, state.data, state.token_map, member.obj_name
             )
             if values is None:
                 return
-            self._validate_token_count(values, member.token_map, member.obj_name)
+            self._validate_token_count(values, state.token_map, member.obj_name)
             mapping = self._prepare_paint_mapping(
-                member.token_map, member.obj_name, member.data
+                state.token_map, member.obj_name, state.data
             )
             if not self._confirm_token_overlap_for_coloring(
-                member.token_map,
+                state.token_map,
                 member.obj_name,
-                member.data,
+                state.data,
                 mapping=mapping,
             ):
                 return
-            member_values.append((member, values, mapping))
+            member_values.append((member, state, values, mapping))
 
         if metrics.is_domain_label_metric(key):
             result = paint_categorical_labels_batch(
                 [
-                    PaintTarget(member.obj_name, member.token_map, values, mapping)
-                    for member, values, mapping in member_values
+                    PaintTarget(member.obj_name, state.token_map, values, mapping)
+                    for member, state, values, mapping in member_values
                 ],
                 rebuild=False,
             )
             delete_colorbar()
             shared_vmin, shared_vmax = result.vmin, result.vmax
+            ensemble_state = self._ensemble
             label = (
-                self._ensemble_group_name
+                ensemble_state.group_name
                 if len(target_members) > 1
                 else target_members[0].obj_name
             )
@@ -316,13 +321,19 @@ class ColoringController:
             self._update_statistics_for_members(
                 key,
                 label,
-                [(member, values) for member, values, _mapping in member_values],
+                [
+                    (member, values)
+                    for member, _state, values, _mapping in member_values
+                ],
                 include_domain_labels=True,
             )
             return
 
         finite = np.concatenate(
-            [values[np.isfinite(values)] for _, values, _mapping in member_values]
+            [
+                values[np.isfinite(values)]
+                for _member, _state, values, _mapping in member_values
+            ]
         )
         shared_vmin = user_vmin
         shared_vmax = user_vmax
@@ -335,8 +346,8 @@ class ColoringController:
 
         paint_properties_bulk(
             [
-                PaintTarget(member.obj_name, member.token_map, values, mapping)
-                for member, values, mapping in member_values
+                PaintTarget(member.obj_name, state.token_map, values, mapping)
+                for member, state, values, mapping in member_values
             ],
             palette=palette,
             reverse_palette=reverse_palette,
@@ -350,11 +361,12 @@ class ColoringController:
             shared_vmin,
             shared_vmax,
             object_names=[
-                member.obj_name for member, _values, _mapping in member_values
+                member.obj_name for member, _state, _values, _mapping in member_values
             ],
         )
+        ensemble_state = self._ensemble
         label = (
-            self._ensemble_group_name
+            ensemble_state.group_name
             if len(target_members) > 1
             else target_members[0].obj_name
         )
@@ -364,7 +376,7 @@ class ColoringController:
         self._update_statistics_for_members(
             key,
             label,
-            [(member, values) for member, values, _mapping in member_values],
+            [(member, values) for member, _state, values, _mapping in member_values],
             include_chain_stats=key == "pde_chain_mean",
         )
 
@@ -372,12 +384,13 @@ class ColoringController:
         self, key: str, target_members: list
     ) -> None:
         """Apply quality-class pLDDT coloring to selected ensemble targets."""
-        member_values: list[tuple[object, np.ndarray, object]] = []
+        member_values: list[tuple[object, object, np.ndarray, object]] = []
         for member in target_members:
             self._ensure_member_data_for_property(
                 member, metrics.PROPERTY_BY_KEY["plddt_class"]
             )
-            values, _source = compute.plddt_values_for(member.data)
+            state = self._canonical_state_for_ensemble_member(member)
+            values, _source = compute.plddt_values_for(state.data)
             if values is None:
                 QtWidgets.QMessageBox.warning(
                     self,
@@ -385,29 +398,30 @@ class ColoringController:
                     f"pLDDT data are not available for model_{member.rank}.",
                 )
                 return
-            self._validate_token_count(values, member.token_map, member.obj_name)
+            self._validate_token_count(values, state.token_map, member.obj_name)
             mapping = self._prepare_paint_mapping(
-                member.token_map, member.obj_name, member.data
+                state.token_map, member.obj_name, state.data
             )
             if not self._confirm_token_overlap_for_coloring(
-                member.token_map,
+                state.token_map,
                 member.obj_name,
-                member.data,
+                state.data,
                 mapping=mapping,
             ):
                 return
-            member_values.append((member, values, mapping))
+            member_values.append((member, state, values, mapping))
 
         paint_plddt_class_batch(
             [
-                PaintTarget(member.obj_name, member.token_map, values, mapping)
-                for member, values, mapping in member_values
+                PaintTarget(member.obj_name, state.token_map, values, mapping)
+                for member, state, values, mapping in member_values
             ],
             rebuild=False,
         )
         delete_colorbar()
+        ensemble_state = self._ensemble
         label = (
-            self._ensemble_group_name
+            ensemble_state.group_name
             if len(target_members) > 1
             else target_members[0].obj_name
         )
@@ -415,7 +429,7 @@ class ColoringController:
         self._update_statistics_for_members(
             key,
             label,
-            [(member, values) for member, values, _mapping in member_values],
+            [(member, values) for member, _state, values, _mapping in member_values],
             include_plddt_classes=True,
         )
 

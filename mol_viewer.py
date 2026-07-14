@@ -239,50 +239,6 @@ def delete_viewer_names(names: Iterable[str]) -> None:
             cmd.delete(str(name))
 
 
-def load_models_as_states(
-    model_paths: list[tuple[int, Path]],
-    obj_name: str = "foldqc_ensemble",
-) -> str:
-    """Load ranked models as consecutive states of one object."""
-    from pymol import cmd
-
-    for state_idx, (_rank, path) in enumerate(sorted(model_paths), start=1):
-        cmd.load(str(path), obj_name, state=state_idx)
-    return obj_name
-
-
-def load_models_as_objects(
-    model_paths: list[tuple[int, Path]],
-    obj_prefix: str = "foldqc_model",
-    group_name: str | None = None,
-) -> list[tuple[int, str]]:
-    """Load ranked models as separate objects and optionally group them."""
-    from pymol import cmd
-
-    current_objects = set(cmd.get_names("objects") or [])
-    result: list[tuple[int, str]] = []
-    try:
-        try:
-            cmd.set("suspend_updates", "on")
-        except Exception:
-            pass
-        for rank, path in sorted(model_paths):
-            obj_name = f"{obj_prefix}_{rank}"
-            if obj_name not in current_objects:
-                cmd.load(str(path), obj_name, quiet=1, zoom=0)
-                current_objects.add(obj_name)
-            if group_name:
-                cmd.group(group_name, obj_name, "add")
-            result.append((rank, obj_name))
-    finally:
-        try:
-            cmd.set("suspend_updates", "off")
-            cmd.rebuild()
-        except Exception:
-            pass
-    return result
-
-
 def run_with_updates_suspended(func: Callable[[], T]) -> T:
     """Run a callback with viewport updates suspended and rebuild afterward."""
     from pymol import cmd

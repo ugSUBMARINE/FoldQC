@@ -293,7 +293,8 @@ class ChaiProvider(BaseProvider):
     detect = staticmethod(_looks_like_chai)
     scan = staticmethod(_scan_chai_dir)
 
-    def load_model_data(self, pred_files, model, data, options):
+    def load_model_data(self, pred_files, model, data, options, *, structure_index):
+        del structure_index
         _load_chai_model_data(
             model, data, load_pae=options.load_pae, load_pde=options.load_pde
         )

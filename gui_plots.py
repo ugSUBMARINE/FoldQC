@@ -24,8 +24,11 @@ class PlotController:
             )
             return None
 
-        ensemble_group_name = getattr(self, "_ensemble_group_name", None)
-        ensemble_members = getattr(self, "_ensemble_members", None)
+        ensemble_state = getattr(self, "_ensemble", None)
+        ensemble_group_name = (
+            None if ensemble_state is None else ensemble_state.group_name
+        )
+        ensemble_members = None if ensemble_state is None else ensemble_state.members
         if obj_name == ensemble_group_name:
             members = sorted(ensemble_members or [], key=lambda member: member.rank)
             if not members:
@@ -79,8 +82,13 @@ class PlotController:
         )
 
     def _canonical_state_for_ensemble_member(self, member):
+        ensemble_state = getattr(self, "_ensemble", None)
         state = self._model_states.get(member.rank)
-        if state is None or state is not member.model_state:
+        if (
+            ensemble_state is None
+            or member not in ensemble_state.members
+            or state is None
+        ):
             raise ValueError(
                 f"Ensemble model_{member.rank} is no longer present in the "
                 "canonical model store. Reload the ensemble."
@@ -178,12 +186,17 @@ class PlotController:
                 if load_contact_probs:
                     kwargs["load_contact_probs"] = True
                 self._ensure_member_data_for_plot(member, **kwargs)
+                state = self._canonical_state_for_ensemble_member(member)
                 values = self._compute_property_for(
-                    compute_key, ref_sel, member.data, member.token_map, member.obj_name
+                    compute_key,
+                    ref_sel,
+                    state.data,
+                    state.token_map,
+                    member.obj_name,
                 )
                 if values is None:
                     raise ValueError("Could not compute the selected property.")
-                self._validate_token_count(values, member.token_map, member.obj_name)
+                self._validate_token_count(values, state.token_map, member.obj_name)
                 arrays.append(np.asarray(values, dtype=np.float32))
             mean, std = plot_data.nan_mean_std(arrays, len(token_map))
             if mean is None:
@@ -216,7 +229,12 @@ class PlotController:
             return True
         if target.kind == "ensemble_group":
             return any(
-                getattr(member.data, attr, None) is not None
+                getattr(
+                    self._canonical_state_for_ensemble_member(member).data,
+                    attr,
+                    None,
+                )
+                is not None
                 for member in target.members or []
             )
         return getattr(target.data, attr, None) is not None
@@ -255,8 +273,9 @@ class PlotController:
                 self._ensure_member_data_for_plot(
                     member, load_pae=load_pae, load_pde=load_pde
                 )
-                data_items.append(member.data)
-                token_maps.append(member.token_map)
+                state = self._canonical_state_for_ensemble_member(member)
+                data_items.append(state.data)
+                token_maps.append(state.token_map)
             series = plot_data.summary_series_for_ensemble(
                 kind,
                 data_items,
@@ -311,18 +330,13 @@ class PlotController:
             )
         attr, title, label = source
         if attr == "chain_iptm":
-            data = (
-                target.members[0].data
-                if target.kind == "ensemble_member" and target.members
-                else target.data
-            )
             return plot_data.chain_iptm_matrix_plot_data(
                 target_kind=target.kind,
-                data=data,
+                data=target.model_states[0].data,
                 token_map=target.token_map,
                 title=title,
                 label=label,
-                members=target.members,
+                members=list(target.model_states),
             )
 
         load_pae = attr == "pae"
@@ -336,7 +350,8 @@ class PlotController:
                 if load_contact_probs:
                     kwargs["load_contact_probs"] = True
                 self._ensure_member_data_for_plot(member, **kwargs)
-                matrix = getattr(member.data, attr, None)
+                state = self._canonical_state_for_ensemble_member(member)
+                matrix = getattr(state.data, attr, None)
                 if matrix is None:
                     raise ValueError(
                         f"{label} matrix is not available for model_{member.rank}."
@@ -389,15 +404,16 @@ class PlotController:
             else False,
             load_token_plddt=True,
         )
+        state = self._canonical_state_for_ensemble_member(member)
         ref_indices = selection_to_token_indices(
-            member.token_map, ref_sel, obj_name=member.obj_name
+            state.token_map, ref_sel, obj_name=member.obj_name
         )
         if not ref_indices:
             raise ValueError(
                 f"Reference selection '{ref_sel}' matched no tokens in {member.obj_name}."
             )
         contact_indices = self._binding_site_token_indices(
-            member.token_map, member.obj_name, ref_sel, ref_indices, cutoff
+            state.token_map, member.obj_name, ref_sel, ref_indices, cutoff
         )
         site_indices = list(dict.fromkeys(list(ref_indices) + list(contact_indices)))
         if not site_indices:
@@ -406,7 +422,7 @@ class PlotController:
         return {
             "member": member,
             "site_indices": site_indices,
-            **plot_data.site_summary_values(member.data, site_indices),
+            **plot_data.site_summary_values(state.data, site_indices),
         }
 
     def _compute_ensemble_site_summary_data(
@@ -415,7 +431,11 @@ class PlotController:
         cutoff: float,
     ) -> tuple[list, list[str], list[tuple[str, np.ndarray, str]], list[list[int]]]:
         """Return ensemble members, labels, metric series, and site-token groups."""
-        members = sorted(self._ensemble_members or [], key=lambda member: member.rank)
+        ensemble_state = getattr(self, "_ensemble", None)
+        members = sorted(
+            () if ensemble_state is None else ensemble_state.members,
+            key=lambda member: member.rank,
+        )
         if not members:
             raise ValueError(
                 "The ensemble target is not active. Use Load Ensemble\u2026 first."
@@ -478,7 +498,8 @@ class PlotController:
                 if self._pred_files
                 else False,
             )
-            data_items.append(member.data)
+            state = self._canonical_state_for_ensemble_member(member)
+            data_items.append(state.data)
 
         return plot_data.fingerprint_series_for_ensemble(
             data_items, ref_indices, size=size
@@ -497,7 +518,7 @@ class PlotController:
             key,
             self._current_target_kind(),
             bool(self._ref_edit.text().strip()),
-            bool(getattr(self, "_ensemble_members", None)),
+            bool(getattr(self, "_ensemble", None)),
             has_fingerprint_data=self._has_fingerprint_data(),
             has_pae_data=self._has_matrix_data_family("pae"),
             has_pde_data=self._has_matrix_data_family("pde"),
@@ -848,7 +869,8 @@ class PlotController:
         cutoff = self._get_cutoff_threshold()
         if cutoff is None:
             return
-        if not self._ensemble_members:
+        ensemble_state = getattr(self, "_ensemble", None)
+        if ensemble_state is None:
             QtWidgets.QMessageBox.information(
                 self,
                 APP_TITLE,
@@ -857,12 +879,12 @@ class PlotController:
             return
 
         if self._pred_files is not None:
-            members = sorted(self._ensemble_members, key=lambda member: member.rank)
+            members = sorted(ensemble_state.members, key=lambda member: member.rank)
             reference = members[0]
             try:
                 target = _PlotTarget(
                     kind="ensemble_group",
-                    label=self._ensemble_group_name or "ensemble",
+                    label=ensemble_state.group_name,
                     obj_name=reference.obj_name,
                     model_states=tuple(
                         self._canonical_state_for_ensemble_member(member)
@@ -903,7 +925,10 @@ class PlotController:
             )
             plots.attach_ensemble_site_summary_metadata(
                 fig,
-                members=members,
+                member_obj_names=[member.obj_name for member in members],
+                member_token_maps=[
+                    self._model_states[member.rank].token_map for member in members
+                ],
                 site_indices=site_indices,
                 selection_name="foldqc_ensemble_site",
             )
@@ -1125,7 +1150,10 @@ class PlotController:
         """Return all token maps that plot selections should target."""
         if target.kind == "ensemble_group":
             members = sorted(target.members or [], key=lambda member: member.rank)
-            return [member.token_map for member in members]
+            return [
+                self._canonical_state_for_ensemble_member(member).token_map
+                for member in members
+            ]
         return None
 
     def _plot_selection_obj_names(self, target: _PlotTarget) -> list[str] | None:
