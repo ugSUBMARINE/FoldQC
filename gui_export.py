@@ -16,9 +16,10 @@ APP_TITLE = "FoldQC"
 class ExportController:
     def _export_csv(self) -> None:
         """Export token-level CSV rows for the current metric and target."""
+        state = self._active_model_state
         default_path = export.default_csv_export_path(
             getattr(self, "_pred_files", None),
-            getattr(self, "_pred_data", None),
+            None if state is None else state.data,
             self._prop_combo.currentData(),
         )
         result = QtWidgets.QFileDialog.getSaveFileName(
@@ -117,10 +118,8 @@ class ExportController:
         else:
             if target.kind == "ensemble_member" and member is not None:
                 self._ensure_member_data_for_property(member, prop)
-                target.data = member.data
             else:
                 self._ensure_current_data_for_property(prop)
-                target.data = self._pred_data
             context = self._csv_metric_context(
                 key, prop, target.token_map, target.obj_name
             )

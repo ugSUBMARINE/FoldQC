@@ -160,13 +160,12 @@ def validate_prepared_members(
             )
 
 
-def _data_load_flags(existing: Any | None) -> dict[str, bool]:
-    """Return ensemble flags while preserving arrays already held by *existing*."""
+def _data_load_flags(_existing: Any | None) -> dict[str, bool]:
+    """Return the minimal flags needed to add canonical pLDDT to a state."""
     return {
-        "load_pae": existing is not None and getattr(existing, "pae", None) is not None,
-        "load_pde": existing is not None and getattr(existing, "pde", None) is not None,
-        "load_contact_probs": existing is not None
-        and getattr(existing, "contact_probs", None) is not None,
+        "load_pae": False,
+        "load_pde": False,
+        "load_contact_probs": False,
         "load_token_plddt": True,
     }
 

@@ -5,13 +5,12 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import numpy as np
 
 from . import ensemble, gui_rules, metrics, plot_data, reports
 from .compat import ItemIsEnabled, QtCore, QtWidgets, WindowCloseButtonHint
-from .model_state import ModelState
+from .model_state import ModelState, ModelStateSnapshot
 from .mol_viewer import (
     add_objects_to_group,
     delete_viewer_names,
@@ -31,9 +30,6 @@ from .mol_viewer import (
 APP_TITLE = "FoldQC"
 VIEWER_NAME = get_viewer_name()
 logger = logging.getLogger(__name__)
-
-if TYPE_CHECKING:
-    from .token_map import TokenMap
 
 _ARCHIVE_SUFFIXES = (".zip", ".tar", ".tar.gz", ".tgz")
 
@@ -72,7 +68,7 @@ class DataLoadItem:
     model_label: str
     flags: tuple[tuple[str, bool], ...]
     model_state: ModelState
-    original_data: object
+    expected_version: int
     member: object | None = None
     phase_arrays: tuple[str, ...] = ()
 
@@ -94,7 +90,7 @@ class ModelStoreSnapshot:
     """Restorable model-store membership, contents, and active rank."""
 
     active_rank: int | None
-    entries: tuple[tuple[int, ModelState, object, TokenMap], ...]
+    entries: tuple[tuple[int, ModelState, ModelStateSnapshot], ...]
 
 
 @dataclass(frozen=True)
@@ -283,15 +279,15 @@ class GuiLoadingController:
         return ModelStoreSnapshot(
             active_rank=self._active_model_rank,
             entries=tuple(
-                (rank, state, state.data, state.token_map)
+                (rank, state, state.snapshot())
                 for rank, state in self._model_states.items()
             ),
         )
 
     def _restore_model_store(self, snapshot: ModelStoreSnapshot) -> None:
         restored = {}
-        for rank, state, data, token_map in snapshot.entries:
-            state.replace(data, token_map)
+        for rank, state, state_snapshot in snapshot.entries:
+            state.restore(state_snapshot)
             restored[rank] = state
         self._model_states = restored
         self._active_model_rank = snapshot.active_rank
@@ -314,7 +310,8 @@ class GuiLoadingController:
                 states[incoming.rank] = canonical
                 self._model_states = states
             elif canonical is not incoming:
-                canonical.replace(incoming.data, incoming.token_map)
+                canonical.validate_token_map(incoming.token_map)
+                canonical.merge_data(incoming.data)
         if activate:
             self._active_model_rank = incoming.rank
         return canonical
@@ -796,6 +793,20 @@ class GuiLoadingController:
         self._data_load_request_id = request_id
         self._set_prediction_load_controls_enabled(False)
         model = pred_files.model(rank)
+        cached_state = self._model_states.get(rank)
+        if cached_state is not None:
+            self._schedule_load_progress(
+                request_id,
+                f"Showing {model.display_label}…",
+            )
+            QtCore.QTimer.singleShot(
+                0,
+                lambda: self._commit_model_switch(
+                    request_id,
+                    ModelSwitchResult(pred_files, cached_state),
+                ),
+            )
+            return
         self._schedule_load_progress(
             request_id,
             f"Loading {model.display_label} data…",
@@ -983,35 +994,17 @@ class GuiLoadingController:
     ) -> list[DataLoadItem]:
         if target is None:
             return []
+        members_by_rank = {
+            member.rank: member for member in getattr(target, "members", ())
+        }
         slots = []
-        if target.kind == "single":
-            state = self._active_model_state
-            if state is not None and target.data is state.data:
-                slots.append((state, None))
-        elif target.kind == "ensemble_member":
-            for member in target.members or []:
-                state = getattr(member, "model_state", None)
-                if state is None and self._requested_arrays_are_loaded(
-                    member.data, requested_flags
-                ):
-                    continue
-                if state is None:
-                    raise ValueError(
-                        f"Model {member.rank} has no canonical model state."
-                    )
-                slots.append((state, member))
-        elif target.kind == "ensemble_group":
-            for member in sorted(target.members or [], key=lambda item: item.rank):
-                state = getattr(member, "model_state", None)
-                if state is None and self._requested_arrays_are_loaded(
-                    member.data, requested_flags
-                ):
-                    continue
-                if state is None:
-                    raise ValueError(
-                        f"Model {member.rank} has no canonical model state."
-                    )
-                slots.append((state, member))
+        for state in target.model_states:
+            if self._model_states.get(state.rank) is not state:
+                raise ValueError(
+                    f"Model {state.rank} is no longer present in the canonical "
+                    "model store."
+                )
+            slots.append((state, members_by_rank.get(state.rank)))
 
         items = []
         seen = set()
@@ -1028,20 +1021,6 @@ class GuiLoadingController:
             if item is not None:
                 items.append(item)
         return items
-
-    @staticmethod
-    def _requested_arrays_are_loaded(data, requested_flags: dict[str, bool]) -> bool:
-        flag_attrs = {
-            "load_pae": "pae",
-            "load_pde": "pde",
-            "load_contact_probs": "contact_probs",
-            "load_token_plddt": "token_plddt",
-        }
-        return all(
-            not requested_flags.get(flag, False)
-            or getattr(data, attr, None) is not None
-            for flag, attr in flag_attrs.items()
-        )
 
     def _data_load_item(
         self,
@@ -1067,10 +1046,7 @@ class GuiLoadingController:
         if not missing:
             return None
 
-        flags = {
-            name: requested[name] or getattr(data, attr, None) is not None
-            for name, (attr, _label) in flag_attrs.items()
-        }
+        flags = {name: name in missing for name in flag_attrs}
         phase_arrays = tuple(dict.fromkeys(flag_attrs[name][1] for name in missing))
         rank = model_state.rank
         model = self._pred_files.model(rank)
@@ -1079,7 +1055,7 @@ class GuiLoadingController:
             model_label=model.display_label,
             flags=tuple(flags.items()),
             model_state=model_state,
-            original_data=data,
+            expected_version=model_state.version,
             member=member,
             phase_arrays=phase_arrays,
         )
@@ -1100,10 +1076,20 @@ class GuiLoadingController:
             self._finish_data_load(request_id)
             return
 
+        snapshots = []
         try:
             for item, data in result.loaded:
                 self._validate_lazy_loaded_item(item, data)
+                item.model_state.validate_merge(data)
+            snapshots = [
+                (item.model_state, item.model_state.snapshot())
+                for item, _data in result.loaded
+            ]
+            for item, data in result.loaded:
+                item.model_state.merge_data(data)
         except Exception as exc:
+            for state, snapshot in reversed(snapshots):
+                state.restore(snapshot)
             title = getattr(
                 self,
                 "_active_data_error_title",
@@ -1114,9 +1100,6 @@ class GuiLoadingController:
             return
 
         self._active_load_handle = None
-        for item, data in result.loaded:
-            item.model_state.replace_data(data)
-
         continuation = self._active_data_continuation
         self._on_data_load_progress(request_id, "Preparing requested action…")
         QtCore.QTimer.singleShot(
@@ -1128,7 +1111,7 @@ class GuiLoadingController:
         for item, _data in result.loaded:
             if self._model_states.get(item.rank) is not item.model_state:
                 return False
-            if item.model_state.data is not item.original_data:
+            if item.model_state.version != item.expected_version:
                 return False
             if item.member is not None:
                 if item.member not in (self._ensemble_members or []):
@@ -1284,24 +1267,27 @@ class GuiLoadingController:
 
     def _update_confidence_summary(self) -> None:
         """Fill the confidence text browser from loaded data."""
+        state = self._active_model_state
         self._conf_browser.setPlainText(
-            reports.format_confidence_summary(self._pred_data)
+            reports.format_confidence_summary(None if state is None else state.data)
         )
 
     def _update_property_availability(self) -> None:
         """Grey out combo items whose required data is not available."""
-        if self._pred_data is None or self._pred_files is None:
+        state = self._active_model_state
+        if state is None or self._pred_files is None:
             return
+        data = state.data
         has_pae = getattr(self._pred_files, "has_pae", False)
         has_pde = getattr(self._pred_files, "has_pde", False)
         has_contact_probs = getattr(self._pred_files, "has_contact_probs", False)
         has_plddt = (
             getattr(self._pred_files, "has_plddt", False)
-            or getattr(self._pred_data, "token_plddt", None) is not None
+            or getattr(data, "token_plddt", None) is not None
         )
         has_confidence = (
-            getattr(self._pred_data, "confidence", None) is not None
-            or getattr(self._pred_data, "summary_confidence", None) is not None
+            getattr(data, "confidence", None) is not None
+            or getattr(data, "summary_confidence", None) is not None
         )
         has_chain_iptm = self._has_chain_iptm_metric_data()
         has_ensemble = bool(getattr(self, "_ensemble_members", None))
@@ -1336,10 +1322,11 @@ class GuiLoadingController:
 
     def _has_chain_iptm_metric_data(self) -> bool:
         """Return whether loaded confidence has data for the Chain ipTM metric."""
-        if self._pred_data is None:
+        state = self._active_model_state
+        if state is None:
             return False
         for attr in ("confidence", "summary_confidence"):
-            confidence = getattr(self._pred_data, attr, None)
+            confidence = getattr(state.data, attr, None)
             if _confidence_has_chain_iptm_metric_data(confidence):
                 return True
         return False
@@ -1403,7 +1390,8 @@ class GuiLoadingController:
     def _has_fingerprint_data(self) -> bool:
         """Return whether fingerprint plotting has any source family available."""
         pred_files = getattr(self, "_pred_files", None)
-        pred_data = getattr(self, "_pred_data", None)
+        state = getattr(self, "_active_model_state", None)
+        pred_data = None if state is None else state.data
         if pred_files is not None:
             if (
                 getattr(pred_files, "has_pae", False)
@@ -1436,7 +1424,8 @@ class GuiLoadingController:
     def _has_matrix_data_family(self, family: str) -> bool:
         """Return whether a matrix family is available from files or loaded data."""
         pred_files = getattr(self, "_pred_files", None)
-        pred_data = getattr(self, "_pred_data", None)
+        state = getattr(self, "_active_model_state", None)
+        pred_data = None if state is None else state.data
         if family == "pae":
             return bool(
                 getattr(pred_files, "has_pae", False)
@@ -1468,13 +1457,11 @@ class GuiLoadingController:
         if member is not None:
             return plot_data.has_multiple_token_chains(member.token_map)
 
-        if getattr(self, "_pred_data", None) is None:
-            return False
         try:
-            self._require_active_model_state()
+            state = self._require_active_model_state()
         except Exception:
             return False
-        return plot_data.has_multiple_token_chains(self._token_map)
+        return plot_data.has_multiple_token_chains(state.token_map)
 
     def _update_plot_actions(self) -> None:
         """Refresh plot menu action availability from current GUI state."""

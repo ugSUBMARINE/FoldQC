@@ -15,19 +15,41 @@ from .session import PendingSessionRestore
 
 if TYPE_CHECKING:
     from .model_state import ModelState
-    from .token_map import TokenMap
 
 
-@dataclass
+@dataclass(frozen=True)
 class ResolvedTarget:
     """Prediction/model context resolved from the viewer target control."""
 
     kind: Literal["single", "ensemble_member", "ensemble_group"]
     label: str
     obj_name: str
-    data: object | None
-    token_map: TokenMap
-    members: list | None = None
+    model_states: tuple[ModelState, ...]
+    members: tuple[object, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not self.model_states:
+            raise ValueError("ResolvedTarget requires at least one model state.")
+        if self.kind != "ensemble_group" and len(self.model_states) != 1:
+            raise ValueError(f"{self.kind} targets require exactly one model state.")
+        if self.kind.startswith("ensemble") and not self.members:
+            raise ValueError(f"{self.kind} targets require ensemble members.")
+        if self.members and len(self.members) != len(self.model_states):
+            raise ValueError(
+                "ResolvedTarget members must correspond one-to-one with model states."
+            )
+
+    @property
+    def data(self):
+        """Return live data for a single-state target, or None for a group."""
+        if self.kind == "ensemble_group":
+            return None
+        return self.model_states[0].data
+
+    @property
+    def token_map(self):
+        """Return the canonical token map shared by this target."""
+        return self.model_states[0].token_map
 
 
 @dataclass(frozen=True)
@@ -111,15 +133,5 @@ def _active_model_state(self):
 
 
 GuiStateBacked._active_model_state = property(_active_model_state)
-GuiStateBacked._pred_data = property(
-    lambda self: (
-        None if self._active_model_state is None else self._active_model_state.data
-    )
-)
-GuiStateBacked._token_map = property(
-    lambda self: (
-        None if self._active_model_state is None else self._active_model_state.token_map
-    )
-)
 
 del _private_name, _state_name

@@ -411,7 +411,7 @@ def test_prepare_ensemble_stages_plddt_reload_without_mutating_existing_state(
             pred_files,
             0,
             {
-                "load_pae": True,
+                "load_pae": False,
                 "load_pde": False,
                 "load_contact_probs": False,
                 "load_token_plddt": True,

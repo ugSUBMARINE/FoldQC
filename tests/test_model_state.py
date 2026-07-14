@@ -1,6 +1,7 @@
 import sys
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -10,12 +11,16 @@ from FoldQC.model_state import ModelState
 from FoldQC.token_map import TokenMap
 
 
-def _data(rank: int, name: str = "model") -> PredictionData:
-    return PredictionData(
-        name=name,
-        rank=rank,
-        structure_path=Path(f"/tmp/{name}_{rank}.cif"),
-    )
+def _data(rank: int, **values) -> PredictionData:
+    defaults = {
+        "name": "prediction",
+        "rank": rank,
+        "structure_path": Path(f"/tmp/model_{rank}.cif"),
+        "provider": "boltz",
+        "display_label": f"model_{rank}",
+    }
+    defaults.update(values)
+    return PredictionData(**defaults)
 
 
 def test_model_state_requires_matching_data_rank() -> None:
@@ -23,36 +28,90 @@ def test_model_state_requires_matching_data_rank() -> None:
         ModelState(rank=2, data=_data(1), token_map=TokenMap(()))
 
 
-def test_replace_data_preserves_token_map() -> None:
-    original = _data(2, "original")
-    replacement = _data(2, "replacement")
+def test_merge_is_in_place_monotonic_and_enriches_metadata() -> None:
+    original_pde = np.array([[1.0]], dtype=np.float32)
+    data = _data(
+        2,
+        pde=original_pde,
+        confidence={"summary": 0.7, "keep": True},
+    )
+    state = ModelState(rank=2, data=data, token_map=TokenMap(()))
+    incoming = _data(
+        2,
+        token_plddt=np.array([0.8], dtype=np.float32),
+        token_plddt_source="provider_token",
+        pae=np.array([[2.0]], dtype=np.float32),
+        pde=np.array([[9.0]], dtype=np.float32),
+        confidence={"summary": 0.9, "full": True},
+    )
+
+    changed = state.merge_data(incoming)
+
+    assert changed is True
+    assert state.data is data
+    assert state.data.pde is original_pde
+    assert state.data.pae is incoming.pae
+    assert state.data.token_plddt is incoming.token_plddt
+    assert state.data.token_plddt_source == "provider_token"
+    assert state.data.confidence == {
+        "summary": 0.9,
+        "keep": True,
+        "full": True,
+    }
+    assert state.version == 1
+
+
+@pytest.mark.parametrize(
+    "incoming",
+    [
+        _data(3),
+        _data(2, provider="alphafold3"),
+        _data(2, structure_path=Path("/tmp/other.cif")),
+        _data(2, name="other"),
+    ],
+)
+def test_invalid_merge_leaves_state_unchanged(incoming) -> None:
+    data = _data(2)
+    state = ModelState(rank=2, data=data, token_map=TokenMap(()))
+
+    with pytest.raises(ValueError):
+        state.merge_data(incoming)
+
+    assert state.data is data
+    assert state.version == 0
+
+
+def test_merge_rejects_uncoupled_plddt_and_embedding_fields() -> None:
+    state = ModelState(rank=2, data=_data(2), token_map=TokenMap(()))
+
+    with pytest.raises(ValueError, match="pLDDT values and provenance together"):
+        state.merge_data(_data(2, token_plddt=np.array([0.8])))
+    with pytest.raises(ValueError, match="both embedding arrays"):
+        state.merge_data(_data(2, embeddings_s=np.ones((1, 1))))
+
+    assert state.version == 0
+
+
+def test_snapshot_restores_fields_version_and_token_map_in_place() -> None:
+    data = _data(2)
     token_map = TokenMap(())
-    state = ModelState(rank=2, data=original, token_map=token_map)
+    state = ModelState(rank=2, data=data, token_map=token_map)
+    snapshot = state.snapshot()
 
-    state.replace_data(replacement)
+    state.merge_data(_data(2, pae=np.ones((1, 1), dtype=np.float32)))
+    state.token_map = TokenMap(())
+    state.restore(snapshot)
 
-    assert state.data is replacement
+    assert state.data is data
+    assert state.data.pae is None
     assert state.token_map is token_map
+    assert state.version == 0
 
 
-def test_invalid_replacement_leaves_state_unchanged() -> None:
-    original = _data(2, "original")
+def test_token_map_validation_keeps_canonical_map() -> None:
     token_map = TokenMap(())
-    state = ModelState(rank=2, data=original, token_map=token_map)
+    state = ModelState(rank=2, data=_data(2), token_map=token_map)
 
-    with pytest.raises(ValueError, match="rank 2 cannot contain rank 3"):
-        state.replace(_data(3), TokenMap(()))
+    state.validate_token_map(TokenMap(()))
 
-    assert state.data is original
     assert state.token_map is token_map
-
-
-def test_replace_updates_data_and_token_map_together() -> None:
-    state = ModelState(rank=2, data=_data(2, "original"), token_map=TokenMap(()))
-    replacement = _data(2, "replacement")
-    replacement_map = TokenMap(())
-
-    state.replace(replacement, replacement_map)
-
-    assert state.data is replacement
-    assert state.token_map is replacement_map

@@ -35,39 +35,57 @@ class PlotController:
                     "The ensemble target is not active.\nUse the Ensemble\u2026 button first.",
                 )
                 return None
+            try:
+                states = tuple(
+                    self._canonical_state_for_ensemble_member(member)
+                    for member in members
+                )
+            except ValueError as exc:
+                QtWidgets.QMessageBox.warning(self, APP_TITLE, str(exc))
+                return None
             reference = members[0]
             return _PlotTarget(
                 kind="ensemble_group",
                 label=obj_name,
                 obj_name=reference.obj_name,
-                data=None,
-                token_map=reference.token_map,
-                members=members,
+                model_states=states,
+                members=tuple(members),
             )
 
         member = self._selected_ensemble_member(obj_name)
         if member is not None:
+            try:
+                state = self._canonical_state_for_ensemble_member(member)
+            except ValueError as exc:
+                QtWidgets.QMessageBox.warning(self, APP_TITLE, str(exc))
+                return None
             return _PlotTarget(
                 kind="ensemble_member",
                 label=member.obj_name,
                 obj_name=member.obj_name,
-                data=member.data,
-                token_map=member.token_map,
-                members=[member],
+                model_states=(state,),
+                members=(member,),
             )
 
-        if self._pred_data is None:
+        state = self._active_model_state
+        if state is None:
             QtWidgets.QMessageBox.warning(self, APP_TITLE, "No prediction data loaded.")
             return None
-        self._require_active_model_state()
         return _PlotTarget(
             kind="single",
             label=obj_name,
             obj_name=obj_name,
-            data=self._pred_data,
-            token_map=self._token_map,
-            members=None,
+            model_states=(state,),
         )
+
+    def _canonical_state_for_ensemble_member(self, member):
+        state = self._model_states.get(member.rank)
+        if state is None or state is not member.model_state:
+            raise ValueError(
+                f"Ensemble model_{member.rank} is no longer present in the "
+                "canonical model store. Reload the ensemble."
+            )
+        return state
 
     def _resolve_reference_indices(
         self,
@@ -250,15 +268,6 @@ class PlotController:
                 self._ensure_member_data_for_plot(
                     target.members[0], load_pae=load_pae, load_pde=load_pde
                 )
-                target.data = target.members[0].data
-            elif target.kind == "single" and target.data is self._pred_data:
-                self._ensure_current_data_for_property(
-                    {
-                        "needs_pae": load_pae,
-                        "needs_pde": load_pde,
-                    }
-                )
-                target.data = self._pred_data
             series = plot_data.summary_series_for_data(
                 kind, target.data, target.token_map
             )
@@ -341,16 +350,6 @@ class PlotController:
                 if load_contact_probs:
                     kwargs["load_contact_probs"] = True
                 self._ensure_member_data_for_plot(target.members[0], **kwargs)
-                target.data = target.members[0].data
-            elif (
-                target.kind == "single"
-                and target.data is getattr(self, "_pred_data", None)
-                and getattr(self, "_pred_files", None) is not None
-            ):
-                self._ensure_current_data_for_property(
-                    metrics.PROPERTY_BY_KEY.get(key, {})
-                )
-                target.data = self._pred_data
             matrix = getattr(target.data, attr, None)
             if matrix is None:
                 raise ValueError(f"{label} matrix is not available for this model.")
@@ -463,13 +462,6 @@ class PlotController:
                     if self._pred_files
                     else False,
                 )
-                target.data = target.members[0].data
-            elif (
-                target.kind == "single"
-                and target.data is self._pred_data
-                and getattr(self, "_pred_files", None) is not None
-            ):
-                target.data = self._pred_data
             return plot_data.fingerprint_series_for_single(target.data, ref_indices)
 
         data_items = []
@@ -601,7 +593,6 @@ class PlotController:
         try:
             if target.kind == "single":
                 self._ensure_current_data_for_property(prop)
-                target.data = self._pred_data
             from . import plots
 
             x_values, series, ylabel = self._compute_line_plot_data(
@@ -777,10 +768,8 @@ class PlotController:
         try:
             if target.kind == "single":
                 self._ensure_current_data_for_property(prop)
-                target.data = self._pred_data
             elif target.kind == "ensemble_member" and target.members:
                 self._ensure_member_data_for_property(target.members[0], prop)
-                target.data = target.members[0].data
 
             from . import plots
 
@@ -870,14 +859,20 @@ class PlotController:
         if self._pred_files is not None:
             members = sorted(self._ensemble_members, key=lambda member: member.rank)
             reference = members[0]
-            target = _PlotTarget(
-                kind="ensemble_group",
-                label=self._ensemble_group_name or "ensemble",
-                obj_name=reference.obj_name,
-                data=None,
-                token_map=reference.token_map,
-                members=members,
-            )
+            try:
+                target = _PlotTarget(
+                    kind="ensemble_group",
+                    label=self._ensemble_group_name or "ensemble",
+                    obj_name=reference.obj_name,
+                    model_states=tuple(
+                        self._canonical_state_for_ensemble_member(member)
+                        for member in members
+                    ),
+                    members=tuple(members),
+                )
+            except ValueError as exc:
+                QtWidgets.QMessageBox.warning(self, APP_TITLE, str(exc))
+                return
             if self._defer_action_for_data(
                 target,
                 self._fingerprint_load_flags(include_contact_probs=False),

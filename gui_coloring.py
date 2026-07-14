@@ -81,31 +81,15 @@ class ColoringController:
 
     def _apply_coloring(self) -> None:
         """Compute the selected property and paint the structure."""
-        obj_name = self._get_obj_name()
-        if obj_name is None:
-            QtWidgets.QMessageBox.warning(
-                self, APP_TITLE, f"No {VIEWER_NAME} target selected."
-            )
-            return
-
-        if self._ensemble_members and obj_name == self._ensemble_group_name:
-            self._apply_ensemble_coloring(self._ensemble_members)
-            return
-
-        member = self._selected_ensemble_member(obj_name)
-        if member is not None:
-            self._apply_ensemble_coloring([member])
-            return
-
-        if self._pred_data is None:
-            QtWidgets.QMessageBox.warning(self, APP_TITLE, "No prediction data loaded.")
-            return
-
-        key = self._prop_combo.currentData()
-        prop = metrics.PROPERTY_BY_KEY.get(key, {})
         target = self._resolve_plot_target()
         if target is None:
             return
+        if target.kind.startswith("ensemble"):
+            self._apply_ensemble_coloring(list(target.members))
+            return
+        key = self._prop_combo.currentData()
+        prop = metrics.PROPERTY_BY_KEY.get(key, {})
+        obj_name = target.obj_name
         if self._defer_action_for_data(
             target,
             metrics.metric_load_flags(prop),
@@ -128,7 +112,9 @@ class ColoringController:
         if key == "plddt_class":
             try:
                 self._ensure_current_data_for_property(prop)
-                self._apply_plddt_class_coloring(key, obj_name)
+                self._apply_plddt_class_coloring(
+                    key, obj_name, model_state=target.model_states[0]
+                )
             except Exception as exc:
                 QtWidgets.QMessageBox.critical(self, f"{APP_TITLE} - error", str(exc))
             return
@@ -139,27 +125,25 @@ class ColoringController:
 
         try:
             self._ensure_current_data_for_property(prop)
-            self._require_active_model_state()
-            values = self._compute_property_for(
-                key, ref_sel, self._pred_data, self._token_map, obj_name
-            )
+            state = target.model_states[0]
+            data = state.data
+            token_map = state.token_map
+            values = self._compute_property_for(key, ref_sel, data, token_map, obj_name)
             if values is None:
                 return
-            self._validate_token_count(values, self._token_map, obj_name)
-            mapping = self._prepare_paint_mapping(
-                self._token_map, obj_name, self._pred_data
-            )
+            self._validate_token_count(values, token_map, obj_name)
+            mapping = self._prepare_paint_mapping(token_map, obj_name, data)
             if not self._confirm_token_overlap_for_coloring(
-                self._token_map,
+                token_map,
                 obj_name,
-                self._pred_data,
+                data,
                 mapping=mapping,
             ):
                 return
             if metrics.is_domain_label_metric(key):
                 used_vmin, used_vmax = paint_categorical_labels_bulk(
                     obj_name,
-                    self._token_map,
+                    token_map,
                     values,
                     mapping=mapping,
                 )
@@ -167,7 +151,7 @@ class ColoringController:
             else:
                 used_vmin, used_vmax = paint_property(
                     obj_name,
-                    self._token_map,
+                    token_map,
                     values,
                     palette=palette,
                     reverse_palette=reverse_palette,
@@ -191,7 +175,7 @@ class ColoringController:
                 values,
                 include_chain_stats=key == "pde_chain_mean",
                 include_domain_labels=metrics.is_domain_label_metric(key),
-                token_map=self._token_map,
+                token_map=token_map,
             )
         except Exception as exc:
             QtWidgets.QMessageBox.critical(self, f"{APP_TITLE} - error", str(exc))
@@ -439,13 +423,18 @@ class ColoringController:
         """Run *func* with viewer updates suspended, then rebuild once."""
         return run_with_updates_suspended(func)
 
-    def _apply_plddt_class_coloring(self, key: str, obj_name: str) -> None:
+    def _apply_plddt_class_coloring(
+        self, key: str, obj_name: str, *, model_state=None
+    ) -> None:
         """Apply the 4-class AlphaFold pLDDT colour scheme.
 
         Writes preferred pLDDT values to B-factors before colouring, so previous
         plugin visualisations cannot corrupt the result.
         """
-        values, _source = compute.plddt_values_for(self._pred_data)
+        state = model_state or self._require_active_model_state()
+        data = state.data
+        token_map = state.token_map
+        values, _source = compute.plddt_values_for(data)
         if values is None:
             QtWidgets.QMessageBox.warning(
                 self,
@@ -453,22 +442,19 @@ class ColoringController:
                 "pLDDT data are not available for this model.",
             )
             return
-        self._require_active_model_state()
-        self._validate_token_count(values, self._token_map, obj_name)
-        mapping = self._prepare_paint_mapping(
-            self._token_map, obj_name, self._pred_data
-        )
+        self._validate_token_count(values, token_map, obj_name)
+        mapping = self._prepare_paint_mapping(token_map, obj_name, data)
         if not self._confirm_token_overlap_for_coloring(
-            self._token_map,
+            token_map,
             obj_name,
-            self._pred_data,
+            data,
             mapping=mapping,
         ):
             return
         paint_plddt_class_coloring(
             obj_name,
             values=values,
-            token_map=self._token_map,
+            token_map=token_map,
             mapping=mapping,
         )
 

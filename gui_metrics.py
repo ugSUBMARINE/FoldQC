@@ -328,8 +328,9 @@ class MetricController:
     def _paint_mapping_cache_key(self, data, obj_name: str) -> tuple[str, str]:
         structure_path = getattr(data, "structure_path", None)
         if structure_path is None:
+            state = getattr(self, "_active_model_state", None)
             structure_path = getattr(
-                getattr(self, "_pred_data", None), "structure_path", ""
+                None if state is None else state.data, "structure_path", ""
             )
         return str(structure_path), str(obj_name)
 
@@ -388,10 +389,11 @@ class MetricController:
 
     def _ensure_current_data_for_property(self, prop: dict) -> None:
         """Assert that asynchronous preflight supplied the property's arrays."""
-        if self._pred_files is None or self._pred_data is None:
+        if self._pred_files is None:
             raise ValueError("No prediction output loaded.")
+        state = self._require_active_model_state()
         flags = metrics.metric_load_flags(prop)
-        self._require_loaded_data(self._pred_data, flags)
+        self._require_loaded_data(state.data, flags)
 
     def _ensure_member_data_for_property(self, member, prop: dict) -> None:
         """Assert that asynchronous preflight supplied a member's arrays."""
