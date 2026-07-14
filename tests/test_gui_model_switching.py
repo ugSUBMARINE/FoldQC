@@ -1374,6 +1374,52 @@ class GuiModelSwitchingTests(unittest.TestCase):
     def test_app_title_uses_foldqc_display_name(self) -> None:
         self.assertEqual(APP_TITLE, "FoldQC")
 
+    def test_ensemble_button_requires_multiple_models_and_no_loaded_ensemble(
+        self,
+    ) -> None:
+        dialog = self._session_dialog()
+
+        dialog._update_ensemble_button_state()
+        self.assertFalse(dialog._ensemble_btn.enabled)
+        self.assertIn("at least two models", dialog._ensemble_btn.tooltip)
+
+        dialog._pred_files = _SessionPredictionFiles(Path("/tmp"), ranks=(0,))
+        dialog._update_ensemble_button_state()
+        self.assertFalse(dialog._ensemble_btn.enabled)
+        self.assertIn("at least two model files", dialog._ensemble_btn.tooltip)
+
+        dialog._pred_files = _SessionPredictionFiles(Path("/tmp"), ranks=(0, 1))
+        dialog._update_ensemble_button_state()
+        self.assertTrue(dialog._ensemble_btn.enabled)
+
+        dialog._loading_data = True
+        dialog._update_ensemble_button_state()
+        self.assertFalse(dialog._ensemble_btn.enabled)
+        self.assertIn("another task", dialog._ensemble_btn.tooltip)
+
+        dialog._loading_data = False
+        dialog._ensemble = _ensemble_state([types.SimpleNamespace(rank=0)])
+        dialog._update_ensemble_button_state()
+        self.assertFalse(dialog._ensemble_btn.enabled)
+        self.assertIn("already loaded", dialog._ensemble_btn.tooltip)
+
+        dialog._pred_files = _SessionPredictionFiles(Path("/tmp/new"), ranks=(0, 1))
+        dialog._ensemble = None
+        dialog._update_ensemble_button_state()
+        self.assertTrue(dialog._ensemble_btn.enabled)
+
+    def test_show_ensemble_silently_ignores_an_already_loaded_ensemble(self) -> None:
+        dialog = self._session_dialog()
+        dialog._pred_files = _SessionPredictionFiles(Path("/tmp"), ranks=(0, 1))
+        dialog._ensemble = _ensemble_state([types.SimpleNamespace(rank=0)])
+        dialog._ask_skip_ensemble_alignment = lambda: self.fail(
+            "Alignment choice must not be shown for an active ensemble"
+        )
+
+        dialog._show_ensemble()
+
+        self.assertEqual(_PYMOL.Qt.QtWidgets.QMessageBox.infos, [])
+
     def test_ensemble_prepares_before_incremental_pymol_commit(self) -> None:
         runner = _ManualJobRunner()
         dialog, pred_files = self._ensemble_dialog(runner)
@@ -1480,7 +1526,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         self.assertTrue(dialog._ensemble.aligned)
         np.testing.assert_allclose(dialog._ensemble.rmsd, np.zeros(3), atol=1e-6)
         self.assertFalse(dialog._loading_data)
-        self.assertEqual(completion_states, [(False, False, True)])
+        self.assertEqual(completion_states, [(False, False, False)])
 
     def test_ensemble_skip_alignment_uses_current_coordinates(self) -> None:
         runner = _ManualJobRunner()
@@ -1542,10 +1588,6 @@ class GuiModelSwitchingTests(unittest.TestCase):
         runner = _ManualJobRunner()
         dialog, pred_files = self._ensemble_dialog(runner)
         prepared = self._prepared_ensemble(pred_files)
-        previous_ensemble = _ensemble_state(
-            [types.SimpleNamespace(rank=9)], group_name="previous_ensemble"
-        )
-        dialog._ensemble = previous_ensemble
         objects = set()
         deleted = []
 
@@ -1583,7 +1625,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
             dialog._show_ensemble()
             runner.run_next()
 
-        self.assertIs(dialog._ensemble, previous_ensemble)
+        self.assertIsNone(dialog._ensemble)
         self.assertIn("target_model_0", deleted)
         self.assertFalse(dialog._loading_data)
         self.assertIn(

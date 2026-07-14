@@ -613,6 +613,48 @@ class GuiLoadingController:
         if not enabled:
             for action in getattr(self, "_plot_actions", {}).values():
                 action.setEnabled(False)
+        else:
+            self._update_ensemble_button_state()
+
+    def _ensemble_load_is_available(self) -> bool:
+        pred_files = self._pred_files
+        return bool(
+            not self._gui_job_is_busy()
+            and pred_files is not None
+            and getattr(pred_files, "supports_ensemble", False)
+            and self._ensemble is None
+        )
+
+    def _update_ensemble_button_state(self) -> None:
+        """Enable ensemble creation only when it is currently meaningful."""
+        button = getattr(self, "_ensemble_btn", None)
+        if button is None or not hasattr(button, "setEnabled"):
+            return
+
+        pred_files = self._pred_files
+        busy = self._gui_job_is_busy()
+        supports_ensemble = bool(
+            pred_files is not None and getattr(pred_files, "supports_ensemble", False)
+        )
+        ensemble_loaded = self._ensemble is not None
+        button.setEnabled(self._ensemble_load_is_available())
+
+        if not hasattr(button, "setToolTip"):
+            return
+        if busy:
+            tooltip = "Ensemble loading is unavailable while another task is running."
+        elif pred_files is None:
+            tooltip = "Load a prediction with at least two models first."
+        elif not supports_ensemble:
+            tooltip = "Ensemble mode requires at least two model files."
+        elif ensemble_loaded:
+            tooltip = "The ensemble for this prediction is already loaded."
+        else:
+            tooltip = (
+                "Load all ranked models as an ensemble and compute "
+                "ensemble-level metrics."
+            )
+        button.setToolTip(tooltip)
 
     def _ensure_load_progress_dialog(self):
         dialog = getattr(self, "_load_progress_dialog", None)
@@ -1502,6 +1544,7 @@ class GuiLoadingController:
 
     def _refresh_contextual_ui(self) -> None:
         """Refresh plot actions, contextual fields, and preview text together."""
+        self._update_ensemble_button_state()
         self._update_plot_actions()
         self._update_context_controls()
         self._update_metric_preview()
@@ -1601,19 +1644,7 @@ class GuiLoadingController:
 
     def _show_ensemble(self) -> None:
         """Prepare an ensemble in the worker, then commit it through PyMOL."""
-        if self._gui_job_is_busy():
-            return
-        if self._pred_files is None:
-            QtWidgets.QMessageBox.warning(
-                self, APP_TITLE, "No prediction output loaded."
-            )
-            return
-        if not self._pred_files.supports_ensemble:
-            QtWidgets.QMessageBox.information(
-                self,
-                APP_TITLE,
-                "Ensemble mode requires at least two model files.",
-            )
+        if not self._ensemble_load_is_available():
             return
 
         skip_alignment = self._ask_skip_ensemble_alignment()
