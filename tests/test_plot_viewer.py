@@ -217,6 +217,191 @@ class PlotViewerSelectionTests(unittest.TestCase):
         self.assertEqual(toolbar.actions[0].tooltip, "Clear plot selection")
         self.assertFalse(toolbar.actions[0].enabled)
 
+    def test_toolbar_token_identity_formats_polymer_and_hetatm(self) -> None:
+        polymer = TokenInfo(
+            token_idx=44,
+            chain_id="A",
+            res_num=45,
+            res_name="PHE",
+            is_hetatm=False,
+            atom_name=None,
+        )
+        ligand_atom = TokenInfo(
+            token_idx=317,
+            chain_id="L",
+            res_num=501,
+            res_name="lig",
+            is_hetatm=True,
+            atom_name="C1",
+        )
+
+        self.assertEqual(
+            PlotDialog._format_token_identity(polymer),
+            "token 44 · A:Phe45",
+        )
+        self.assertEqual(
+            PlotDialog._format_token_identity(ligand_atom),
+            "token 317 · L:LIG501/C1",
+        )
+
+    def test_line_toolbar_appends_token_only_near_plotted_position(self) -> None:
+        figure = Figure()
+        axis = figure.subplots()
+        axis.format_coord = lambda x, y: f"native x={x:g}, y={y:g}"
+        token_map = [
+            TokenInfo(0, "A", 10, "GLY", False, None),
+            TokenInfo(1, "B", 25, "ASP", False, None),
+        ]
+        dialog = self._dialog_with_metadata(
+            {
+                "kind": "line",
+                "token_map": token_map,
+                "token_indices": [0, 1],
+                "x_positions": [0.0, 10.0],
+            }
+        )
+        dialog._selection_axes = [axis]
+
+        dialog._install_toolbar_formatters()
+
+        self.assertEqual(
+            axis.format_coord(10.2, 0.75),
+            "native x=10.2, y=0.75 | token 1 · B:Asp25",
+        )
+        self.assertEqual(axis.format_coord(5.0, 0.75), "native x=5, y=0.75")
+
+    def test_matrix_toolbar_maps_rows_and_columns_independently(self) -> None:
+        figure = Figure()
+        axis = figure.subplots()
+        axis.format_coord = lambda x, y: f"native ({x:g}, {y:g})"
+        token_map = [
+            TokenInfo(0, "A", 45, "PHE", False, None),
+            TokenInfo(1, "B", 120, "ASP", False, None),
+        ]
+        dialog = self._dialog_with_metadata(
+            {
+                "kind": "matrix",
+                "token_map": token_map,
+                "row_indices": [1],
+                "col_indices": [0],
+            }
+        )
+        dialog._selection_axes = [axis]
+
+        dialog._install_toolbar_formatters()
+
+        self.assertEqual(
+            axis.format_coord(0.2, -0.1),
+            "native (0.2, -0.1) | row: token 1 · B:Asp120 | col: token 0 · A:Phe45",
+        )
+        self.assertEqual(axis.format_coord(0.6, 0.0), "native (0.6, 0)")
+
+    def test_matrix_toolbar_preserves_matplotlib_cell_value_once(self) -> None:
+        from matplotlib.backend_bases import MouseEvent, NavigationToolbar2
+        from matplotlib.backends.backend_agg import FigureCanvasAgg
+
+        figure = Figure()
+        canvas = FigureCanvasAgg(figure)
+        axis = figure.subplots()
+        axis.imshow(np.array([[3.72]], dtype=np.float64))
+        canvas.draw()
+        pixel_x, pixel_y = axis.transData.transform((0.0, 0.0))
+        event = MouseEvent("motion_notify_event", canvas, pixel_x, pixel_y)
+        original_message = NavigationToolbar2._mouse_event_to_message(event)
+        original_value_line = original_message.splitlines()[-1]
+        dialog = self._dialog_with_metadata(
+            {
+                "kind": "matrix",
+                "token_map": [TokenInfo(0, "A", 45, "PHE", False, None)],
+                "row_indices": [0],
+                "col_indices": [0],
+            }
+        )
+        dialog._selection_axes = [axis]
+
+        dialog._install_toolbar_formatters()
+        enhanced_message = NavigationToolbar2._mouse_event_to_message(event)
+        reflowed_message = PlotDialog._reflow_matrix_toolbar_message(enhanced_message)
+        coordinate_line, detail_line = reflowed_message.splitlines()
+
+        self.assertNotIn("row:", coordinate_line)
+        self.assertIn("row: token 0 · A:Phe45", detail_line)
+        self.assertIn(", col: token 0 · A:Phe45", detail_line)
+        self.assertTrue(detail_line.endswith(original_value_line))
+        self.assertEqual(reflowed_message.count(original_value_line), 1)
+
+    def test_matrix_toolbar_set_message_applies_two_line_layout(self) -> None:
+        messages = []
+        toolbar = types.SimpleNamespace(set_message=messages.append)
+        dialog = self._dialog_with_metadata({"kind": "matrix"})
+        dialog._toolbar = toolbar
+
+        dialog._install_matrix_toolbar_message_layout()
+        toolbar.set_message(
+            "(x, y) = (247.0, 173.0) | row: token 173 · A:Asp174 | "
+            "col: token 247 · A:Leu248\n[1.06]"
+        )
+
+        self.assertEqual(
+            messages,
+            [
+                "(x, y) = (247.0, 173.0)\n"
+                "row: token 173 · A:Asp174, col: token 247 · A:Leu248 [1.06]"
+            ],
+        )
+
+    def test_binding_fingerprint_toolbar_formats_both_axes(self) -> None:
+        figure = Figure()
+        axes = figure.subplots(2, 1)
+        token_map = [TokenInfo(0, "A", 45, "PHE", False, None)]
+        dialog = self._dialog_with_metadata(
+            {
+                "kind": "bars",
+                "token_map": token_map,
+                "token_indices": [0],
+                "x_positions": [0.0],
+            }
+        )
+        dialog._selection_axes = list(axes)
+        original_outputs = [axis.format_coord(0.0, 1.0) for axis in axes]
+
+        dialog._install_toolbar_formatters()
+
+        for axis, original in zip(axes, original_outputs):
+            self.assertEqual(
+                axis.format_coord(0.0, 1.0),
+                f"{original} | token 0 · A:Phe45",
+            )
+
+    def test_grouped_bar_and_invalid_metadata_keep_native_toolbar_output(self) -> None:
+        figure = Figure()
+        grouped_axis, invalid_axis = figure.subplots(2, 1)
+        grouped_original = grouped_axis.format_coord(0.0, 1.0)
+        grouped = self._dialog_with_metadata(
+            {
+                "kind": "bars",
+                "token_map": [TokenInfo(0, "A", 1, "ALA", False, None)],
+                "bar_token_indices": [[0]],
+            }
+        )
+        grouped._selection_axes = [grouped_axis]
+        grouped._install_toolbar_formatters()
+
+        invalid_original = invalid_axis.format_coord(0.0, 1.0)
+        invalid = self._dialog_with_metadata(
+            {
+                "kind": "line",
+                "token_map": [TokenInfo(0, "A", 1, "ALA", False, None)],
+                "token_indices": [0],
+                "x_positions": [0.0, 1.0],
+            }
+        )
+        invalid._selection_axes = [invalid_axis]
+        invalid._install_toolbar_formatters()
+
+        self.assertEqual(grouped_axis.format_coord(0.0, 1.0), grouped_original)
+        self.assertEqual(invalid_axis.format_coord(0.0, 1.0), invalid_original)
+
     def test_merged_position_intervals_join_adjacent_tokens(self) -> None:
         self.assertEqual(
             PlotDialog._merged_position_intervals([3.0, 0.0, 1.0]),

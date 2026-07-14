@@ -242,6 +242,7 @@ class PlotDialog(QtWidgets.QDialog):
         else:
             self._selection_axes = [self._figure.axes[0]]
         self._selection_ax = self._selection_axes[0]
+        self._install_toolbar_formatters()
         self._install_selection_controls()
         self._mpl_cids.append(
             self._canvas.mpl_connect("button_press_event", self._on_plot_click)
@@ -296,6 +297,205 @@ class PlotDialog(QtWidgets.QDialog):
         action = getattr(self, "_clear_selection_action", None)
         if action is not None:
             action.setEnabled(bool(enabled))
+
+    @staticmethod
+    def _format_token_identity(token: Any) -> str:
+        """Return a toolbar label for one prediction token."""
+        token_idx = int(token.token_idx)
+        chain_id = str(token.chain_id)
+        res_num = token.res_num
+        res_name = str(token.res_name)
+        if bool(token.is_hetatm):
+            residue = f"{chain_id}:{res_name.upper()}{res_num}"
+            atom_name = getattr(token, "atom_name", None)
+            if atom_name:
+                residue = f"{residue}/{atom_name}"
+        else:
+            residue = f"{chain_id}:{res_name.title()}{res_num}"
+        return f"token {token_idx} · {residue}"
+
+    @staticmethod
+    def _make_position_token_lookup(
+        token_indices: list[int],
+        positions: list[float],
+        *,
+        half_width: float = 0.5,
+    ) -> Callable[[float | None], int | None] | None:
+        """Return a cached lookup for discrete token display positions."""
+        if not token_indices or len(token_indices) != len(positions):
+            return None
+        try:
+            position_array = np.asarray(positions, dtype=np.float64)
+            index_array = np.asarray(token_indices, dtype=np.int64)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        finite = np.isfinite(position_array)
+        if not np.any(finite):
+            return None
+        position_array = position_array[finite]
+        index_array = index_array[finite]
+        order = np.argsort(position_array, kind="stable")
+        position_array = position_array[order]
+        index_array = index_array[order]
+        tolerance = abs(float(half_width))
+
+        def lookup(value: float | None) -> int | None:
+            if value is None:
+                return None
+            try:
+                coordinate = float(value)
+            except (TypeError, ValueError, OverflowError):
+                return None
+            if not np.isfinite(coordinate):
+                return None
+            insertion = int(np.searchsorted(position_array, coordinate, side="left"))
+            candidates = [
+                idx
+                for idx in (insertion - 1, insertion)
+                if 0 <= idx < position_array.size
+            ]
+            if not candidates:
+                return None
+            nearest = min(
+                candidates,
+                key=lambda idx: (abs(float(position_array[idx]) - coordinate), idx),
+            )
+            if abs(float(position_array[nearest]) - coordinate) > tolerance:
+                return None
+            return int(index_array[nearest])
+
+        return lookup
+
+    @staticmethod
+    def _token_identity_for_index(token_map: Any, token_idx: int | None) -> str | None:
+        """Return one token identity, or None for invalid toolbar metadata."""
+        if token_idx is None or token_idx < 0:
+            return None
+        try:
+            token = token_map[token_idx]
+            return PlotDialog._format_token_identity(token)
+        except (AttributeError, IndexError, KeyError, TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _reflow_matrix_toolbar_message(message: str) -> str:
+        """Move matrix token identities beside Matplotlib's image value."""
+        lines = str(message).splitlines()
+        if not lines:
+            return str(message)
+        marker = " | row: "
+        if marker not in lines[0]:
+            return str(message)
+        coordinates, identities = lines[0].split(marker, 1)
+        identity_line = f"row: {identities}".replace(" | col: ", ", col: ", 1)
+        if len(lines) > 1:
+            identity_line = f"{identity_line} {' '.join(lines[1:])}"
+        return f"{coordinates}\n{identity_line}"
+
+    def _install_matrix_toolbar_message_layout(self) -> None:
+        """Keep matrix coordinates and token/value details on separate lines."""
+        toolbar = getattr(self, "_toolbar", None)
+        if toolbar is None or getattr(toolbar, "_foldqc_matrix_message_layout", False):
+            return
+        original_set_message = getattr(toolbar, "set_message", None)
+        if not callable(original_set_message):
+            return
+
+        def set_message(message: str) -> None:
+            original_set_message(self._reflow_matrix_toolbar_message(message))
+
+        toolbar.set_message = set_message
+        toolbar._foldqc_matrix_message_layout = True
+
+    def _install_toolbar_formatters(self) -> None:
+        """Append token identities to Matplotlib's native toolbar readout."""
+        metadata = self._selection_metadata or {}
+        kind = metadata.get("kind")
+        if kind == "ensemble_site_summary":
+            return
+        if kind == "bars" and "bar_token_indices" in metadata:
+            return
+
+        token_map = metadata.get("token_map")
+        if token_map is None:
+            return
+
+        identity_for_coordinates: Callable[[float | None, float | None], str | None]
+        if kind == "matrix":
+            try:
+                row_indices = self._metadata_indices("row_indices")
+                col_indices = self._metadata_indices("col_indices")
+            except (TypeError, ValueError, OverflowError):
+                return
+            row_lookup = self._make_position_token_lookup(
+                row_indices,
+                [float(i) for i in range(len(row_indices))],
+            )
+            col_lookup = self._make_position_token_lookup(
+                col_indices,
+                [float(i) for i in range(len(col_indices))],
+            )
+            if row_lookup is None or col_lookup is None:
+                return
+
+            def matrix_identity(x: float | None, y: float | None) -> str | None:
+                row_identity = self._token_identity_for_index(token_map, row_lookup(y))
+                col_identity = self._token_identity_for_index(token_map, col_lookup(x))
+                if row_identity is None or col_identity is None:
+                    return None
+                return f"row: {row_identity} | col: {col_identity}"
+
+            identity_for_coordinates = matrix_identity
+        elif kind in {"line", "bars"}:
+            try:
+                token_indices = self._metadata_indices("token_indices")
+            except (TypeError, ValueError, OverflowError):
+                return
+            raw_positions = metadata.get("x_positions")
+            if raw_positions is None:
+                positions = [float(i) for i in range(len(token_indices))]
+            else:
+                try:
+                    positions = [float(position) for position in raw_positions]
+                except (TypeError, ValueError, OverflowError):
+                    return
+            token_lookup = self._make_position_token_lookup(token_indices, positions)
+            if token_lookup is None:
+                return
+
+            def token_identity(x: float | None, _y: float | None) -> str | None:
+                return self._token_identity_for_index(token_map, token_lookup(x))
+
+            identity_for_coordinates = token_identity
+        else:
+            return
+
+        installed = False
+        for axis in self._selection_axes:
+            original_formatter = getattr(axis, "format_coord", None)
+            if not callable(original_formatter):
+                continue
+
+            def format_coord(
+                x,
+                y,
+                *,
+                original=original_formatter,
+                identity_formatter=identity_for_coordinates,
+            ):
+                base = original(x, y)
+                try:
+                    identity = identity_formatter(x, y)
+                except Exception:
+                    identity = None
+                if not identity:
+                    return base
+                return f"{base} | {identity}"
+
+            axis.format_coord = format_coord
+            installed = True
+        if kind == "matrix" and installed:
+            self._install_matrix_toolbar_message_layout()
 
     def _toolbar_is_active(self) -> bool:
         """Return True while Matplotlib's pan/zoom toolbar mode is active."""
