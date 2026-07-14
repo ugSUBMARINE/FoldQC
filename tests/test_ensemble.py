@@ -25,6 +25,7 @@ from FoldQC.ensemble import (  # noqa: E402
     select_alignment_core,
     validate_members,
 )
+from FoldQC.model_state import ModelState  # noqa: E402
 from FoldQC.mol_viewer import (  # noqa: E402
     load_models_as_objects,
     load_models_as_states,
@@ -173,16 +174,16 @@ def _member(
     token_count: int = 3,
     plddt=None,
 ) -> EnsembleMember:
-    return EnsembleMember(
+    data = types.SimpleNamespace(
         rank=rank,
+        structure_path=Path(f"/tmp/target_model_{rank}.cif"),
+        token_plddt=plddt,
+        token_plddt_source="structure_b_factor" if plddt is not None else None,
+    )
+    token_map = TokenMap(tuple(_token(i) for i in range(token_count)))
+    return EnsembleMember(
         obj_name=obj_name or f"target_model_{rank}",
-        data=types.SimpleNamespace(
-            rank=rank,
-            structure_path=Path(f"/tmp/target_model_{rank}.cif"),
-            token_plddt=plddt,
-            token_plddt_source="structure_b_factor" if plddt is not None else None,
-        ),
-        token_map=TokenMap(tuple(_token(i) for i in range(token_count))),
+        model_state=ModelState(rank, data, token_map),
     )
 
 
@@ -297,7 +298,7 @@ def test_prepare_ensemble_reuses_loaded_rank_and_prepares_missing_rank(
             ),
         ]
     )
-    existing = types.SimpleNamespace(
+    existing_data = types.SimpleNamespace(
         rank=0,
         structure_path=Path("/tmp/target_model_0.cif"),
         token_plddt=np.array([0.8, 0.9, 1.0], dtype=np.float32),
@@ -306,6 +307,8 @@ def test_prepare_ensemble_reuses_loaded_rank_and_prepares_missing_rank(
         pde=None,
         contact_probs=None,
     )
+    existing_map = TokenMap((_token(0), _token(1), _token(2)))
+    existing = ModelState(0, existing_data, existing_map)
     load_calls = []
     map_paths = []
     phases = []
@@ -329,12 +332,13 @@ def test_prepare_ensemble_reuses_loaded_rank_and_prepares_missing_rank(
     result = prepare_ensemble(
         pred_files,
         skip_alignment=False,
-        existing_data_by_rank={0: existing},
+        existing_states_by_rank={0: existing},
         report_phase=phases.append,
     )
 
     assert [member.rank for member in result.members] == [0, 1]
-    assert result.members[0].data is existing
+    assert result.members[0].model_state is existing
+    assert result.members[0].data is existing_data
     assert load_calls == [
         (
             pred_files,
@@ -347,14 +351,73 @@ def test_prepare_ensemble_reuses_loaded_rank_and_prepares_missing_rank(
             },
         )
     ]
-    assert map_paths == [
-        Path("/tmp/target_model_0.cif"),
-        Path("/tmp/target_model_1.cif"),
-    ]
+    assert map_paths == [Path("/tmp/target_model_1.cif")]
     assert result.reference_rank == 0
     assert result.core_indices == (0, 1, 2)
     np.testing.assert_allclose(result.plddt_mean, np.array([0.7, 0.8, 0.9]))
     assert phases[-1] == "Validating ensemble token maps…"
+
+
+def test_prepare_ensemble_stages_plddt_reload_without_mutating_existing_state(
+    monkeypatch,
+) -> None:
+    model = types.SimpleNamespace(
+        rank=0,
+        object_name="target_model_0",
+        structure_path=Path("/tmp/target_model_0.cif"),
+        display_label="model_0",
+    )
+    pred_files = types.SimpleNamespace(models=[model])
+    original_data = types.SimpleNamespace(
+        rank=0,
+        structure_path=model.structure_path,
+        token_plddt=None,
+        pae=np.ones((3, 3), dtype=np.float32),
+        pde=None,
+        contact_probs=None,
+    )
+    token_map = TokenMap((_token(0), _token(1), _token(2)))
+    existing = ModelState(0, original_data, token_map)
+    reloaded_data = types.SimpleNamespace(
+        rank=0,
+        structure_path=model.structure_path,
+        token_plddt=np.array([0.7, 0.8, 0.9], dtype=np.float32),
+        token_plddt_source="structure_b_factor",
+        pae=np.ones((3, 3), dtype=np.float32),
+        pde=None,
+        contact_probs=None,
+    )
+    load_calls = []
+
+    def load_data(prediction_files, rank, **kwargs):
+        load_calls.append((prediction_files, rank, kwargs))
+        return reloaded_data
+
+    monkeypatch.setattr("FoldQC.loader.load_prediction_data", load_data)
+
+    result = prepare_ensemble(
+        pred_files,
+        skip_alignment=True,
+        existing_states_by_rank={0: existing},
+    )
+
+    prepared_state = result.members[0].model_state
+    assert prepared_state is not existing
+    assert prepared_state.data is reloaded_data
+    assert prepared_state.token_map is token_map
+    assert existing.data is original_data
+    assert load_calls == [
+        (
+            pred_files,
+            0,
+            {
+                "load_pae": True,
+                "load_pde": False,
+                "load_contact_probs": False,
+                "load_token_plddt": True,
+            },
+        )
+    ]
 
 
 def test_prepare_ensemble_rejects_different_ordered_tokens(monkeypatch) -> None:

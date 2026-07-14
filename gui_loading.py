@@ -11,6 +11,7 @@ import numpy as np
 
 from . import ensemble, gui_rules, metrics, plot_data, reports
 from .compat import ItemIsEnabled, QtCore, QtWidgets, WindowCloseButtonHint
+from .model_state import ModelState
 from .mol_viewer import (
     add_objects_to_group,
     delete_viewer_names,
@@ -42,10 +43,12 @@ class InitialLoadResult:
     """Provider files and initial lazy data prepared by a background job."""
 
     pred_files: object
-    pred_data: object
-    token_map: TokenMap
-    rank: int
+    model_state: ModelState
     display_path: Path
+
+    @property
+    def rank(self) -> int:
+        return self.model_state.rank
 
 
 @dataclass(frozen=True)
@@ -53,20 +56,22 @@ class ModelSwitchResult:
     """One ranked model prepared without touching Qt widgets or PyMOL."""
 
     pred_files: object
-    rank: int
-    data: object
-    token_map: TokenMap
+    model_state: ModelState
     _owns_prediction_files: bool = False
+
+    @property
+    def rank(self) -> int:
+        return self.model_state.rank
 
 
 @dataclass(frozen=True)
 class DataLoadItem:
     """One current-model or ensemble-member lazy reload request."""
 
-    slot: str
     rank: int
     model_label: str
     flags: tuple[tuple[str, bool], ...]
+    model_state: ModelState
     original_data: object
     member: object | None = None
     phase_arrays: tuple[str, ...] = ()
@@ -82,6 +87,32 @@ class DataLoadBatchResult:
     pred_files: object
     loaded: tuple[tuple[DataLoadItem, object], ...]
     _owns_prediction_files: bool = False
+
+
+@dataclass(frozen=True)
+class ModelStoreSnapshot:
+    """Restorable model-store membership, contents, and active rank."""
+
+    active_rank: int | None
+    entries: tuple[tuple[int, ModelState, object, TokenMap], ...]
+
+
+@dataclass(frozen=True)
+class InitialPredictionSnapshot:
+    """GUI state restored if initial prediction activation fails."""
+
+    pred_files: object | None
+    model_store: ModelStoreSnapshot
+    ensemble_members: list | None
+    ensemble_group_name: str | None
+    ensemble_aligned: bool
+    ensemble_rmsd: np.ndarray | None
+    ensemble_plddt_mean: np.ndarray | None
+    ensemble_plddt_std: np.ndarray | None
+    display_path: str
+    model_items: tuple[tuple[str, object], ...]
+    selected_model_rank: object | None
+    viewer_context: tuple
 
 
 @dataclass
@@ -103,6 +134,7 @@ class EnsembleViewerTransaction:
     previous_rmsd: np.ndarray | None = None
     previous_plddt_mean: np.ndarray | None = None
     previous_plddt_std: np.ndarray | None = None
+    previous_model_store: ModelStoreSnapshot | None = None
 
 
 def _session_path_for_candidate(discovery, candidate) -> Path:
@@ -162,7 +194,11 @@ def _scan_and_load_initial_prediction(
     )
     report_phase(f"Preparing {model.display_label} token map…")
     token_map = build_token_map(pred_data.structure_path)
-    return InitialLoadResult(pred_files, pred_data, token_map, rank, display_path)
+    return InitialLoadResult(
+        pred_files,
+        ModelState(rank=rank, data=pred_data, token_map=token_map),
+        display_path,
+    )
 
 
 def _load_rank_data(pred_files, rank: int, report_phase) -> ModelSwitchResult:
@@ -180,7 +216,10 @@ def _load_rank_data(pred_files, rank: int, report_phase) -> ModelSwitchResult:
     )
     report_phase(f"Preparing {model.display_label} token map…")
     token_map = build_token_map(data.structure_path)
-    return ModelSwitchResult(pred_files, rank, data, token_map)
+    return ModelSwitchResult(
+        pred_files,
+        ModelState(rank=rank, data=data, token_map=token_map),
+    )
 
 
 def _load_data_batch(pred_files, items: tuple[DataLoadItem, ...], report_phase):
@@ -204,13 +243,13 @@ def _load_data_batch(pred_files, items: tuple[DataLoadItem, ...], report_phase):
 def _prepare_ensemble_job(
     pred_files,
     skip_alignment: bool,
-    existing_data_by_rank: dict[int, object],
+    existing_states_by_rank: dict[int, ModelState],
     report_phase,
 ):
     return ensemble.prepare_ensemble(
         pred_files,
         skip_alignment=skip_alignment,
-        existing_data_by_rank=existing_data_by_rank,
+        existing_states_by_rank=existing_states_by_rank,
         report_phase=report_phase,
     )
 
@@ -240,6 +279,94 @@ def _confidence_has_chain_iptm_metric_data(confidence) -> bool:
 
 
 class GuiLoadingController:
+    def _capture_model_store(self) -> ModelStoreSnapshot:
+        return ModelStoreSnapshot(
+            active_rank=self._active_model_rank,
+            entries=tuple(
+                (rank, state, state.data, state.token_map)
+                for rank, state in self._model_states.items()
+            ),
+        )
+
+    def _restore_model_store(self, snapshot: ModelStoreSnapshot) -> None:
+        restored = {}
+        for rank, state, data, token_map in snapshot.entries:
+            state.replace(data, token_map)
+            restored[rank] = state
+        self._model_states = restored
+        self._active_model_rank = snapshot.active_rank
+
+    def _commit_model_state(
+        self,
+        incoming: ModelState,
+        *,
+        reset_store: bool = False,
+        activate: bool = True,
+    ) -> ModelState:
+        if reset_store:
+            canonical = incoming
+            self._model_states = {incoming.rank: canonical}
+        else:
+            canonical = self._model_states.get(incoming.rank)
+            if canonical is None:
+                canonical = incoming
+                states = dict(self._model_states)
+                states[incoming.rank] = canonical
+                self._model_states = states
+            elif canonical is not incoming:
+                canonical.replace(incoming.data, incoming.token_map)
+        if activate:
+            self._active_model_rank = incoming.rank
+        return canonical
+
+    def _capture_initial_prediction_context(self) -> InitialPredictionSnapshot:
+        model_items = tuple(
+            (self._model_combo.itemText(index), self._model_combo.itemData(index))
+            for index in range(self._model_combo.count())
+        )
+        return InitialPredictionSnapshot(
+            pred_files=self._pred_files,
+            model_store=self._capture_model_store(),
+            ensemble_members=self._ensemble_members,
+            ensemble_group_name=self._ensemble_group_name,
+            ensemble_aligned=self._ensemble_aligned,
+            ensemble_rmsd=self._ensemble_rmsd,
+            ensemble_plddt_mean=self._ensemble_plddt_mean,
+            ensemble_plddt_std=self._ensemble_plddt_std,
+            display_path=self._dir_edit.text(),
+            model_items=model_items,
+            selected_model_rank=(
+                self._model_combo.currentData() if self._model_combo.count() else None
+            ),
+            viewer_context=self._capture_viewer_mapping_context(),
+        )
+
+    def _restore_initial_prediction_context(
+        self, snapshot: InitialPredictionSnapshot
+    ) -> None:
+        self._pred_files = snapshot.pred_files
+        self._restore_model_store(snapshot.model_store)
+        self._ensemble_members = snapshot.ensemble_members
+        self._ensemble_group_name = snapshot.ensemble_group_name
+        self._ensemble_aligned = snapshot.ensemble_aligned
+        self._ensemble_rmsd = snapshot.ensemble_rmsd
+        self._ensemble_plddt_mean = snapshot.ensemble_plddt_mean
+        self._ensemble_plddt_std = snapshot.ensemble_plddt_std
+        self._restore_viewer_mapping_context(snapshot.viewer_context)
+        self._dir_edit.setText(snapshot.display_path)
+        self._model_combo.blockSignals(True)
+        try:
+            self._model_combo.clear()
+            for label, rank in snapshot.model_items:
+                self._model_combo.addItem(label, rank)
+            if snapshot.selected_model_rank is not None:
+                self._select_model_rank(snapshot.selected_model_rank)
+        finally:
+            self._model_combo.blockSignals(False)
+        self._update_confidence_summary()
+        self._update_property_availability()
+        self._refresh_objects()
+
     def _gui_job_is_busy(self) -> bool:
         return bool(
             getattr(self, "_loading_prediction", False)
@@ -347,7 +474,7 @@ class GuiLoadingController:
             self._job_runner.dispose(result)
             return
         self._active_load_handle = None
-        structure_name = Path(result.pred_data.structure_path).name
+        structure_name = Path(result.model_state.data.structure_path).name
         self._on_prediction_load_progress(
             request_id,
             f"Loading {structure_name} into PyMOL…",
@@ -385,6 +512,7 @@ class GuiLoadingController:
             return
 
         try:
+            snapshot = self._capture_initial_prediction_context()
             self._pred_files = result.pred_files
             self._ensemble_members = None
             self._ensemble_group_name = None
@@ -404,14 +532,28 @@ class GuiLoadingController:
                 self._model_combo.blockSignals(False)
 
             self._pending_session_restore.model_rank = None
-            self._activate_model_data(
-                result.rank,
-                result.pred_data,
+            self._activate_model_state(
+                result.model_state,
+                reset_store=True,
                 prepared_object=(obj_name, did_load),
-                prepared_token_map=result.token_map,
             )
         except Exception as exc:
             logger.exception("Could not activate the initial prediction model")
+            if "snapshot" in locals():
+                try:
+                    self._restore_initial_prediction_context(snapshot)
+                except Exception:
+                    logger.exception(
+                        "Could not fully restore the previous prediction state"
+                    )
+            if did_load:
+                try:
+                    delete_viewer_names([obj_name])
+                except Exception:
+                    logger.exception(
+                        "Could not remove the newly loaded prediction object"
+                    )
+            self._job_runner.dispose(result)
             self._finish_prediction_load(request_id)
             QtWidgets.QMessageBox.warning(self, APP_TITLE, str(exc))
             return
@@ -457,8 +599,8 @@ class GuiLoadingController:
         self._data_load_request_id = request_id
         self._active_load_handle = None
         self._active_data_continuation = None
-        self._model_switch_previous_data = None
-        self._model_switch_previous_token_context = None
+        self._model_switch_previous_store = None
+        self._model_switch_previous_viewer_context = None
         self._loading_prediction = False
         self._loading_data = False
         self._hide_load_progress()
@@ -640,13 +782,15 @@ class GuiLoadingController:
         rank = self._model_combo.currentData()
         if rank is None:
             return
-        committed_rank = getattr(self._pred_data, "rank", None)
+        committed_rank = self._active_model_rank
         if rank == committed_rank or self._gui_job_is_busy():
             return
 
         pred_files = self._pred_files
-        self._model_switch_previous_data = self._pred_data
-        self._model_switch_previous_token_context = self._capture_token_context()
+        self._model_switch_previous_store = self._capture_model_store()
+        self._model_switch_previous_viewer_context = (
+            self._capture_viewer_mapping_context()
+        )
         self._loading_data = True
         request_id = self._next_gui_job_request_id()
         self._data_load_request_id = request_id
@@ -727,11 +871,9 @@ class GuiLoadingController:
             return
 
         try:
-            self._activate_model_data(
-                result.rank,
-                result.data,
+            self._activate_model_state(
+                result.model_state,
                 prepared_object=(model.object_name, did_load),
-                prepared_token_map=result.token_map,
             )
         except Exception as exc:
             logger.exception("Could not activate the selected prediction model")
@@ -751,7 +893,7 @@ class GuiLoadingController:
         QtWidgets.QMessageBox.warning(self, APP_TITLE, failure.message)
 
     def _restore_committed_model_rank(self) -> None:
-        rank = getattr(self._pred_data, "rank", None)
+        rank = self._active_model_rank
         if rank is None:
             return
         self._model_combo.blockSignals(True)
@@ -761,14 +903,14 @@ class GuiLoadingController:
             self._model_combo.blockSignals(False)
 
     def _rollback_model_switch(self) -> None:
-        previous = getattr(self, "_model_switch_previous_data", None)
-        restored_data = previous is not None and self._pred_data is not previous
-        if restored_data:
-            self._pred_data = previous
-        token_context = getattr(self, "_model_switch_previous_token_context", None)
-        if token_context is not None:
-            self._restore_token_context(token_context)
-        if restored_data:
+        snapshot = getattr(self, "_model_switch_previous_store", None)
+        restored = snapshot is not None
+        if snapshot is not None:
+            self._restore_model_store(snapshot)
+        viewer_context = getattr(self, "_model_switch_previous_viewer_context", None)
+        if viewer_context is not None:
+            self._restore_viewer_mapping_context(viewer_context)
+        if restored:
             self._update_confidence_summary()
             self._update_property_availability()
         self._restore_committed_model_rank()
@@ -783,8 +925,8 @@ class GuiLoadingController:
             return
         self._active_load_handle = None
         self._active_data_continuation = None
-        self._model_switch_previous_data = None
-        self._model_switch_previous_token_context = None
+        self._model_switch_previous_store = None
+        self._model_switch_previous_viewer_context = None
         self._loading_data = False
         self._hide_load_progress()
         self._set_prediction_load_controls_enabled(True)
@@ -843,25 +985,43 @@ class GuiLoadingController:
             return []
         slots = []
         if target.kind == "single":
-            if target.data is self._pred_data and self._pred_data is not None:
-                slots.append(("current", self._pred_data, None))
+            state = self._active_model_state
+            if state is not None and target.data is state.data:
+                slots.append((state, None))
         elif target.kind == "ensemble_member":
             for member in target.members or []:
-                slots.append(("member", member.data, member))
+                state = getattr(member, "model_state", None)
+                if state is None and self._requested_arrays_are_loaded(
+                    member.data, requested_flags
+                ):
+                    continue
+                if state is None:
+                    raise ValueError(
+                        f"Model {member.rank} has no canonical model state."
+                    )
+                slots.append((state, member))
         elif target.kind == "ensemble_group":
             for member in sorted(target.members or [], key=lambda item: item.rank):
-                slots.append(("member", member.data, member))
+                state = getattr(member, "model_state", None)
+                if state is None and self._requested_arrays_are_loaded(
+                    member.data, requested_flags
+                ):
+                    continue
+                if state is None:
+                    raise ValueError(
+                        f"Model {member.rank} has no canonical model state."
+                    )
+                slots.append((state, member))
 
         items = []
         seen = set()
-        for slot, data, member in slots:
-            key = (slot, id(member) if member is not None else 0)
+        for model_state, member in slots:
+            key = id(model_state)
             if key in seen:
                 continue
             seen.add(key)
             item = self._data_load_item(
-                slot,
-                data,
+                model_state,
                 member,
                 requested_flags,
             )
@@ -869,13 +1029,27 @@ class GuiLoadingController:
                 items.append(item)
         return items
 
+    @staticmethod
+    def _requested_arrays_are_loaded(data, requested_flags: dict[str, bool]) -> bool:
+        flag_attrs = {
+            "load_pae": "pae",
+            "load_pde": "pde",
+            "load_contact_probs": "contact_probs",
+            "load_token_plddt": "token_plddt",
+        }
+        return all(
+            not requested_flags.get(flag, False)
+            or getattr(data, attr, None) is not None
+            for flag, attr in flag_attrs.items()
+        )
+
     def _data_load_item(
         self,
-        slot: str,
-        data,
+        model_state: ModelState,
         member,
         requested_flags: dict[str, bool],
     ) -> DataLoadItem | None:
+        data = model_state.data
         flag_attrs = {
             "load_pae": ("pae", "PAE"),
             "load_pde": ("pde", "PDE"),
@@ -898,13 +1072,13 @@ class GuiLoadingController:
             for name, (attr, _label) in flag_attrs.items()
         }
         phase_arrays = tuple(dict.fromkeys(flag_attrs[name][1] for name in missing))
-        rank = int(member.rank if member is not None else data.rank)
+        rank = model_state.rank
         model = self._pred_files.model(rank)
         return DataLoadItem(
-            slot=slot,
             rank=rank,
             model_label=model.display_label,
             flags=tuple(flags.items()),
+            model_state=model_state,
             original_data=data,
             member=member,
             phase_arrays=phase_arrays,
@@ -941,10 +1115,7 @@ class GuiLoadingController:
 
         self._active_load_handle = None
         for item, data in result.loaded:
-            if item.slot == "current":
-                self._pred_data = data
-            else:
-                item.member.data = data
+            item.model_state.replace_data(data)
 
         continuation = self._active_data_continuation
         self._on_data_load_progress(request_id, "Preparing requested action…")
@@ -955,13 +1126,15 @@ class GuiLoadingController:
 
     def _lazy_result_is_current(self, result: DataLoadBatchResult) -> bool:
         for item, _data in result.loaded:
-            if item.slot == "current":
-                if self._pred_data is not item.original_data:
+            if self._model_states.get(item.rank) is not item.model_state:
+                return False
+            if item.model_state.data is not item.original_data:
+                return False
+            if item.member is not None:
+                if item.member not in (self._ensemble_members or []):
                     return False
-            elif item.member is None or item.member.data is not item.original_data:
-                return False
-            elif item.member not in (self._ensemble_members or []):
-                return False
+                if item.member.model_state is not item.model_state:
+                    return False
         return True
 
     def _validate_lazy_loaded_item(self, item: DataLoadItem, data) -> None:
@@ -1012,26 +1185,17 @@ class GuiLoadingController:
         self._finish_data_load(request_id)
         QtWidgets.QMessageBox.critical(self, title, failure.message)
 
-    def _activate_model_data(
+    def _activate_model_state(
         self,
-        rank: int,
-        data,
+        model_state: ModelState,
         *,
+        reset_store: bool = False,
         prepared_object: tuple[str, bool] | None = None,
-        prepared_token_map: TokenMap | None = None,
     ) -> None:
         """Commit loaded model data and perform main-thread viewer/UI updates."""
-        obj_name = (
-            prepared_object[0]
-            if prepared_object is not None
-            else self._expected_object_name(rank)
-        )
-        self._pred_data = data
-        self._clear_token_map_cache()
-        if prepared_token_map is not None:
-            self._token_map = prepared_token_map
-            self._token_map_obj = obj_name
-            self._token_map_structure_path = data.structure_path
+        rank = model_state.rank
+        self._commit_model_state(model_state, reset_store=reset_store)
+        self._clear_viewer_mapping_cache()
         self._update_confidence_summary()
         self._update_property_availability()
         pending_metric = getattr(self._pending_session_restore, "metric_key", None)
@@ -1197,30 +1361,21 @@ class GuiLoadingController:
                 self._prop_combo.setCurrentIndex(row)
                 return
 
-    def _clear_token_map_cache(self) -> None:
-        """Drop token and viewer mapping state after changing prediction context."""
-        self._token_map = None
-        self._token_map_obj = None  # type: ignore[attr-defined]
-        self._token_map_structure_path = None  # type: ignore[attr-defined]
+    def _clear_viewer_mapping_cache(self) -> None:
+        """Drop object-specific mapping state after changing prediction context."""
         self._paint_mappings = {}
         self._accepted_token_overlap_warnings = set()
 
-    def _capture_token_context(self) -> tuple:
-        """Snapshot token and viewer mappings for transactional model switching."""
+    def _capture_viewer_mapping_context(self) -> tuple:
+        """Snapshot object mappings for transactional model switching."""
         return (
-            self._token_map,
-            self._token_map_obj,
-            self._token_map_structure_path,
             dict(self._paint_mappings),
             set(self._accepted_token_overlap_warnings),
         )
 
-    def _restore_token_context(self, context: tuple) -> None:
-        """Restore a token-context snapshot after a failed model switch."""
+    def _restore_viewer_mapping_context(self, context: tuple) -> None:
+        """Restore object mappings after a failed model switch."""
         (
-            self._token_map,
-            self._token_map_obj,
-            self._token_map_structure_path,
             paint_mappings,
             accepted_warnings,
         ) = context
@@ -1316,7 +1471,7 @@ class GuiLoadingController:
         if getattr(self, "_pred_data", None) is None:
             return False
         try:
-            self._build_token_map_if_needed(obj_name)
+            self._require_active_model_state()
         except Exception:
             return False
         return plot_data.has_multiple_token_chains(self._token_map)
@@ -1477,7 +1632,7 @@ class GuiLoadingController:
             return
 
         pred_files = self._pred_files
-        existing_data = self._existing_ensemble_data_by_rank()
+        existing_states = dict(self._model_states)
         self._loading_data = True
         request_id = self._next_gui_job_request_id()
         self._data_load_request_id = request_id
@@ -1492,7 +1647,7 @@ class GuiLoadingController:
             lambda report: _prepare_ensemble_job(
                 pred_files,
                 skip_alignment,
-                existing_data,
+                existing_states,
                 report,
             ),
             self._on_data_load_progress,
@@ -1501,26 +1656,6 @@ class GuiLoadingController:
         )
         if self._data_load_is_active(request_id):
             self._active_load_handle = handle
-
-    def _existing_ensemble_data_by_rank(self) -> dict[int, object]:
-        """Return current rank data suitable for reuse by ensemble preparation."""
-        existing: dict[int, object] = {}
-        current = self._pred_data
-        if current is not None and getattr(current, "rank", None) is not None:
-            existing[int(current.rank)] = current
-        for member in self._ensemble_members or []:
-            rank = int(member.rank)
-            previous = existing.get(rank)
-            if previous is None or self._prediction_data_array_count(
-                member.data
-            ) > self._prediction_data_array_count(previous):
-                existing[rank] = member.data
-        return existing
-
-    @staticmethod
-    def _prediction_data_array_count(data: object) -> int:
-        fields = ("token_plddt", "pae", "pde", "contact_probs")
-        return sum(getattr(data, field, None) is not None for field in fields)
 
     def _on_ensemble_prepared(
         self,
@@ -1564,6 +1699,7 @@ class GuiLoadingController:
             previous_rmsd=self._ensemble_rmsd,
             previous_plddt_mean=self._ensemble_plddt_mean,
             previous_plddt_std=self._ensemble_plddt_std,
+            previous_model_store=self._capture_model_store(),
         )
         self._active_ensemble_viewer_transaction = transaction
         QtCore.QTimer.singleShot(
@@ -1730,23 +1866,28 @@ class GuiLoadingController:
         if not self._ensemble_transaction_is_active(transaction):
             return
         prepared = transaction.prepared
-        members = [
-            ensemble.EnsembleMember(
-                rank=member.rank,
-                obj_name=member.obj_name,
-                data=member.data,
-                token_map=member.token_map,
-                paint_mapping=transaction.inspections[member.rank].paint_mapping,
-            )
-            for member in prepared.members
-        ]
-        self._ensemble_members = members
-        self._ensemble_group_name = prepared.group_name
-        self._ensemble_aligned = not prepared.skip_alignment
-        self._ensemble_rmsd = rmsd
-        self._ensemble_plddt_mean = prepared.plddt_mean
-        self._ensemble_plddt_std = prepared.plddt_std
         try:
+            canonical_states = {
+                member.rank: self._commit_model_state(
+                    member.model_state,
+                    activate=False,
+                )
+                for member in prepared.members
+            }
+            members = [
+                ensemble.EnsembleMember(
+                    obj_name=member.obj_name,
+                    model_state=canonical_states[member.rank],
+                    paint_mapping=(transaction.inspections[member.rank].paint_mapping),
+                )
+                for member in prepared.members
+            ]
+            self._ensemble_members = members
+            self._ensemble_group_name = prepared.group_name
+            self._ensemble_aligned = not prepared.skip_alignment
+            self._ensemble_rmsd = rmsd
+            self._ensemble_plddt_mean = prepared.plddt_mean
+            self._ensemble_plddt_std = prepared.plddt_std
             self._refresh_objects()
             self._select_object(prepared.group_name)
             self._update_property_availability()
@@ -1776,6 +1917,8 @@ class GuiLoadingController:
         self,
         transaction: EnsembleViewerTransaction,
     ) -> None:
+        if transaction.previous_model_store is not None:
+            self._restore_model_store(transaction.previous_model_store)
         self._ensemble_members = transaction.previous_members
         self._ensemble_group_name = transaction.previous_group_name
         self._ensemble_aligned = transaction.previous_aligned

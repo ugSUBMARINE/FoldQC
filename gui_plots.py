@@ -59,7 +59,7 @@ class PlotController:
         if self._pred_data is None:
             QtWidgets.QMessageBox.warning(self, APP_TITLE, "No prediction data loaded.")
             return None
-        self._build_token_map_if_needed(obj_name)
+        self._require_active_model_state()
         return _PlotTarget(
             kind="single",
             label=obj_name,

@@ -3,8 +3,6 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-import numpy as np
-
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from FoldQC.gui_state import (  # noqa: E402
@@ -13,6 +11,9 @@ from FoldQC.gui_state import (  # noqa: E402
     MetricContext,
     ResolvedTarget,
 )
+from FoldQC.loader_models import PredictionData  # noqa: E402
+from FoldQC.model_state import ModelState  # noqa: E402
+from FoldQC.token_map import TokenMap  # noqa: E402
 
 
 def test_gui_state_uses_independent_mutable_defaults() -> None:
@@ -58,9 +59,14 @@ def test_state_backed_properties_share_one_state() -> None:
 
     host = Host()
     host._state = GuiState()
-    values = np.array([0.8], dtype=np.float32)
-    host._pred_data = values
-    host._token_map_structure_path = Path("model.cif")
+    data = PredictionData(name="model", rank=2, structure_path=Path("model.cif"))
+    token_map = TokenMap(())
+    model_state = ModelState(rank=2, data=data, token_map=token_map)
+    host._model_states = {2: model_state}
+    host._active_model_rank = 2
 
-    assert host._state.pred_data is values
-    assert host._state.token_map_structure_path == Path("model.cif")
+    assert host._active_model_state is model_state
+    assert host._pred_data is data
+    assert host._token_map is token_map
+    assert host._state.model_states == {2: model_state}
+    assert host._state.active_model_rank == 2

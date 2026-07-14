@@ -14,6 +14,7 @@ import numpy as np
 from .session import PendingSessionRestore
 
 if TYPE_CHECKING:
+    from .model_state import ModelState
     from .token_map import TokenMap
 
 
@@ -44,10 +45,8 @@ class GuiState:
     """Mutable non-widget state owned by the main FoldQC dialog."""
 
     pred_files: object | None = None
-    pred_data: object | None = None
-    token_map: TokenMap | None = None
-    token_map_obj: str | None = None
-    token_map_structure_path: object | None = None
+    model_states: dict[int, ModelState] = field(default_factory=dict)
+    active_model_rank: int | None = None
     paint_mappings: dict[tuple[str, str], object] = field(default_factory=dict)
     ensemble_members: list | None = None
     ensemble_group_name: str | None = None
@@ -83,10 +82,8 @@ def _state_property(name: str):
 
 for _private_name, _state_name in {
     "_pred_files": "pred_files",
-    "_pred_data": "pred_data",
-    "_token_map": "token_map",
-    "_token_map_obj": "token_map_obj",
-    "_token_map_structure_path": "token_map_structure_path",
+    "_model_states": "model_states",
+    "_active_model_rank": "active_model_rank",
     "_paint_mappings": "paint_mappings",
     "_ensemble_members": "ensemble_members",
     "_ensemble_group_name": "ensemble_group_name",
@@ -104,5 +101,25 @@ for _private_name, _state_name in {
     "_pending_session_restore": "pending_session_restore",
 }.items():
     setattr(GuiStateBacked, _private_name, _state_property(_state_name))
+
+
+def _active_model_state(self):
+    rank = self._state.active_model_rank
+    if rank is None:
+        return None
+    return self._state.model_states.get(rank)
+
+
+GuiStateBacked._active_model_state = property(_active_model_state)
+GuiStateBacked._pred_data = property(
+    lambda self: (
+        None if self._active_model_state is None else self._active_model_state.data
+    )
+)
+GuiStateBacked._token_map = property(
+    lambda self: (
+        None if self._active_model_state is None else self._active_model_state.token_map
+    )
+)
 
 del _private_name, _state_name

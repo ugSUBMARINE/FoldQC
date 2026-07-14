@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 
 from .compute import plddt_values_for
+from .model_state import ModelState
 from .mol_viewer import (
     ObjectPaintMapping,
     inspect_object_tokens,
@@ -39,23 +40,46 @@ PhaseReporter = Callable[[str], None]
 class EnsembleMember:
     """One loaded prediction model in an object-based ensemble."""
 
-    rank: int
     obj_name: str
-    data: Any
-    token_map: TokenMap
+    model_state: ModelState
     paint_mapping: ObjectPaintMapping | None = None
+
+    @property
+    def rank(self) -> int:
+        return self.model_state.rank
+
+    @property
+    def data(self):
+        return self.model_state.data
+
+    @property
+    def token_map(self) -> TokenMap:
+        return self.model_state.token_map
 
 
 @dataclass(frozen=True)
 class PreparedEnsembleMember:
     """One ensemble member prepared without accessing a molecular viewer."""
 
-    rank: int
     model_label: str
     obj_name: str
-    structure_path: Path
-    data: Any
-    token_map: TokenMap
+    model_state: ModelState
+
+    @property
+    def rank(self) -> int:
+        return self.model_state.rank
+
+    @property
+    def structure_path(self) -> Path:
+        return Path(self.model_state.data.structure_path)
+
+    @property
+    def data(self):
+        return self.model_state.data
+
+    @property
+    def token_map(self) -> TokenMap:
+        return self.model_state.token_map
 
 
 @dataclass(frozen=True)
@@ -156,7 +180,7 @@ def prepare_ensemble(
     pred_files: Any,
     *,
     skip_alignment: bool,
-    existing_data_by_rank: Mapping[int, Any] | None = None,
+    existing_states_by_rank: Mapping[int, ModelState] | None = None,
     report_phase: PhaseReporter | None = None,
 ) -> PreparedEnsemble:
     """Load and validate ensemble data without accessing Qt or PyMOL."""
@@ -167,28 +191,34 @@ def prepare_ensemble(
     models = tuple(pred_files.models)
     if not models:
         raise ValueError("No ensemble models were found.")
-    existing_data_by_rank = existing_data_by_rank or {}
+    existing_states_by_rank = existing_states_by_rank or {}
     prepared: list[PreparedEnsembleMember] = []
     total = len(models)
     for index, model in enumerate(models, start=1):
         report(f"Preparing {model.display_label} ensemble data… ({index}/{total})")
-        existing = existing_data_by_rank.get(model.rank)
-        data = existing
-        if not _has_plddt(existing):
+        existing = existing_states_by_rank.get(model.rank)
+        data = None if existing is None else existing.data
+        if not _has_plddt(data):
             data = load_prediction_data(
                 pred_files,
                 model.rank,
-                **_data_load_flags(existing),
+                **_data_load_flags(data),
             )
-        token_map = build_token_map(data.structure_path)
+        token_map = (
+            existing.token_map
+            if existing is not None
+            else build_token_map(data.structure_path)
+        )
+        model_state = (
+            existing
+            if existing is not None and data is existing.data
+            else ModelState(model.rank, data, token_map)
+        )
         prepared.append(
             PreparedEnsembleMember(
-                rank=model.rank,
                 model_label=model.display_label,
                 obj_name=model.object_name,
-                structure_path=Path(data.structure_path),
-                data=data,
-                token_map=token_map,
+                model_state=model_state,
             )
         )
 
@@ -263,10 +293,8 @@ def build_members(
             token_map = reference_token_map
         members.append(
             EnsembleMember(
-                rank=rank,
                 obj_name=obj_name,
-                data=data,
-                token_map=token_map,
+                model_state=ModelState(rank, data, token_map),
             )
         )
     return group_name, members

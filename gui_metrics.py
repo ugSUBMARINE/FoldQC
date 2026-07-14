@@ -21,26 +21,12 @@ VIEWER_NAME = get_viewer_name()
 
 
 class MetricController:
-    def _build_token_map_if_needed(self, obj_name: str) -> None:
-        """Build a fallback token map when no prepared map is cached.
-
-        The structure path from the loaded prediction data is passed to
-        ``build_token_map`` so that HETATM atom order is read from the file
-        rather than from a viewer's potentially reordered internal model. The
-        same prediction map can be reused for multiple viewer targets.
-        """
-        current_path = getattr(self, "_token_map_structure_path", None)
-        structure_path = (
-            None if self._pred_data is None else self._pred_data.structure_path
-        )
-        if self._token_map is None or current_path != structure_path:
-            if self._pred_data is None:
-                raise ValueError("No prediction data loaded; cannot build token map.")
-            from .token_map import build_token_map
-
-            self._token_map = build_token_map(self._pred_data.structure_path)
-            self._token_map_structure_path = self._pred_data.structure_path
-        self._token_map_obj = obj_name  # type: ignore[attr-defined]
+    def _require_active_model_state(self):
+        """Return the active canonical model state or raise a user-facing error."""
+        state = self._active_model_state
+        if state is None:
+            raise ValueError("No prediction data loaded; cannot resolve token map.")
+        return state
 
     def _compute_property_for(
         self,

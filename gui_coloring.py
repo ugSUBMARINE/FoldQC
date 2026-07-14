@@ -139,7 +139,7 @@ class ColoringController:
 
         try:
             self._ensure_current_data_for_property(prop)
-            self._build_token_map_if_needed(obj_name)
+            self._require_active_model_state()
             values = self._compute_property_for(
                 key, ref_sel, self._pred_data, self._token_map, obj_name
             )
@@ -453,7 +453,7 @@ class ColoringController:
                 "pLDDT data are not available for this model.",
             )
             return
-        self._build_token_map_if_needed(obj_name)
+        self._require_active_model_state()
         self._validate_token_count(values, self._token_map, obj_name)
         mapping = self._prepare_paint_mapping(
             self._token_map, obj_name, self._pred_data

@@ -498,7 +498,29 @@ from FoldQC.gui import (  # noqa: E402
     _PlotTarget,
 )
 from FoldQC.gui_state import GuiState  # noqa: E402
+from FoldQC.model_state import ModelState  # noqa: E402
 from FoldQC.token_map import TokenInfo, TokenMap  # noqa: E402
+
+
+def _set_active_state(dialog, data, token_map: TokenMap | None = None) -> None:
+    if data is None:
+        dialog._model_states = {}
+        dialog._active_model_rank = None
+        return
+    if not hasattr(data, "rank"):
+        data.rank = 0
+    rank = int(data.rank)
+    existing = dialog._model_states.get(rank)
+    if token_map is None:
+        token_map = existing.token_map if existing is not None else TokenMap(())
+    if existing is None:
+        state = ModelState(rank, data, token_map)
+        states = dict(dialog._model_states)
+        states[rank] = state
+        dialog._model_states = states
+    else:
+        existing.replace(data, token_map)
+    dialog._active_model_rank = rank
 
 
 def _new_dialog() -> FoldQCPluginDialog:
@@ -1101,8 +1123,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         enabled = _PYMOL.Qt.QtCore.Qt.ItemFlag.ItemIsEnabled
         dialog = _new_dialog()
         dialog._pred_files = None
-        dialog._pred_data = None
-        dialog._token_map = None
+        _set_active_state(dialog, None)
         dialog._ensemble_members = None
         dialog._ensemble_group_name = None
         dialog._ensemble_aligned = False
@@ -1167,12 +1188,9 @@ class GuiModelSwitchingTests(unittest.TestCase):
             )
             prepared_members.append(
                 ensemble.PreparedEnsembleMember(
-                    rank=model.rank,
                     model_label=model.display_label,
                     obj_name=model.object_name,
-                    structure_path=data.structure_path,
-                    data=data,
-                    token_map=token_map,
+                    model_state=ModelState(model.rank, data, token_map),
                 )
             )
         return ensemble.PreparedEnsemble(
@@ -1190,7 +1208,8 @@ class GuiModelSwitchingTests(unittest.TestCase):
         dialog = self._session_dialog()
         pred_files = _SessionPredictionFiles(Path("/tmp"))
         dialog._pred_files = pred_files
-        dialog._pred_data = self._prepared_ensemble(pred_files).members[0].data
+        first_state = self._prepared_ensemble(pred_files).members[0].model_state
+        _set_active_state(dialog, first_state.data, first_state.token_map)
         dialog._obj_combo.addItem("target_model_0", "target_model_0")
         dialog._job_runner = runner
         dialog._active_ensemble_viewer_transaction = None
@@ -1236,6 +1255,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
     def test_ensemble_prepares_before_incremental_pymol_commit(self) -> None:
         runner = _ManualJobRunner()
         dialog, pred_files = self._ensemble_dialog(runner)
+        active_state = dialog._model_states[0]
         prepared = self._prepared_ensemble(pred_files)
         objects = set()
         viewer_calls = []
@@ -1334,6 +1354,9 @@ class GuiModelSwitchingTests(unittest.TestCase):
         )
         self.assertEqual([item[0] for item in transforms], ["target_model_1"])
         self.assertEqual([member.rank for member in dialog._ensemble_members], [0, 1])
+        self.assertIs(dialog._model_states[0], active_state)
+        for member in dialog._ensemble_members:
+            self.assertIs(member.model_state, dialog._model_states[member.rank])
         self.assertTrue(dialog._ensemble_aligned)
         np.testing.assert_allclose(dialog._ensemble_rmsd, np.zeros(3), atol=1e-6)
         self.assertFalse(dialog._loading_data)
@@ -1447,6 +1470,48 @@ class GuiModelSwitchingTests(unittest.TestCase):
             "second object failed", _PYMOL.Qt.QtWidgets.QMessageBox.criticals[-1][1]
         )
 
+    def test_ensemble_ui_commit_failure_restores_complete_model_store(self) -> None:
+        dialog, pred_files = self._ensemble_dialog(_ImmediateJobRunner())
+        previous_state = dialog._model_states[0]
+        previous_data = previous_state.data
+        previous_members = dialog._ensemble_members
+        prepared = self._prepared_ensemble(pred_files)
+        request_id = 17
+        transaction = gui_loading.EnsembleViewerTransaction(
+            request_id=request_id,
+            prepared=prepared,
+            previous_members=previous_members,
+            previous_model_store=dialog._capture_model_store(),
+        )
+        transaction.inspections = {
+            member.rank: types.SimpleNamespace(paint_mapping=f"mapping:{member.rank}")
+            for member in prepared.members
+        }
+        dialog._loading_data = True
+        dialog._data_load_request_id = request_id
+        dialog._active_ensemble_viewer_transaction = transaction
+        dialog._refresh_objects = mock.Mock(
+            side_effect=[RuntimeError("UI commit failed"), None]
+        )
+
+        with mock.patch.object(gui_loading, "delete_viewer_names"):
+            dialog._commit_ensemble_transaction(
+                transaction,
+                np.zeros(3, dtype=np.float32),
+            )
+
+        self.assertEqual(set(dialog._model_states), {0})
+        self.assertIs(dialog._model_states[0], previous_state)
+        self.assertIs(previous_state.data, previous_data)
+        self.assertEqual(dialog._active_model_rank, 0)
+        self.assertIs(dialog._ensemble_members, previous_members)
+        self.assertIsNone(dialog._active_ensemble_viewer_transaction)
+        self.assertFalse(dialog._loading_data)
+        self.assertIn(
+            "UI commit failed",
+            _PYMOL.Qt.QtWidgets.QMessageBox.criticals[-1][1],
+        )
+
     def test_abandoned_ensemble_preparation_never_enters_pymol(self) -> None:
         runner = _ManualJobRunner()
         dialog, pred_files = self._ensemble_dialog(runner)
@@ -1501,7 +1566,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         pred_files = _SessionPredictionFiles(Path("/tmp"), ranks=(0, 1, 2))
         prepared = self._prepared_ensemble(pred_files)
         dialog._pred_files = pred_files
-        dialog._pred_data = prepared.members[0].data
+        _set_active_state(dialog, prepared.members[0].data)
         dialog._obj_combo.addItem("target_model_0", "target_model_0")
         dialog._job_runner = runner
         dialog._active_ensemble_viewer_transaction = None
@@ -1916,6 +1981,14 @@ class GuiModelSwitchingTests(unittest.TestCase):
             _PYMOL.cmd = _Cmd()
             prepared_map = self._build_token_map.return_value
             self._build_token_map.reset_mock()
+            dialog._model_states = {
+                9: ModelState(
+                    9,
+                    types.SimpleNamespace(rank=9),
+                    TokenMap(()),
+                )
+            }
+            dialog._active_model_rank = 9
 
             with (
                 mock.patch(
@@ -1934,9 +2007,10 @@ class GuiModelSwitchingTests(unittest.TestCase):
                 dialog._job_runner.run_next()  # scan, data, and token map
 
         self._build_token_map.assert_called_once_with(data.structure_path)
+        self.assertEqual(set(dialog._model_states), {0})
+        self.assertEqual(dialog._active_model_rank, 0)
         self.assertIs(dialog._token_map, prepared_map)
-        self.assertEqual(dialog._token_map_obj, "target_model_0")
-        self.assertEqual(dialog._token_map_structure_path, data.structure_path)
+        self.assertIs(dialog._model_states[0].data, data)
 
     def test_load_prediction_dir_keeps_archive_input_path_in_text_field(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2182,7 +2256,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             previous = _SessionPredictionFiles(root / "previous", ranks=(0,))
-            previous_data = object()
+            previous_data = types.SimpleNamespace(rank=0)
             previous_members = [object()]
             files = _SessionPredictionFiles(root / "new", ranks=(0,))
             candidate = _candidate("new", path=root / "new")
@@ -2200,7 +2274,8 @@ class GuiModelSwitchingTests(unittest.TestCase):
             )
             dialog = self._session_dialog()
             dialog._pred_files = previous
-            dialog._pred_data = previous_data
+            _set_active_state(dialog, previous_data)
+            previous_state = dialog._model_states[0]
             dialog._ensemble_members = previous_members
             dialog._ensemble_group_name = "previous_ensemble"
             dialog._model_combo.addItem("previous model", 7)
@@ -2225,6 +2300,8 @@ class GuiModelSwitchingTests(unittest.TestCase):
                 dialog._load_prediction_dir()
 
         self.assertIs(dialog._pred_files, previous)
+        self.assertEqual(set(dialog._model_states), {0})
+        self.assertIs(dialog._model_states[0], previous_state)
         self.assertIs(dialog._pred_data, previous_data)
         self.assertIs(dialog._ensemble_members, previous_members)
         self.assertEqual(dialog._ensemble_group_name, "previous_ensemble")
@@ -2296,7 +2373,8 @@ class GuiModelSwitchingTests(unittest.TestCase):
             )
             dialog = self._session_dialog()
             dialog._pred_files = files
-            dialog._pred_data = old_data
+            _set_active_state(dialog, old_data)
+            old_state = dialog._model_states[0]
             dialog._model_combo.addItem("model_0", 0)
             dialog._model_combo.addItem("model_1", 1)
             dialog._model_combo.setCurrentIndex(1)
@@ -2340,7 +2418,51 @@ class GuiModelSwitchingTests(unittest.TestCase):
         self.assertEqual(self._settings()._values[SETTINGS_KEY_MODEL_RANK], 1)
         self._build_token_map.assert_called_once_with(new_data.structure_path)
         self.assertIs(dialog._token_map, prepared_map)
-        self.assertEqual(dialog._token_map_obj, "target_model_1")
+        self.assertEqual(set(dialog._model_states), {0, 1})
+        self.assertIs(dialog._model_states[0], old_state)
+        self.assertIs(dialog._model_states[1].data, new_data)
+
+    def test_switching_back_to_stored_rank_still_reloads_and_reuses_state(self) -> None:
+        files = _SessionPredictionFiles(Path("/tmp"), ranks=(0, 1))
+        original_zero = types.SimpleNamespace(rank=0)
+        original_one = types.SimpleNamespace(rank=1)
+        reloaded_zero = types.SimpleNamespace(
+            provider="structure_only",
+            rank=0,
+            structure_path=files.structure_path(0),
+            token_plddt=np.array([0.95], dtype=np.float32),
+            confidence=None,
+            summary_confidence=None,
+            pae=None,
+            pde=None,
+            contact_probs=None,
+        )
+        zero_state = ModelState(0, original_zero, TokenMap(()))
+        one_state = ModelState(1, original_one, TokenMap(()))
+        dialog = self._session_dialog()
+        dialog._pred_files = files
+        dialog._model_states = {0: zero_state, 1: one_state}
+        dialog._active_model_rank = 1
+        dialog._model_combo.addItem("model_0", 0)
+        dialog._model_combo.addItem("model_1", 1)
+        dialog._model_combo.setCurrentIndex(0)
+        dialog._job_runner = _ManualJobRunner()
+        _PYMOL.cmd = _Cmd(objects={"target_model_0", "target_model_1"})
+
+        with mock.patch(
+            "FoldQC.loader.load_prediction_data",
+            return_value=reloaded_zero,
+        ) as load_data:
+            dialog._on_model_changed()
+            self.assertEqual(len(dialog._job_runner.jobs), 1)
+            dialog._job_runner.run_next()
+
+        load_data.assert_called_once()
+        self.assertEqual(load_data.call_args.args[1], 0)
+        self.assertIs(dialog._model_states[0], zero_state)
+        self.assertIs(zero_state.data, reloaded_zero)
+        self.assertIs(dialog._model_states[1], one_state)
+        self.assertEqual(dialog._active_model_rank, 0)
 
     def test_model_switch_failure_restores_committed_rank_and_data(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2349,7 +2471,8 @@ class GuiModelSwitchingTests(unittest.TestCase):
             old_data = types.SimpleNamespace(rank=0)
             dialog = self._session_dialog()
             dialog._pred_files = files
-            dialog._pred_data = old_data
+            _set_active_state(dialog, old_data)
+            old_state = dialog._model_states[0]
             dialog._model_combo.addItem("model_0", 0)
             dialog._model_combo.addItem("model_1", 1)
             dialog._model_combo.setCurrentIndex(1)
@@ -2365,6 +2488,8 @@ class GuiModelSwitchingTests(unittest.TestCase):
                 dialog._job_runner.run_next()
 
         self.assertIs(dialog._pred_data, old_data)
+        self.assertEqual(set(dialog._model_states), {0})
+        self.assertIs(dialog._model_states[0], old_state)
         self.assertEqual(dialog._model_combo.currentData(), 0)
         self.assertFalse(dialog._loading_data)
         self.assertEqual(msg.warnings, [(APP_TITLE, "broken model")])
@@ -2376,7 +2501,8 @@ class GuiModelSwitchingTests(unittest.TestCase):
         new_data = types.SimpleNamespace(rank=1)
         dialog = self._session_dialog()
         dialog._pred_files = files
-        dialog._pred_data = old_data
+        _set_active_state(dialog, old_data)
+        old_state = dialog._model_states[0]
         dialog._model_combo.addItem("model_0", 0)
         dialog._model_combo.addItem("model_1", 1)
         dialog._model_combo.setCurrentIndex(1)
@@ -2396,6 +2522,8 @@ class GuiModelSwitchingTests(unittest.TestCase):
             dialog._job_runner.run_next()
 
         self.assertIs(dialog._pred_data, old_data)
+        self.assertEqual(set(dialog._model_states), {0})
+        self.assertIs(dialog._model_states[0], old_state)
         self.assertEqual(dialog._model_combo.currentData(), 0)
         self.assertFalse(dialog._loading_data)
 
@@ -2430,10 +2558,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         old_warning = (str(old_data.structure_path), "target_model_0")
         dialog = self._session_dialog()
         dialog._pred_files = files
-        dialog._pred_data = old_data
-        dialog._token_map = old_map
-        dialog._token_map_obj = "target_model_0"
-        dialog._token_map_structure_path = old_data.structure_path
+        _set_active_state(dialog, old_data, old_map)
         dialog._paint_mappings = {old_warning: old_mapping}
         dialog._accepted_token_overlap_warnings = {old_warning}
         dialog._model_combo.addItem("model_0", 0)
@@ -2461,8 +2586,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
 
         self.assertIs(dialog._pred_data, old_data)
         self.assertIs(dialog._token_map, old_map)
-        self.assertEqual(dialog._token_map_obj, "target_model_0")
-        self.assertEqual(dialog._token_map_structure_path, old_data.structure_path)
+        self.assertEqual(dialog._active_model_rank, 0)
         self.assertIs(dialog._paint_mappings[old_warning], old_mapping)
         self.assertEqual(dialog._accepted_token_overlap_warnings, {old_warning})
         self.assertEqual(dialog._model_combo.currentData(), 0)
@@ -2470,7 +2594,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
     def test_selecting_committed_model_submits_no_job(self) -> None:
         dialog = self._session_dialog()
         dialog._pred_files = _SessionPredictionFiles(Path("/tmp"), ranks=(0,))
-        dialog._pred_data = types.SimpleNamespace(rank=0)
+        _set_active_state(dialog, types.SimpleNamespace(rank=0))
         dialog._model_combo.addItem("model_0", 0)
         dialog._job_runner = _ManualJobRunner()
 
@@ -2497,7 +2621,9 @@ class GuiModelSwitchingTests(unittest.TestCase):
         )
         dialog = self._session_dialog()
         dialog._pred_files = files
-        dialog._pred_data = old_data
+        _set_active_state(dialog, old_data)
+        state = dialog._model_states[0]
+        token_map = state.token_map
         dialog._job_runner = _ManualJobRunner()
         target = _PlotTarget(
             kind="single",
@@ -2525,6 +2651,9 @@ class GuiModelSwitchingTests(unittest.TestCase):
             dialog._job_runner.run_next()
 
         self.assertIs(dialog._pred_data, new_data)
+        self.assertIs(dialog._model_states[0], state)
+        self.assertIs(state.data, new_data)
+        self.assertIs(state.token_map, token_map)
         self.assertEqual(resumed, [new_data])
         self.assertTrue(calls[0][2]["load_pae"])
         self.assertTrue(calls[0][2]["load_pde"])
@@ -2541,7 +2670,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         )
         dialog = self._session_dialog()
         dialog._pred_files = files
-        dialog._pred_data = data
+        _set_active_state(dialog, data)
         dialog._job_runner = _ManualJobRunner()
         target = _PlotTarget(
             kind="single",
@@ -2573,17 +2702,25 @@ class GuiModelSwitchingTests(unittest.TestCase):
             )
             for rank in (0, 1)
         ]
+        states = [
+            ModelState(
+                rank,
+                old_data[rank],
+                _token_map(_token(0)),
+            )
+            for rank in (0, 1)
+        ]
         members = [
-            types.SimpleNamespace(
-                rank=rank,
+            ensemble.EnsembleMember(
                 obj_name=f"target_model_{rank}",
-                data=old_data[rank],
-                token_map=_token_map(_token(0)),
+                model_state=states[rank],
             )
             for rank in (0, 1)
         ]
         dialog = self._session_dialog()
         dialog._pred_files = files
+        dialog._model_states = {state.rank: state for state in states}
+        dialog._active_model_rank = 0
         dialog._ensemble_members = members
         dialog._job_runner = _ManualJobRunner()
         target = _PlotTarget(
@@ -2639,7 +2776,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         )
         dialog = self._session_dialog()
         dialog._pred_files = files
-        dialog._pred_data = old_data
+        _set_active_state(dialog, old_data)
         dialog._job_runner = _ManualJobRunner()
         target = _PlotTarget(
             kind="single",
@@ -3131,7 +3268,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
     def test_confidence_summary_update_writes_text_box(self) -> None:
         dialog = _new_dialog()
         dialog._conf_browser = _TextBox()
-        dialog._pred_data = types.SimpleNamespace(
+        data = types.SimpleNamespace(
             provider="boltz",
             confidence={
                 "confidence_score": 0.67,
@@ -3150,6 +3287,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
                 "affinity_probability_binary": 0.8765,
             },
         )
+        _set_active_state(dialog, data)
 
         dialog._update_confidence_summary()
 
@@ -3183,12 +3321,11 @@ class GuiModelSwitchingTests(unittest.TestCase):
         dialog = _new_dialog()
         canonical_values = np.array([0.1, 0.2], dtype=np.float32)
         token_map = _token_map(_token(0), _token(1))
-        dialog._pred_data = types.SimpleNamespace(
+        data = types.SimpleNamespace(
             token_plddt=canonical_values,
             token_plddt_source="provider_token",
         )
-        dialog._token_map = token_map
-        dialog._build_token_map_if_needed = lambda _obj_name: None
+        _set_active_state(dialog, data, token_map)
         dialog._validate_token_count = lambda values, tm, _obj: self.assertEqual(
             len(values), len(tm)
         )
@@ -3225,8 +3362,8 @@ class GuiModelSwitchingTests(unittest.TestCase):
         dialog = _new_dialog()
         dialog._stats_browser = _TextBox("Previous statistics")
         dialog._ensemble_members = None
-        dialog._pred_data = object()
-        dialog._token_map = object()
+        _set_active_state(dialog, types.SimpleNamespace(rank=0))
+        _set_active_state(dialog, dialog._pred_data, object())
         dialog._get_obj_name = lambda: "target_model_0"
         dialog._prop_combo = types.SimpleNamespace(currentData=lambda: "plddt")
         dialog._palette_combo = types.SimpleNamespace(
@@ -3235,7 +3372,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         dialog._palette_reverse_chk = types.SimpleNamespace(isChecked=lambda: False)
         dialog._get_vmin_vmax = lambda: (None, None)
         dialog._ref_edit = types.SimpleNamespace(text=lambda: "")
-        dialog._build_token_map_if_needed = lambda _obj_name: None
+        dialog._require_active_model_state = lambda: dialog._active_model_state
         dialog._compute_property_for = lambda *_args: None
 
         dialog._apply_coloring()
@@ -3246,19 +3383,23 @@ class GuiModelSwitchingTests(unittest.TestCase):
         dialog = _new_dialog()
         dialog._ensemble_members = None
         dialog._ensemble_group_name = None
-        dialog._pred_data = types.SimpleNamespace(
+        data = types.SimpleNamespace(
             structure_path=Path("/tmp/target_model_0.cif"),
             token_plddt=np.array([0.8, 0.9], dtype=np.float32),
         )
         dialog._pred_files = object()
-        dialog._token_map = _token_map(_token(0, res_num=1), _token(1, res_num=2))
+        _set_active_state(
+            dialog,
+            data,
+            _token_map(_token(0, res_num=1), _token(1, res_num=2)),
+        )
         dialog._get_obj_name = lambda: obj_name
         dialog._prop_combo = types.SimpleNamespace(currentData=lambda: "plddt")
         dialog._selected_palette = lambda: ("blue_white_red", False)
         dialog._get_vmin_vmax = lambda: (None, None)
         dialog._ref_edit = types.SimpleNamespace(text=lambda: "")
         dialog._ensure_current_data_for_property = lambda _prop: None
-        dialog._build_token_map_if_needed = lambda _obj_name: None
+        dialog._require_active_model_state = lambda: dialog._active_model_state
         dialog.setWindowTitle = lambda _title: None
         dialog._update_statistics_for_single = lambda *_args, **_kwargs: None
         return dialog
@@ -3369,17 +3510,18 @@ class GuiModelSwitchingTests(unittest.TestCase):
         self.assertEqual(cmd.get_model_calls, 1)
         self.assertEqual(paint.call_count, 2)
 
-    def test_clearing_token_context_also_clears_paint_mappings(self) -> None:
+    def test_clearing_viewer_context_preserves_model_state(self) -> None:
         dialog = _new_dialog()
-        dialog._token_map = _token_map(_token(0))
-        dialog._token_map_obj = "target_model_0"
-        dialog._token_map_structure_path = Path("/tmp/target_model_0.cif")
+        data = types.SimpleNamespace(rank=0)
+        token_map = _token_map(_token(0))
+        _set_active_state(dialog, data, token_map)
         dialog._paint_mappings = {("path", "target_model_0"): object()}
         dialog._accepted_token_overlap_warnings = {("path", "target_model_0")}
 
-        dialog._clear_token_map_cache()
+        dialog._clear_viewer_mapping_cache()
 
-        self.assertIsNone(dialog._token_map)
+        self.assertIs(dialog._pred_data, data)
+        self.assertIs(dialog._token_map, token_map)
         self.assertEqual(dialog._paint_mappings, {})
         self.assertEqual(dialog._accepted_token_overlap_warnings, set())
 
@@ -3387,17 +3529,14 @@ class GuiModelSwitchingTests(unittest.TestCase):
         path = Path("/tmp/target_model_0.cif")
         prepared_map = _token_map(_token(0))
         dialog = _new_dialog()
-        dialog._pred_data = types.SimpleNamespace(structure_path=path)
-        dialog._token_map = prepared_map
-        dialog._token_map_obj = "target_model_0"
-        dialog._token_map_structure_path = path
+        _set_active_state(dialog, types.SimpleNamespace(structure_path=path))
+        _set_active_state(dialog, dialog._pred_data, prepared_map)
         self._build_token_map.reset_mock()
 
-        dialog._build_token_map_if_needed("other_viewer_object")
+        dialog._require_active_model_state()
 
         self._build_token_map.assert_not_called()
         self.assertIs(dialog._token_map, prepared_map)
-        self.assertEqual(dialog._token_map_obj, "other_viewer_object")
 
     def test_plddt_class_coloring_uses_token_overlap_warning(self) -> None:
         cmd = _Cmd(objects=("other",), enabled=("other",))
@@ -3408,12 +3547,15 @@ class GuiModelSwitchingTests(unittest.TestCase):
         msg = _PYMOL.Qt.QtWidgets.QMessageBox
         msg.question_response = msg.Cancel
         dialog = _new_dialog()
-        dialog._pred_data = types.SimpleNamespace(
+        data = types.SimpleNamespace(
             structure_path=Path("/tmp/target_model_0.cif"),
             token_plddt=np.array([0.8, 0.9], dtype=np.float32),
         )
-        dialog._token_map = _token_map(_token(0, res_num=1), _token(1, res_num=2))
-        dialog._build_token_map_if_needed = lambda _obj_name: None
+        _set_active_state(
+            dialog,
+            data,
+            _token_map(_token(0, res_num=1), _token(1, res_num=2)),
+        )
         dialog.setWindowTitle = lambda _title: None
         dialog._update_statistics_for_single = lambda *_args, **_kwargs: None
 
@@ -3446,11 +3588,12 @@ class GuiModelSwitchingTests(unittest.TestCase):
             has_plddt=True,
             supports_ensemble=False,
         )
-        dialog._pred_data = types.SimpleNamespace(
+        data = types.SimpleNamespace(
             token_plddt=np.array([0.9], dtype=np.float32),
             confidence=None,
             summary_confidence=None,
         )
+        _set_active_state(dialog, data)
         _set_metric_combo(dialog, enabled)
 
         dialog._update_property_availability()
@@ -3476,11 +3619,12 @@ class GuiModelSwitchingTests(unittest.TestCase):
             has_plddt=False,
             supports_ensemble=False,
         )
-        dialog._pred_data = types.SimpleNamespace(
+        data = types.SimpleNamespace(
             token_plddt=None,
             confidence={"chains_iptm": {"0": 0.8}},
             summary_confidence=None,
         )
+        _set_active_state(dialog, data)
         _set_metric_combo(dialog, enabled)
 
         dialog._update_property_availability()
@@ -3502,7 +3646,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
             has_plddt=True,
             supports_ensemble=False,
         )
-        dialog._pred_data = types.SimpleNamespace(
+        data = types.SimpleNamespace(
             token_plddt=np.array([0.9], dtype=np.float32),
             confidence={
                 "confidence_score": 0.91,
@@ -3511,6 +3655,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
             },
             summary_confidence=None,
         )
+        _set_active_state(dialog, data)
         _set_metric_combo(dialog, enabled)
 
         dialog._update_property_availability()
@@ -3536,11 +3681,12 @@ class GuiModelSwitchingTests(unittest.TestCase):
             has_plddt=True,
             supports_ensemble=True,
         )
-        dialog._pred_data = types.SimpleNamespace(
+        data = types.SimpleNamespace(
             token_plddt=np.array([0.8], dtype=np.float32),
             confidence=None,
             summary_confidence=None,
         )
+        _set_active_state(dialog, data)
         dialog._ensemble_members = None
         _set_metric_combo(dialog, enabled)
 
@@ -3571,11 +3717,12 @@ class GuiModelSwitchingTests(unittest.TestCase):
             has_plddt=True,
             supports_ensemble=True,
         )
-        dialog._pred_data = types.SimpleNamespace(
+        data = types.SimpleNamespace(
             token_plddt=np.array([0.8], dtype=np.float32),
             confidence=None,
             summary_confidence=None,
         )
+        _set_active_state(dialog, data)
         dialog._ensemble_members = [types.SimpleNamespace(rank=0)]
         _set_metric_combo(dialog, enabled)
 
@@ -3601,11 +3748,12 @@ class GuiModelSwitchingTests(unittest.TestCase):
             has_plddt=False,
             supports_ensemble=False,
         )
-        dialog._pred_data = types.SimpleNamespace(
+        data = types.SimpleNamespace(
             token_plddt=None,
             confidence=None,
             summary_confidence=None,
         )
+        _set_active_state(dialog, data)
         _set_metric_combo(dialog, enabled)
 
         dialog._update_property_availability()
@@ -4187,7 +4335,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
                 data=data,
                 token_map=token_map,
             )
-            dialog._pred_data = data
+            _set_active_state(dialog, data)
             dialog._prop_combo = types.SimpleNamespace(currentData=lambda: "plddt")
             dialog._ref_edit = _LineEdit("chain L")
             dialog._resolve_plot_target = lambda: target
@@ -4248,7 +4396,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
             data=data,
             token_map=token_map,
         )
-        dialog._pred_data = data
+        _set_active_state(dialog, data)
         dialog._prop_combo = types.SimpleNamespace(currentData=lambda: "pde_contact")
         dialog._ref_edit = _LineEdit("resname LIG")
         dialog._cutoff_edit = _LineEdit("7.5")
@@ -4318,7 +4466,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
             data=data,
             token_map=token_map,
         )
-        dialog._pred_data = data
+        _set_active_state(dialog, data)
         dialog._prop_combo = types.SimpleNamespace(currentData=lambda: "pae_contact")
         dialog._ref_edit = _LineEdit("resname LIG")
         dialog._cutoff_edit = _LineEdit("7.5")
@@ -4466,7 +4614,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
             root = Path(tmp)
             dialog = _new_dialog()
             dialog._pred_files = _CsvPredictionFiles(root, ranks=(0,))
-            dialog._pred_data = types.SimpleNamespace(rank=0)
+            _set_active_state(dialog, types.SimpleNamespace(rank=0))
             dialog._prop_combo = types.SimpleNamespace(currentData=lambda: "plddt")
             captured = []
             dialog._export_csv_to_path = lambda path: captured.append(Path(path))
@@ -4527,7 +4675,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         dialog._prop_combo = types.SimpleNamespace(currentData=lambda: "plddt_class")
         dialog._resolve_reference_indices = lambda *args, **kwargs: []
         dialog._ensure_current_data_for_property = lambda _prop: None
-        dialog._pred_data = target.data
+        _set_active_state(dialog, target.data)
         dialog._compute_line_plot_data = lambda *_args, **_kwargs: (
             np.arange(5, dtype=np.int32),
             [
@@ -4578,7 +4726,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         dialog._prop_combo = types.SimpleNamespace(currentData=lambda: "pae_row_mean")
         dialog._resolve_reference_indices = lambda *args, **kwargs: []
         dialog._ensure_current_data_for_property = lambda _prop: None
-        dialog._pred_data = target.data
+        _set_active_state(dialog, target.data)
         dialog._compute_line_plot_data = lambda *_args, **_kwargs: (
             np.arange(4, dtype=np.int32),
             [
@@ -4639,7 +4787,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         )
         dialog._resolve_reference_indices = lambda *args, **kwargs: []
         dialog._ensure_current_data_for_property = lambda _prop: None
-        dialog._pred_data = target.data
+        _set_active_state(dialog, target.data)
         dialog._compute_line_plot_data = lambda *_args, **_kwargs: (
             np.arange(4, dtype=np.int32),
             [
@@ -4758,7 +4906,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         )
         dialog._resolve_reference_indices = lambda *args, **kwargs: [0, 1]
         dialog._ensure_current_data_for_property = lambda _prop: None
-        dialog._pred_data = target.data
+        _set_active_state(dialog, target.data)
         dialog._compute_line_plot_data = lambda *_args, **_kwargs: (
             np.array([0, 1], dtype=np.int32),
             [
@@ -4836,7 +4984,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
             _token(2, chain_id="B"),
         )
         dialog._pred_files = types.SimpleNamespace(has_pae=True, has_pde=False)
-        dialog._pred_data = types.SimpleNamespace(
+        data = types.SimpleNamespace(
             rank=0,
             pae=np.array(
                 [
@@ -4850,6 +4998,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
             contact_probs=None,
             token_plddt=None,
         )
+        _set_active_state(dialog, data, token_map)
         target = _PlotTarget(
             kind="single",
             label="target_model_0",
@@ -4920,7 +5069,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         )
         dialog._resolve_plot_target = lambda: target
         dialog._pred_files = types.SimpleNamespace(has_pae=False, has_pde=True)
-        dialog._pred_data = None
+        _set_active_state(dialog, None)
         dialog._ref_edit = _LineEdit("chain B")
         dialog._resolve_reference_indices = lambda *args, **kwargs: [1]
         dialog._get_vmin_vmax = lambda: (None, None)
@@ -4985,7 +5134,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         )
         dialog._resolve_plot_target = lambda: target
         dialog._pred_files = types.SimpleNamespace(has_pae=False, has_pde=True)
-        dialog._pred_data = None
+        _set_active_state(dialog, None)
         dialog._ref_edit = _LineEdit("")
         dialog._resolve_reference_indices = lambda *args, **kwargs: []
         dialog._get_vmin_vmax = lambda: (None, None)
@@ -5506,7 +5655,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
 
     def test_fingerprint_warns_when_reference_selection_is_empty(self) -> None:
         dialog = _new_dialog()
-        dialog._pred_data = object()
+        _set_active_state(dialog, types.SimpleNamespace(rank=0))
         dialog._get_obj_name = lambda: "target_model_0"
         dialog._ref_edit = _LineEdit("")
         msg = _PYMOL.Qt.QtWidgets.QMessageBox
@@ -5527,16 +5676,16 @@ class GuiModelSwitchingTests(unittest.TestCase):
         plddt = np.array([0.2, 0.8, 0.3, 0.9], dtype=np.float32)
         pae = np.arange(16, dtype=np.float32).reshape(4, 4)
         pde = np.arange(16, dtype=np.float32).reshape(4, 4) + 100.0
-        dialog._pred_data = types.SimpleNamespace(
+        data = types.SimpleNamespace(
             token_plddt=plddt,
             pae=pae,
             pde=pde,
         )
-        dialog._token_map = token_map
+        _set_active_state(dialog, data, token_map)
         dialog._get_obj_name = lambda: "target_model_0"
         dialog._ref_edit = _LineEdit("resname LIG")
         dialog._cutoff_edit = _LineEdit("7.5")
-        dialog._build_token_map_if_needed = lambda _obj_name: None
+        dialog._require_active_model_state = lambda: dialog._active_model_state
 
         calls = []
 
@@ -5648,7 +5797,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         dialog = _new_dialog()
         token_map = [_token(i) for i in range(5)]
         plddt = np.linspace(0.5, 0.9, len(token_map), dtype=np.float32)
-        dialog._pred_data = types.SimpleNamespace(
+        data = types.SimpleNamespace(
             rank=0,
             token_plddt=plddt,
             pae=None,
@@ -5660,11 +5809,11 @@ class GuiModelSwitchingTests(unittest.TestCase):
             has_pde=False,
             has_contact_probs=False,
         )
-        dialog._token_map = token_map
+        _set_active_state(dialog, data, token_map)
         dialog._get_obj_name = lambda: "target_model_0"
         dialog._ref_edit = _LineEdit("chain B")
         dialog._cutoff_edit = _LineEdit("5.0")
-        dialog._build_token_map_if_needed = lambda _obj_name: None
+        dialog._require_active_model_state = lambda: dialog._active_model_state
         dialog._reload_prediction_data = lambda *args, **kwargs: dialog._pred_data
         dialog._plot_windows = []
 
