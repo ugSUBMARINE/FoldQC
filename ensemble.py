@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
+from .compute import plddt_values_for
 from .mol_viewer import (
     ObjectPaintMapping,
     inspect_object_tokens,
@@ -142,16 +143,13 @@ def _data_load_flags(existing: Any | None) -> dict[str, bool]:
         "load_pde": existing is not None and getattr(existing, "pde", None) is not None,
         "load_contact_probs": existing is not None
         and getattr(existing, "contact_probs", None) is not None,
-        "load_structure_plddt": True,
-        "load_plddt": True,
+        "load_token_plddt": True,
     }
 
 
 def _has_plddt(data: Any | None) -> bool:
-    return data is not None and (
-        getattr(data, "plddt", None) is not None
-        or getattr(data, "structure_plddt", None) is not None
-    )
+    values, _source = plddt_values_for(data)
+    return values is not None
 
 
 def prepare_ensemble(
@@ -224,8 +222,7 @@ def prepare_ensemble(
 
 
 def _member_plddt(member: Any) -> np.ndarray:
-    data = member.data
-    plddt = data.plddt if data.plddt is not None else data.structure_plddt
+    plddt, _source = plddt_values_for(member.data)
     if plddt is None:
         raise ValueError(f"pLDDT data are not available for model_{member.rank}.")
     return plddt
@@ -257,7 +254,7 @@ def build_members(
             rank,
             load_pae=False,
             load_pde=False,
-            load_structure_plddt=True,
+            load_token_plddt=True,
         )
         if reference_token_map is None:
             reference_token_map = build_token_map(data.structure_path)
@@ -289,18 +286,13 @@ def validate_members(members: list[EnsembleMember]) -> None:
                 f"{len(member.token_map)} tokens, but {ref.obj_name} maps "
                 f"to {ref_len} tokens."
             )
-        if member.data.plddt is not None and len(member.data.plddt) != ref_len:
-            raise ValueError(
-                f"pLDDT length mismatch for model_{member.rank}: "
-                f"{len(member.data.plddt)} values for {ref_len} tokens."
-            )
         if (
-            member.data.structure_plddt is not None
-            and len(member.data.structure_plddt) != ref_len
+            member.data.token_plddt is not None
+            and len(member.data.token_plddt) != ref_len
         ):
             raise ValueError(
-                f"Structure pLDDT length mismatch for model_{member.rank}: "
-                f"{len(member.data.structure_plddt)} values for {ref_len} tokens."
+                f"pLDDT length mismatch for model_{member.rank}: "
+                f"{len(member.data.token_plddt)} values for {ref_len} tokens."
             )
 
 
@@ -313,11 +305,7 @@ def prepare_metrics(
     ref_member = next((m for m in members if m.rank == 0), members[0])
     aligned_coords = None
     if not skip_alignment:
-        plddt = (
-            ref_member.data.plddt
-            if ref_member.data.plddt is not None
-            else ref_member.data.structure_plddt
-        )
+        plddt, _source = plddt_values_for(ref_member.data)
         if plddt is None:
             raise ValueError("Automatic ensemble alignment requires pLDDT data.")
         core_indices = select_alignment_core(ref_member.token_map, plddt)
@@ -330,16 +318,7 @@ def prepare_metrics(
         if aligned_coords is not None
         else compute_aligned_per_token_rmsd(members)
     )
-    plddt_arrays = []
-    for member in members:
-        plddt = (
-            member.data.plddt
-            if member.data.plddt is not None
-            else member.data.structure_plddt
-        )
-        if plddt is None:
-            raise ValueError(f"pLDDT data are not available for model_{member.rank}.")
-        plddt_arrays.append(plddt)
+    plddt_arrays = [_member_plddt(member) for member in members]
     plddt_mean, plddt_std = compute_metric_consensus(plddt_arrays)
     return EnsembleMetrics(
         aligned=not skip_alignment,

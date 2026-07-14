@@ -21,6 +21,7 @@ from ..loader_utils import (
     _normalise_confidence,
     _safe_object_name,
 )
+from ..token_map import extract_structure_plddt
 from .base import BaseProvider, has_ancestor_candidate
 
 
@@ -66,7 +67,7 @@ def _scan_boltz_dir(pred_dir: Path) -> PredictionFiles:
         pred_dir=pred_dir,
         provider="boltz",
         input_path=pred_dir,
-        capabilities={"structure_plddt"},
+        capabilities={"plddt"},
     )
 
     rank_re = re.compile(rf"{re.escape(name)}_model_(\d+)")
@@ -119,8 +120,6 @@ def _scan_boltz_dir(pred_dir: Path) -> PredictionFiles:
         model.pae_path = pae.get(model.rank)
         model.pde_path = pde.get(model.rank)
 
-    if plddt:
-        files.capabilities.add("plddt")
     if pae:
         files.capabilities.add("pae")
     if pde:
@@ -159,7 +158,7 @@ def _scan_boltz_lab_dir(pred_dir: Path) -> PredictionFiles:
         pred_dir=pred_dir,
         provider="boltz_lab",
         input_path=pred_dir,
-        capabilities={"structure_plddt"},
+        capabilities={"plddt"},
     )
 
     for rank, item in enumerate(sorted(candidates, key=lambda item: item.sample_index)):
@@ -222,7 +221,7 @@ def _scan_boltz_api_dir(pred_dir: Path) -> PredictionFiles:
         pred_dir=pred_dir,
         provider="boltz_api",
         input_path=pred_dir,
-        capabilities={"structure_plddt"},
+        capabilities={"plddt"},
     )
 
     for rank, item in enumerate(candidates):
@@ -256,10 +255,23 @@ def _load_boltz_model_data(
     load_pae: bool,
     load_pde: bool,
     load_embeddings: bool,
-    load_plddt: bool,
+    load_token_plddt: bool,
 ) -> None:
-    if load_plddt and model.plddt_path is not None:
-        data.plddt = np.load(model.plddt_path)["plddt"]
+    if load_token_plddt and model.plddt_path is not None:
+        token_plddt = np.asarray(np.load(model.plddt_path)["plddt"], dtype=np.float32)
+        if token_plddt.ndim != 1:
+            raise ValueError(
+                f"Boltz token pLDDT array for {model.structure_path.name} must be "
+                f"one-dimensional; got shape {token_plddt.shape}."
+            )
+        expected = len(extract_structure_plddt(model.structure_path))
+        if len(token_plddt) != expected:
+            raise ValueError(
+                f"Boltz token pLDDT length {len(token_plddt)} does not match "
+                f"{expected} tokens in {model.structure_path.name}."
+            )
+        data.token_plddt = token_plddt
+        data.token_plddt_source = "provider_token"
 
     if load_pae and model.pae_path is not None:
         data.pae = np.load(model.pae_path)["pae"]
@@ -381,7 +393,7 @@ class BoltzProvider(BaseProvider):
             load_pae=options.load_pae,
             load_pde=options.load_pde,
             load_embeddings=options.load_embeddings,
-            load_plddt=options.load_plddt,
+            load_token_plddt=options.load_token_plddt,
         )
 
 

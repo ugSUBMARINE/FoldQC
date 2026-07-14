@@ -393,7 +393,7 @@ class ColoringController:
             self._ensure_member_data_for_property(
                 member, metrics.PROPERTY_BY_KEY["plddt_class"]
             )
-            values, _source_label = compute.plddt_values_for(member.data)
+            values, _source = compute.plddt_values_for(member.data)
             if values is None:
                 QtWidgets.QMessageBox.warning(
                     self,
@@ -445,7 +445,7 @@ class ColoringController:
         Writes preferred pLDDT values to B-factors before colouring, so previous
         plugin visualisations cannot corrupt the result.
         """
-        values, _source_label = compute.plddt_values_for(self._pred_data)
+        values, _source = compute.plddt_values_for(self._pred_data)
         if values is None:
             QtWidgets.QMessageBox.warning(
                 self,

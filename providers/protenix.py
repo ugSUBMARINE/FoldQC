@@ -68,7 +68,7 @@ def _scan_protenix_dir(pred_dir: Path) -> PredictionFiles:
         pred_dir=pred_dir,
         provider="protenix",
         input_path=pred_dir,
-        capabilities={"structure_plddt"},
+        capabilities={"plddt"},
     )
 
     candidates.sort(
@@ -107,7 +107,7 @@ def _scan_protenix_dir(pred_dir: Path) -> PredictionFiles:
         )
 
     if any(model.confidence_path is not None for model in files.models):
-        files.capabilities.update({"pae", "pde", "contact_probs", "plddt"})
+        files.capabilities.update({"pae", "pde", "contact_probs"})
     return files
 
 
@@ -118,9 +118,9 @@ def _load_protenix_model_data(
     load_pae: bool,
     load_pde: bool,
     load_contact_probs: bool,
-    load_plddt: bool,
+    load_token_plddt: bool,
 ) -> None:
-    needs_full = load_pae or load_pde or load_contact_probs or load_plddt
+    needs_full = load_pae or load_pde or load_contact_probs or load_token_plddt
     if not needs_full or model.confidence_path is None:
         return
 
@@ -135,13 +135,14 @@ def _load_protenix_model_data(
             data.pde = _squeezed_float32_array(pde)
     if load_contact_probs and "contact_probs" in full:
         data.contact_probs = _squeezed_float32_array(full["contact_probs"])
-    if load_plddt:
+    if load_token_plddt:
         atom_plddt = _first_present(full, ("atom_plddt", "atom_plddts"))
         if atom_plddt is not None:
-            data.plddt = _collapse_atom_plddts_to_tokens(
+            data.token_plddt = _collapse_atom_plddts_to_tokens(
                 model.structure_path,
                 np.asarray(atom_plddt, dtype=np.float32),
             )
+            data.token_plddt_source = "provider_atom_mean"
 
 
 def _protenix_prediction_candidates(pred_dir: Path) -> list[_ProtenixCandidate]:
@@ -238,7 +239,7 @@ class ProtenixProvider(BaseProvider):
             load_pae=options.load_pae,
             load_pde=options.load_pde,
             load_contact_probs=options.load_contact_probs,
-            load_plddt=options.load_plddt,
+            load_token_plddt=options.load_token_plddt,
         )
 
     def is_internal_candidate(self, candidate, candidates):

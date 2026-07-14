@@ -12,7 +12,7 @@ from collections.abc import Sequence
 
 import numpy as np
 
-from . import metrics, properties
+from . import compute, metrics, properties
 from .palettes import categorical_color
 from .token_map import TokenMap
 
@@ -64,14 +64,13 @@ def has_multiple_token_chains(token_map: TokenMap) -> bool:
     return len(chains) > 1
 
 
-def line_member_load_flags(key: str) -> tuple[bool, bool, bool, bool, bool]:
+def line_member_load_flags(key: str) -> tuple[bool, bool, bool, bool]:
     """Return PAE/PDE/contact/pLDDT load flags for one line property."""
     compute_key = metrics.line_compute_key(key)
     return (
         compute_key.startswith("pae"),
         compute_key.startswith("pde"),
         compute_key.startswith("contact_prob"),
-        compute_key == "plddt",
         compute_key == "plddt",
     )
 
@@ -331,9 +330,7 @@ def fingerprint_arrays_for_data(
     np.ndarray | None,
 ]:
     """Return pLDDT, PAE/PDE, and interaction-to-ref arrays for one model."""
-    plddt = getattr(data, "structure_plddt", None)
-    if plddt is None:
-        plddt = getattr(data, "plddt", None)
+    plddt, _source = compute.plddt_values_for(data)
     pae_to_ref = None
     pae_from_ref = None
     pae = getattr(data, "pae", None)
@@ -377,9 +374,7 @@ def within_site_matrix_mean(
 
 def site_summary_values(data, site_indices: list[int]) -> dict[str, float]:
     """Return mean pLDDT, PAE, and PDE values for a resolved site."""
-    plddt = getattr(data, "structure_plddt", None)
-    if plddt is None:
-        plddt = getattr(data, "plddt", None)
+    plddt, _source = compute.plddt_values_for(data)
     plddt_mean = (
         float("nan")
         if plddt is None

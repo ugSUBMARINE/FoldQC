@@ -20,52 +20,45 @@ def _token(idx: int, *, chain_id: str = "A") -> TokenInfo:
 EMPTY_TOKEN_MAP = TokenMap(())
 
 
-def test_plddt_values_for_prefers_structure_and_falls_back_to_provider() -> None:
-    structure = np.array([0.9, 0.8], dtype=np.float32)
-    provider = np.array([0.1, 0.2], dtype=np.float32)
+def test_plddt_values_for_returns_canonical_values_and_provenance() -> None:
+    canonical = np.array([0.9, 0.8], dtype=np.float32)
 
     values, source = compute.plddt_values_for(
-        types.SimpleNamespace(structure_plddt=structure, plddt=provider)
+        types.SimpleNamespace(
+            token_plddt=canonical,
+            token_plddt_source="provider_atom_mean",
+        )
     )
-    assert values is structure
-    assert source == "structure B-factors"
+    assert values is canonical
+    assert source == "provider_atom_mean"
 
-    values, source = compute.plddt_values_for(
-        types.SimpleNamespace(structure_plddt=None, plddt=provider)
-    )
-    assert values is provider
-    assert source == "provider pLDDT"
-
-    values, source = compute.plddt_values_for(
-        types.SimpleNamespace(structure_plddt=None, plddt=None)
-    )
+    values, source = compute.plddt_values_for(types.SimpleNamespace(token_plddt=None))
     assert values is None
-    assert source == ""
+    assert source is None
 
 
-def test_compute_plddt_uses_preferred_source_and_errors_when_missing() -> None:
-    structure = np.array([0.9, 0.8], dtype=np.float32)
-    provider = np.array([0.1, 0.2], dtype=np.float32)
+def test_compute_plddt_uses_canonical_values_and_errors_when_missing() -> None:
+    canonical = np.array([0.9, 0.8], dtype=np.float32)
 
     values = compute.compute_metric(
         "plddt",
-        types.SimpleNamespace(structure_plddt=structure, plddt=provider),
+        types.SimpleNamespace(token_plddt=canonical),
         EMPTY_TOKEN_MAP,
     )
-    np.testing.assert_array_equal(values, structure)
+    np.testing.assert_array_equal(values, canonical)
 
     with pytest.raises(compute.MissingMetricDataError):
         compute.compute_metric(
             "plddt",
-            types.SimpleNamespace(structure_plddt=None, plddt=None),
+            types.SimpleNamespace(token_plddt=None),
             EMPTY_TOKEN_MAP,
         )
 
 
 def test_plddt_class_routes_to_same_array_as_plddt() -> None:
     """plddt_class must be routable through compute_metric (same data as plddt)."""
-    structure = np.array([0.9, 0.5, 0.3], dtype=np.float32)
-    data = types.SimpleNamespace(structure_plddt=structure, plddt=None)
+    canonical = np.array([0.9, 0.5, 0.3], dtype=np.float32)
+    data = types.SimpleNamespace(token_plddt=canonical)
 
     plddt_result = compute.compute_metric("plddt", data, EMPTY_TOKEN_MAP)
     plddt_class_result = compute.compute_metric("plddt_class", data, EMPTY_TOKEN_MAP)
@@ -74,7 +67,7 @@ def test_plddt_class_routes_to_same_array_as_plddt() -> None:
     with pytest.raises(compute.MissingMetricDataError):
         compute.compute_metric(
             "plddt_class",
-            types.SimpleNamespace(structure_plddt=None, plddt=None),
+            types.SimpleNamespace(token_plddt=None),
             EMPTY_TOKEN_MAP,
         )
 

@@ -4,9 +4,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
+
+PlddtSource = Literal[
+    "structure_b_factor",
+    "provider_token",
+    "provider_atom_mean",
+]
 
 
 @dataclass
@@ -71,10 +77,6 @@ class PredictionFiles:
         return "plddt" in self.capabilities
 
     @property
-    def has_structure_plddt(self) -> bool:
-        return "structure_plddt" in self.capabilities
-
-    @property
     def has_affinity(self) -> bool:
         return self.affinity_file is not None
 
@@ -114,8 +116,8 @@ class PredictionData:
     structure_path: Path
     provider: str = "boltz"
     display_label: str = ""
-    structure_plddt: np.ndarray | None = None
-    plddt: np.ndarray | None = None
+    token_plddt: np.ndarray | None = None
+    token_plddt_source: PlddtSource | None = None
     pae: np.ndarray | None = None
     pde: np.ndarray | None = None
     contact_probs: np.ndarray | None = None

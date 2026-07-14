@@ -172,7 +172,6 @@ def _member(
     obj_name: str | None = None,
     token_count: int = 3,
     plddt=None,
-    structure_plddt=None,
 ) -> EnsembleMember:
     return EnsembleMember(
         rank=rank,
@@ -180,8 +179,8 @@ def _member(
         data=types.SimpleNamespace(
             rank=rank,
             structure_path=Path(f"/tmp/target_model_{rank}.cif"),
-            plddt=plddt,
-            structure_plddt=structure_plddt,
+            token_plddt=plddt,
+            token_plddt_source="structure_b_factor" if plddt is not None else None,
         ),
         token_map=TokenMap(tuple(_token(i) for i in range(token_count))),
     )
@@ -247,8 +246,8 @@ def test_build_members_loads_data_and_reuses_reference_token_map(monkeypatch) ->
         return types.SimpleNamespace(
             rank=rank,
             structure_path=Path(f"/tmp/target_model_{rank}.cif"),
-            plddt=None,
-            structure_plddt=np.array([0.8, 0.9], dtype=np.float32),
+            token_plddt=np.array([0.8, 0.9], dtype=np.float32),
+            token_plddt_source="structure_b_factor",
         )
 
     def fake_build_token_map(structure_path):
@@ -274,7 +273,7 @@ def test_build_members_loads_data_and_reuses_reference_token_map(monkeypatch) ->
     assert load_data_calls[0][2] == {
         "load_pae": False,
         "load_pde": False,
-        "load_structure_plddt": True,
+        "load_token_plddt": True,
     }
     assert members[0].token_map is members[1].token_map
 
@@ -301,8 +300,8 @@ def test_prepare_ensemble_reuses_loaded_rank_and_prepares_missing_rank(
     existing = types.SimpleNamespace(
         rank=0,
         structure_path=Path("/tmp/target_model_0.cif"),
-        plddt=None,
-        structure_plddt=np.array([0.8, 0.9, 1.0], dtype=np.float32),
+        token_plddt=np.array([0.8, 0.9, 1.0], dtype=np.float32),
+        token_plddt_source="structure_b_factor",
         pae=np.ones((3, 3), dtype=np.float32),
         pde=None,
         contact_probs=None,
@@ -316,8 +315,8 @@ def test_prepare_ensemble_reuses_loaded_rank_and_prepares_missing_rank(
         return types.SimpleNamespace(
             rank=rank,
             structure_path=Path(f"/tmp/target_model_{rank}.cif"),
-            plddt=np.array([0.6, 0.7, 0.8], dtype=np.float32),
-            structure_plddt=None,
+            token_plddt=np.array([0.6, 0.7, 0.8], dtype=np.float32),
+            token_plddt_source="provider_token",
         )
 
     def build_map(path):
@@ -344,8 +343,7 @@ def test_prepare_ensemble_reuses_loaded_rank_and_prepares_missing_rank(
                 "load_pae": False,
                 "load_pde": False,
                 "load_contact_probs": False,
-                "load_structure_plddt": True,
-                "load_plddt": True,
+                "load_token_plddt": True,
             },
         )
     ]
@@ -375,8 +373,8 @@ def test_prepare_ensemble_rejects_different_ordered_tokens(monkeypatch) -> None:
         return types.SimpleNamespace(
             rank=rank,
             structure_path=Path(f"/tmp/target_model_{rank}.cif"),
-            plddt=np.ones(3, dtype=np.float32),
-            structure_plddt=None,
+            token_plddt=np.ones(3, dtype=np.float32),
+            token_plddt_source="provider_token",
         )
 
     maps = iter(
@@ -395,8 +393,8 @@ def test_prepare_ensemble_rejects_different_ordered_tokens(monkeypatch) -> None:
 def test_validate_members_accepts_compatible_members() -> None:
     validate_members(
         [
-            _member(0, plddt=np.ones(3), structure_plddt=np.ones(3)),
-            _member(1, plddt=np.ones(3), structure_plddt=np.ones(3)),
+            _member(0, plddt=np.ones(3)),
+            _member(1, plddt=np.ones(3)),
         ]
     )
 
@@ -413,13 +411,6 @@ def test_validate_members_accepts_compatible_members() -> None:
         (
             [_member(0, token_count=3), _member(1, token_count=3, plddt=np.ones(2))],
             "pLDDT length mismatch for model_1: 2 values for 3 tokens.",
-        ),
-        (
-            [
-                _member(0, token_count=3),
-                _member(1, token_count=3, structure_plddt=np.ones(2)),
-            ],
-            "Structure pLDDT length mismatch for model_1: 2 values for 3 tokens.",
         ),
     ],
 )
@@ -438,8 +429,8 @@ def test_prepare_metrics_skip_alignment_uses_current_coordinates(monkeypatch) ->
         lambda members: rmsd,
     )
     members = [
-        _member(0, plddt=None, structure_plddt=np.array([0.8, 0.9, 1.0])),
-        _member(1, plddt=None, structure_plddt=np.array([0.6, 0.7, 0.8])),
+        _member(0, plddt=np.array([0.8, 0.9, 1.0])),
+        _member(1, plddt=np.array([0.6, 0.7, 0.8])),
     ]
 
     result = prepare_metrics(members, skip_alignment=True)
@@ -449,7 +440,32 @@ def test_prepare_metrics_skip_alignment_uses_current_coordinates(monkeypatch) ->
     np.testing.assert_allclose(result.rmsd, rmsd)
     np.testing.assert_allclose(result.plddt_mean, np.array([0.7, 0.8, 0.9]))
     np.testing.assert_allclose(result.plddt_std, np.array([0.1, 0.1, 0.1]))
-    assert members[0].data.plddt is None  # prepare_metrics must not mutate data
+    np.testing.assert_array_equal(
+        members[0].data.token_plddt, np.array([0.8, 0.9, 1.0])
+    )
+
+
+def test_prepare_metrics_uses_canonical_plddt_values(monkeypatch) -> None:
+    monkeypatch.setattr(
+        ensemble,
+        "compute_aligned_per_token_rmsd",
+        lambda _members: np.zeros(3, dtype=np.float32),
+    )
+    members = [
+        _member(
+            0,
+            plddt=np.array([0.9, 0.8, 0.7], dtype=np.float32),
+        ),
+        _member(
+            1,
+            plddt=np.array([0.7, 0.6, 0.5], dtype=np.float32),
+        ),
+    ]
+
+    result = prepare_metrics(members, skip_alignment=True)
+
+    np.testing.assert_allclose(result.plddt_mean, np.array([0.8, 0.7, 0.6]))
+    np.testing.assert_allclose(result.plddt_std, np.array([0.1, 0.1, 0.1]))
 
 
 def test_current_coordinate_rmsd_reuses_each_object_inspection_for_painting(
@@ -508,7 +524,7 @@ def test_prepare_metrics_aligns_to_rank_zero_or_first_member(monkeypatch) -> Non
 
     assert result.aligned is True
     assert result.mode_label == "automatic core alignment"
-    assert calls[0] == ("core", members[0].token_map, members[0].data.plddt)
+    assert calls[0] == ("core", members[0].token_map, members[0].data.token_plddt)
     assert calls[1] == ("align", members, [0, 1, 2], 2)
     np.testing.assert_allclose(
         result.rmsd,
@@ -547,12 +563,12 @@ def test_prepare_metrics_prefers_rank_zero_alignment_reference(monkeypatch) -> N
 
     prepare_metrics(members, skip_alignment=False)
 
-    assert calls[0] == ("core", members[1].token_map, members[1].data.plddt)
+    assert calls[0] == ("core", members[1].token_map, members[1].data.token_plddt)
     assert calls[1] == ("align", members, [0, 1, 2], 0)
 
 
 def test_prepare_metrics_requires_plddt_for_alignment() -> None:
-    members = [_member(0, plddt=None, structure_plddt=None)]
+    members = [_member(0, plddt=None)]
 
     with pytest.raises(
         ValueError, match="Automatic ensemble alignment requires pLDDT data."
@@ -568,7 +584,7 @@ def test_prepare_metrics_requires_plddt_for_consensus(monkeypatch) -> None:
     )
     members = [
         _member(0, plddt=np.array([0.8, 0.9, 1.0])),
-        _member(1, plddt=None, structure_plddt=None),
+        _member(1, plddt=None),
     ]
 
     with pytest.raises(ValueError, match="pLDDT data are not available for model_1."):

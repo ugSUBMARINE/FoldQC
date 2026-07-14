@@ -169,10 +169,20 @@ The compact preview below the metric controls summarizes what the current
 selection will color and calls out missing requirements such as a reference
 selection or unloaded ensemble.
 
+Each provider resolves one canonical token-level pLDDT array when it loads a
+model. Boltz uses its token NPZ when present. AlphaFold 3 and Protenix use their
+per-atom confidence arrays when present and average polymer atoms by residue in
+prediction token order (ligand heavy atoms remain individual tokens). Standalone
+structures, Chai, Boltz Lab, and Boltz API use structure B-factors. Missing
+provider arrays fall back to structure B-factors; malformed explicit arrays are
+reported as errors. Coloring, plots, exports, alignment, and ensemble consensus
+all consume this same canonical array. This follows AlphaFold 3's documented
+[`atom_plddts` per-atom semantics](https://github.com/google-deepmind/alphafold3/blob/main/docs/output.md#metrics-in-confidences-json).
+
 | Color by option | How it is calculated | How to interpret it |
 | --- | --- | --- |
-| pLDDT - quality classes | Reads pLDDT from structure B-factors when available, otherwise falls back to provider prediction arrays or JSON data. Applies the AlphaFold four-class coloring: very high >=90, high 70-90, low 50-70, very low <50. | Quick local-confidence overview. Blue/light blue regions are more reliable; yellow/orange regions should be treated cautiously. |
-| pLDDT - continuous | Reads pLDDT from structure B-factors when available, otherwise falls back to provider prediction arrays or JSON data. Colors local confidence as a continuous value. | Higher values indicate higher local model confidence. The structure file remains the preferred source, including single CIF/PDB inputs. |
+| pLDDT - quality classes | Uses the provider-selected canonical pLDDT array. Applies the AlphaFold four-class coloring: very high >=90, high 70-90, low 50-70, very low <50. | Quick local-confidence overview. Blue/light blue regions are more reliable; yellow/orange regions should be treated cautiously. |
+| pLDDT - continuous | Uses the provider-selected canonical pLDDT array and colors local confidence as a continuous value. | Higher values indicate higher local model confidence. |
 | PAE - row mean | For token `i`, computes `mean(PAE[i, :])` over all other tokens. | Average uncertainty of the rest of the model when aligned on token `i`. Lower values indicate a better anchored token; higher values often mark flexible or poorly positioned regions. |
 | PAE - column mean | For token `j`, computes `mean(PAE[:, j])` over all alignment frames. | Average uncertainty in token `j`'s position from the perspective of all other tokens. Lower values indicate globally consistent placement. |
 | PAE - row mean to selection | For each token `i`, computes `mean(PAE[i, reference_tokens])`. | Directional confidence of each token relative to the reference selection, such as a ligand or partner chain. Lower values indicate more confident placement relative to the reference. |
@@ -200,10 +210,12 @@ and clash flags. PDE metrics are available for Chai only when matching
 `pde*.npy` files are present. Interaction probability metrics are not exposed
 for Chai-1 Discovery folders.
 
-Protenix folders provide structure B-factor pLDDT, summary confidence JSONs,
-global pTM/ipTM/gPDE, per-chain pTM/ipTM, pairwise chain ipTM, and clash flags.
-PAE, PDE, interaction probability, and provider atom-pLDDT metrics are available
-for Protenix only when matching `*_full_data_sample_*.json` files are present.
+Protenix folders provide summary confidence JSONs, global pTM/ipTM/gPDE,
+per-chain pTM/ipTM, pairwise chain ipTM, and clash flags. When a matching
+`*_full_data_sample_*.json` contains atom pLDDT, those values are averaged into
+the canonical token array; otherwise structure B-factors are used. PAE, PDE,
+and interaction probability metrics are available only when their arrays are
+present in the full-data file.
 
 ### Interpreting Pairwise Chain ipTM
 

@@ -41,7 +41,7 @@ def test_property_dicts_match_metric_specs() -> None:
     by_key = {prop["key"]: prop for prop in metrics.PROPERTIES}
 
     assert by_key["plddt_class"]["group"] == "pLDDT"
-    assert by_key["plddt"]["needs_any_plddt"] is True
+    assert by_key["plddt"]["needs_plddt"] is True
     assert by_key["pae_row_mean"]["tier"] == "normal"
     assert by_key["pae_contact"]["tier"] == "advanced"
     assert by_key["pae_domain_complete"]["tier"] == "experimental"
@@ -79,8 +79,7 @@ def test_property_combo_label_adds_tier_marker(key: str, label: str) -> None:
                 "load_pae": False,
                 "load_pde": False,
                 "load_contact_probs": False,
-                "load_structure_plddt": True,
-                "load_plddt": True,
+                "load_token_plddt": True,
             },
         ),
         (
@@ -89,8 +88,7 @@ def test_property_combo_label_adds_tier_marker(key: str, label: str) -> None:
                 "load_pae": True,
                 "load_pde": False,
                 "load_contact_probs": False,
-                "load_structure_plddt": False,
-                "load_plddt": False,
+                "load_token_plddt": False,
             },
         ),
         (
@@ -99,8 +97,7 @@ def test_property_combo_label_adds_tier_marker(key: str, label: str) -> None:
                 "load_pae": True,
                 "load_pde": False,
                 "load_contact_probs": False,
-                "load_structure_plddt": False,
-                "load_plddt": False,
+                "load_token_plddt": False,
             },
         ),
         (
@@ -109,8 +106,7 @@ def test_property_combo_label_adds_tier_marker(key: str, label: str) -> None:
                 "load_pae": False,
                 "load_pde": True,
                 "load_contact_probs": False,
-                "load_structure_plddt": False,
-                "load_plddt": False,
+                "load_token_plddt": False,
             },
         ),
         (
@@ -119,8 +115,7 @@ def test_property_combo_label_adds_tier_marker(key: str, label: str) -> None:
                 "load_pae": False,
                 "load_pde": False,
                 "load_contact_probs": True,
-                "load_structure_plddt": False,
-                "load_plddt": False,
+                "load_token_plddt": False,
             },
         ),
         (
@@ -129,8 +124,7 @@ def test_property_combo_label_adds_tier_marker(key: str, label: str) -> None:
                 "load_pae": False,
                 "load_pde": False,
                 "load_contact_probs": False,
-                "load_structure_plddt": True,
-                "load_plddt": True,
+                "load_token_plddt": True,
             },
         ),
     ],

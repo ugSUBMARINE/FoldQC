@@ -148,20 +148,17 @@ class PlotController:
                 load_pae,
                 load_pde,
                 load_contact_probs,
-                load_structure,
-                load_plddt,
+                load_token_plddt,
             ) = plot_data.line_member_load_flags(key)
             arrays = []
             for member in target.members or []:
                 kwargs = dict(
                     load_pae=load_pae,
                     load_pde=load_pde,
-                    load_structure_plddt=load_structure,
+                    load_token_plddt=load_token_plddt,
                 )
                 if load_contact_probs:
                     kwargs["load_contact_probs"] = True
-                if load_plddt:
-                    kwargs["load_plddt"] = True
                 self._ensure_member_data_for_plot(member, **kwargs)
                 values = self._compute_property_for(
                     compute_key, ref_sel, member.data, member.token_map, member.obj_name
@@ -391,8 +388,7 @@ class PlotController:
             load_pde=getattr(self._pred_files, "has_pde", False)
             if self._pred_files
             else False,
-            load_structure_plddt=True,
-            load_plddt=True,
+            load_token_plddt=True,
         )
         ref_indices = selection_to_token_indices(
             member.token_map, ref_sel, obj_name=member.obj_name
@@ -560,8 +556,7 @@ class PlotController:
             "load_contact_probs": bool(
                 include_contact_probs and pred_files and pred_files.has_contact_probs
             ),
-            "load_structure_plddt": True,
-            "load_plddt": True,
+            "load_token_plddt": True,
         }
 
     def _show_line_plot(self) -> None:

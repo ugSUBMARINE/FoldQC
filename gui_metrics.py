@@ -405,20 +405,14 @@ class MetricController:
         if self._pred_files is None or self._pred_data is None:
             raise ValueError("No prediction output loaded.")
         flags = metrics.metric_load_flags(prop)
-        self._require_loaded_data(
-            self._pred_data, flags, any_plddt=bool(prop.get("needs_any_plddt"))
-        )
+        self._require_loaded_data(self._pred_data, flags)
 
     def _ensure_member_data_for_property(self, member, prop: dict) -> None:
         """Assert that asynchronous preflight supplied a member's arrays."""
         if self._pred_files is None:
             raise ValueError("No prediction output loaded.")
         flags = metrics.metric_load_flags(prop)
-        self._require_loaded_data(
-            member.data,
-            flags,
-            any_plddt=bool(prop.get("needs_any_plddt")),
-        )
+        self._require_loaded_data(member.data, flags)
 
     def _ensure_member_data_for_plot(
         self,
@@ -427,8 +421,7 @@ class MetricController:
         load_pae: bool = False,
         load_pde: bool = False,
         load_contact_probs: bool = False,
-        load_structure_plddt: bool = False,
-        load_plddt: bool = False,
+        load_token_plddt: bool = False,
     ) -> None:
         """Assert that asynchronous preflight supplied plot arrays."""
         if self._pred_files is None:
@@ -439,33 +432,21 @@ class MetricController:
                 "load_pae": load_pae,
                 "load_pde": load_pde,
                 "load_contact_probs": load_contact_probs,
-                "load_structure_plddt": load_structure_plddt,
-                "load_plddt": load_plddt,
+                "load_token_plddt": load_token_plddt,
             },
-            any_plddt=load_structure_plddt and load_plddt,
         )
 
     def _require_loaded_data(
         self,
         data,
         flags: dict[str, bool],
-        *,
-        any_plddt: bool = False,
     ) -> None:
         """Raise if a ready-data continuation is missing required arrays."""
-        if any_plddt and (
-            getattr(data, "structure_plddt", None) is not None
-            or getattr(data, "plddt", None) is not None
-        ):
-            flags = dict(flags)
-            flags["load_structure_plddt"] = False
-            flags["load_plddt"] = False
         fields = (
             ("load_pae", "pae", "PAE"),
             ("load_pde", "pde", "PDE"),
             ("load_contact_probs", "contact_probs", "interaction probabilities"),
-            ("load_structure_plddt", "structure_plddt", "structure pLDDT"),
-            ("load_plddt", "plddt", "pLDDT"),
+            ("load_token_plddt", "token_plddt", "pLDDT"),
         )
         missing = [
             label

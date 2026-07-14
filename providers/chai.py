@@ -58,7 +58,7 @@ def _scan_chai_dir(pred_dir: Path) -> PredictionFiles:
         pred_dir=pred_dir,
         provider="chai1",
         input_path=pred_dir,
-        capabilities={"structure_plddt"},
+        capabilities={"plddt"},
     )
 
     candidates: list[_ChaiCandidate] = []

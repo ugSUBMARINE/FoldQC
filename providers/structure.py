@@ -31,5 +31,5 @@ class StructureProvider(BaseProvider):
                     object_name=_safe_object_name(name),
                 )
             ],
-            capabilities={"structure_plddt"},
+            capabilities={"plddt"},
         )

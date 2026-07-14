@@ -19,11 +19,15 @@ def _collapse_atom_plddts_to_tokens(
     structure_path: Path,
     atom_plddts: np.ndarray,
 ) -> np.ndarray:
-
+    if atom_plddts.ndim != 1:
+        raise ValueError(
+            f"Atom pLDDT array for {structure_path.name} must be one-dimensional; "
+            f"got shape {atom_plddts.shape}."
+        )
     atoms = parse_structure_atoms(structure_path)
     if len(atoms) != len(atom_plddts):
         raise ValueError(
-            f"AF3 atom_plddts length {len(atom_plddts)} does not match "
+            f"Atom pLDDT length {len(atom_plddts)} does not match "
             f"{len(atoms)} atoms in {structure_path.name}."
         )
 
@@ -32,8 +36,8 @@ def _collapse_atom_plddts_to_tokens(
     if finite.size and float(np.nanmax(finite)) > 1.5:
         values = values / 100.0
 
-    # Group values by residue, then average over residues. This is necessary because
-    # AF3 atom_plddts are per-atom, but we want per-residue
+    # Group per-atom values by residue so providers expose one canonical value per
+    # prediction token. Heterocomponents already use one token per heavy atom.
     residue_values: dict[tuple[str, int, str], list[float]] = defaultdict(list)
     for atom, value in zip(atoms, values, strict=True):
         # skip heterocomponents since they always have one token per atom

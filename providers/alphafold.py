@@ -71,7 +71,7 @@ def _scan_af3_dir(pred_dir: Path) -> PredictionFiles:
         pred_dir=pred_dir,
         provider="alphafold3",
         input_path=pred_dir,
-        capabilities={"structure_plddt"},
+        capabilities={"plddt"},
     )
 
     ranking_scores = _load_af3_ranking_scores(pred_dir)
@@ -138,7 +138,7 @@ def _scan_af3_dir(pred_dir: Path) -> PredictionFiles:
         )
 
     if any(model.confidence_path is not None for model in files.models):
-        files.capabilities.update({"pae", "contact_probs", "plddt"})
+        files.capabilities.update({"pae", "contact_probs"})
     return files
 
 
@@ -150,7 +150,7 @@ def _scan_af3_server_dir(pred_dir: Path) -> PredictionFiles:
         pred_dir=pred_dir,
         provider="af3_server",
         input_path=pred_dir,
-        capabilities={"structure_plddt"},
+        capabilities={"plddt"},
     )
 
     model_re = re.compile(r"(.+)_model_(\d+)$")
@@ -191,7 +191,7 @@ def _scan_af3_server_dir(pred_dir: Path) -> PredictionFiles:
         )
 
     if any(model.confidence_path is not None for model in files.models):
-        files.capabilities.update({"pae", "contact_probs", "plddt"})
+        files.capabilities.update({"pae", "contact_probs"})
     return files
 
 
@@ -201,9 +201,9 @@ def _load_af3_model_data(
     *,
     load_pae: bool,
     load_contact_probs: bool,
-    load_plddt: bool,
+    load_token_plddt: bool,
 ) -> None:
-    needs_full = load_pae or load_contact_probs or load_plddt
+    needs_full = load_pae or load_contact_probs or load_token_plddt
     if not needs_full or model.confidence_path is None:
         return
 
@@ -221,11 +221,12 @@ def _load_af3_model_data(
         data.pae = np.asarray(full["pae"], dtype=np.float32)
     if load_contact_probs and "contact_probs" in full:
         data.contact_probs = np.asarray(full["contact_probs"], dtype=np.float32)
-    if load_plddt and "atom_plddts" in full:
-        data.plddt = _collapse_atom_plddts_to_tokens(
+    if load_token_plddt and "atom_plddts" in full:
+        data.token_plddt = _collapse_atom_plddts_to_tokens(
             model.structure_path,
             np.asarray(full["atom_plddts"], dtype=np.float32),
         )
+        data.token_plddt_source = "provider_atom_mean"
 
 
 def _af3_model_path(path: Path) -> Path | None:
@@ -330,7 +331,7 @@ class AlphaFold3Provider(BaseProvider):
             data,
             load_pae=options.load_pae,
             load_contact_probs=options.load_contact_probs,
-            load_plddt=options.load_plddt,
+            load_token_plddt=options.load_token_plddt,
         )
 
     def is_internal_candidate(self, candidate, candidates):

@@ -24,8 +24,6 @@ class MetricSpec:
     needs_pae: bool = False
     needs_pde: bool = False
     needs_plddt: bool = False
-    needs_structure_plddt: bool = False
-    needs_any_plddt: bool = False
     needs_contact_probs: bool = False
     needs_confidence: bool = False
     ensemble_level: bool = False
@@ -43,14 +41,14 @@ METRICS: tuple[MetricSpec, ...] = (
         key="plddt_class",
         label="pLDDT — quality classes",
         group="pLDDT",
-        needs_any_plddt=True,
+        needs_plddt=True,
         preview_template="Applies AlphaFold pLDDT confidence classes to {target_text}.",
     ),
     MetricSpec(
         key="plddt",
         label="pLDDT — continuous",
         group="pLDDT",
-        needs_any_plddt=True,
+        needs_plddt=True,
         preview_template="Colors {target_text} by continuous local confidence (pLDDT).",
     ),
     MetricSpec(
@@ -246,7 +244,7 @@ METRICS: tuple[MetricSpec, ...] = (
         key="ensemble_plddt_mean",
         label="Ensemble pLDDT mean",
         group="Ensemble",
-        needs_any_plddt=True,
+        needs_plddt=True,
         ensemble_level=True,
         preview_template=(
             "Colors {target_text} by the mean pLDDT at each token across models in"
@@ -257,7 +255,7 @@ METRICS: tuple[MetricSpec, ...] = (
         key="ensemble_plddt_std",
         label="Ensemble pLDDT std",
         group="Ensemble",
-        needs_any_plddt=True,
+        needs_plddt=True,
         ensemble_level=True,
         preview_template=(
             "Colors {target_text} by how much pLDDT varies at each token across"
@@ -367,19 +365,13 @@ def metric_load_flags(
     spec_or_dict: MetricSpec | Mapping[str, object],
 ) -> dict[str, bool]:
     """Return loader flags needed to compute one metric."""
-    needs_any_plddt = bool(_get_field(spec_or_dict, "needs_any_plddt", False))
     return {
         "load_pae": bool(_get_field(spec_or_dict, "needs_pae", False)),
         "load_pde": bool(_get_field(spec_or_dict, "needs_pde", False)),
         "load_contact_probs": bool(
             _get_field(spec_or_dict, "needs_contact_probs", False)
         ),
-        "load_structure_plddt": bool(
-            _get_field(spec_or_dict, "needs_structure_plddt", False) or needs_any_plddt
-        ),
-        "load_plddt": bool(
-            _get_field(spec_or_dict, "needs_plddt", False) or needs_any_plddt
-        ),
+        "load_token_plddt": bool(_get_field(spec_or_dict, "needs_plddt", False)),
     }
 
 

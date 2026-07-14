@@ -32,9 +32,8 @@ def load_prediction_data(
     load_pae: bool = True,
     load_pde: bool = True,
     load_embeddings: bool = False,
-    load_structure_plddt: bool = True,
+    load_token_plddt: bool = True,
     load_contact_probs: bool = False,
-    load_plddt: bool = True,
 ) -> PredictionData:
     try:
         model = pred_files.model(rank)
@@ -47,8 +46,7 @@ def load_prediction_data(
         load_pae=load_pae,
         load_pde=load_pde,
         load_embeddings=load_embeddings,
-        load_structure_plddt=load_structure_plddt,
+        load_token_plddt=load_token_plddt,
         load_contact_probs=load_contact_probs,
-        load_plddt=load_plddt,
     )
     return BUILTIN_PROVIDERS.get(pred_files.provider).load(pred_files, model, options)

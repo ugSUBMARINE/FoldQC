@@ -17,6 +17,7 @@ from . import properties as P
 
 if TYPE_CHECKING:
     from .loader import PredictionData
+    from .loader_models import PlddtSource
     from .token_map import TokenMap
 
 
@@ -133,17 +134,16 @@ _DISPATCH: dict[str, _Dispatch] = {
 }
 
 
-def plddt_values_for(data: PredictionData | None) -> tuple[np.ndarray | None, str]:
-    """Return preferred pLDDT values and a short source label."""
+def plddt_values_for(
+    data: PredictionData | None,
+) -> tuple[np.ndarray | None, PlddtSource | None]:
+    """Return provider-selected token pLDDT values and their provenance."""
     if data is None:
-        return None, ""
-    structure_values = getattr(data, "structure_plddt", None)
-    if structure_values is not None:
-        return structure_values, "structure B-factors"
-    provider_values = getattr(data, "plddt", None)
-    if provider_values is not None:
-        return provider_values, "provider pLDDT"
-    return None, ""
+        return None, None
+    values = getattr(data, "token_plddt", None)
+    if values is None:
+        return None, None
+    return values, getattr(data, "token_plddt_source", None)
 
 
 def pae_domain_method(key: str) -> str:
@@ -168,7 +168,7 @@ def compute_metric(
     # plddt_class uses the same continuous array as plddt; the GUI chooses
     # categorical viewer coloring based on the key, not on this output.
     if key in ("plddt", "plddt_class"):
-        values, _source_label = plddt_values_for(data)
+        values, _source = plddt_values_for(data)
         if values is None:
             raise MissingMetricDataError("pLDDT data are not available.")
         return P.plddt_values(values)

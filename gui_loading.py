@@ -70,7 +70,6 @@ class DataLoadItem:
     original_data: object
     member: object | None = None
     phase_arrays: tuple[str, ...] = ()
-    any_plddt: bool = False
 
     def load_kwargs(self) -> dict[str, bool]:
         return dict(self.flags)
@@ -881,24 +880,11 @@ class GuiLoadingController:
             "load_pae": ("pae", "PAE"),
             "load_pde": ("pde", "PDE"),
             "load_contact_probs": ("contact_probs", "interaction probabilities"),
-            "load_structure_plddt": ("structure_plddt", "pLDDT"),
-            "load_plddt": ("plddt", "pLDDT"),
+            "load_token_plddt": ("token_plddt", "pLDDT"),
         }
         requested = {
             name: bool(requested_flags.get(name, False)) for name in flag_attrs
         }
-        any_plddt = requested["load_structure_plddt"] and requested["load_plddt"]
-        if (
-            requested["load_structure_plddt"]
-            and requested["load_plddt"]
-            and (
-                getattr(data, "structure_plddt", None) is not None
-                or getattr(data, "plddt", None) is not None
-            )
-        ):
-            requested["load_structure_plddt"] = False
-            requested["load_plddt"] = False
-
         missing = [
             name
             for name, (attr, _label) in flag_attrs.items()
@@ -922,7 +908,6 @@ class GuiLoadingController:
             original_data=data,
             member=member,
             phase_arrays=phase_arrays,
-            any_plddt=any_plddt,
         )
 
     def _on_lazy_data_ready(
@@ -981,18 +966,11 @@ class GuiLoadingController:
 
     def _validate_lazy_loaded_item(self, item: DataLoadItem, data) -> None:
         flags = item.load_kwargs()
-        if item.any_plddt and (
-            getattr(data, "structure_plddt", None) is not None
-            or getattr(data, "plddt", None) is not None
-        ):
-            flags["load_structure_plddt"] = False
-            flags["load_plddt"] = False
         fields = (
             ("load_pae", "pae", "PAE"),
             ("load_pde", "pde", "PDE"),
             ("load_contact_probs", "contact_probs", "interaction probabilities"),
-            ("load_structure_plddt", "structure_plddt", "structure pLDDT"),
-            ("load_plddt", "plddt", "pLDDT"),
+            ("load_token_plddt", "token_plddt", "pLDDT"),
         )
         missing = [
             label
@@ -1155,13 +1133,8 @@ class GuiLoadingController:
         has_contact_probs = getattr(self._pred_files, "has_contact_probs", False)
         has_plddt = (
             getattr(self._pred_files, "has_plddt", False)
-            or getattr(self._pred_data, "plddt", None) is not None
+            or getattr(self._pred_data, "token_plddt", None) is not None
         )
-        has_structure_plddt = (
-            getattr(self._pred_files, "has_structure_plddt", False)
-            or getattr(self._pred_data, "structure_plddt", None) is not None
-        )
-        has_any_plddt = has_plddt or has_structure_plddt
         has_confidence = (
             getattr(self._pred_data, "confidence", None) is not None
             or getattr(self._pred_data, "summary_confidence", None) is not None
@@ -1180,10 +1153,6 @@ class GuiLoadingController:
             if prop["needs_pde"] and not has_pde:
                 available = False
             if prop.get("needs_plddt", False) and not has_plddt:
-                available = False
-            if prop.get("needs_structure_plddt", False) and not has_structure_plddt:
-                available = False
-            if prop.get("needs_any_plddt", False) and not has_any_plddt:
                 available = False
             if prop.get("needs_contact_probs", False) and not has_contact_probs:
                 available = False
@@ -1286,7 +1255,6 @@ class GuiLoadingController:
                 or getattr(pred_files, "has_pde", False)
                 or getattr(pred_files, "has_contact_probs", False)
                 or getattr(pred_files, "has_plddt", False)
-                or getattr(pred_files, "has_structure_plddt", False)
             ):
                 return True
         if pred_data is not None:
@@ -1294,8 +1262,7 @@ class GuiLoadingController:
                 getattr(pred_data, "pae", None) is not None
                 or getattr(pred_data, "pde", None) is not None
                 or getattr(pred_data, "contact_probs", None) is not None
-                or getattr(pred_data, "plddt", None) is not None
-                or getattr(pred_data, "structure_plddt", None) is not None
+                or getattr(pred_data, "token_plddt", None) is not None
             ):
                 return True
         for member in getattr(self, "_ensemble_members", None) or []:
@@ -1306,8 +1273,7 @@ class GuiLoadingController:
                 getattr(data, "pae", None) is not None
                 or getattr(data, "pde", None) is not None
                 or getattr(data, "contact_probs", None) is not None
-                or getattr(data, "plddt", None) is not None
-                or getattr(data, "structure_plddt", None) is not None
+                or getattr(data, "token_plddt", None) is not None
             ):
                 return True
         return False
@@ -1553,7 +1519,7 @@ class GuiLoadingController:
 
     @staticmethod
     def _prediction_data_array_count(data: object) -> int:
-        fields = ("plddt", "structure_plddt", "pae", "pde", "contact_probs")
+        fields = ("token_plddt", "pae", "pde", "contact_probs")
         return sum(getattr(data, field, None) is not None for field in fields)
 
     def _on_ensemble_prepared(

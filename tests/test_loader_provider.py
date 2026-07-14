@@ -98,9 +98,10 @@ class LoaderProviderTests(unittest.TestCase):
         self.assertFalse(files.supports_ensemble)
         self.assertEqual(files.structure_path(0).name, "model.cif")
         np.testing.assert_allclose(
-            data.structure_plddt,
+            data.token_plddt,
             np.array([0.8, 0.4], dtype=np.float32),
         )
+        self.assertEqual(data.token_plddt_source, "structure_b_factor")
 
     def test_boltz_directory_scans_with_legacy_helpers(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -116,7 +117,35 @@ class LoaderProviderTests(unittest.TestCase):
         self.assertEqual(files.provider, "boltz")
         self.assertEqual(files.models[0].rank, 0)
         self.assertTrue(files.has_plddt)
-        np.testing.assert_allclose(data.plddt, np.array([0.7, 0.6]))
+        np.testing.assert_allclose(data.token_plddt, np.array([0.7, 0.6]))
+        self.assertEqual(data.token_plddt_source, "provider_token")
+
+    def test_boltz_without_token_array_falls_back_to_structure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            pred_dir = Path(tmp) / "target"
+            pred_dir.mkdir()
+            (pred_dir / "target_model_0.cif").write_text(CIF_TEXT)
+
+            data = load_prediction_data(scan_prediction_path(pred_dir))
+
+        np.testing.assert_allclose(
+            data.token_plddt, np.array([0.8, 0.4], dtype=np.float32)
+        )
+        self.assertEqual(data.token_plddt_source, "structure_b_factor")
+
+    def test_boltz_malformed_token_array_is_an_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            pred_dir = Path(tmp) / "target"
+            pred_dir.mkdir()
+            (pred_dir / "target_model_0.cif").write_text(CIF_TEXT)
+            np.savez(
+                pred_dir / "plddt_target_model_0.npz",
+                plddt=np.array([0.7], dtype=np.float32),
+            )
+
+            files = scan_prediction_path(pred_dir)
+            with self.assertRaisesRegex(ValueError, "does not match 2 tokens"):
+                load_prediction_data(files)
 
     def test_boltz_lab_directory_scans_sample_layout(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -153,6 +182,10 @@ class LoaderProviderTests(unittest.TestCase):
         np.testing.assert_allclose(data.pae, np.array([[0.0, 1.0]]))
         self.assertEqual(data.confidence["confidence_score"], 0.91)
         self.assertEqual(data.confidence["structure_confidence"], 0.91)
+        np.testing.assert_allclose(
+            data.token_plddt, np.array([0.8, 0.4], dtype=np.float32)
+        )
+        self.assertEqual(data.token_plddt_source, "structure_b_factor")
 
     def test_boltz_api_run_root_scans_samples_best_first(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -190,6 +223,10 @@ class LoaderProviderTests(unittest.TestCase):
         np.testing.assert_allclose(data.pae, np.array([[0.0, 2.0]]))
         self.assertEqual(data.confidence["confidence_score"], 0.95)
         self.assertEqual(data.confidence["ptm"], 0.9)
+        np.testing.assert_allclose(
+            data.token_plddt, np.array([0.8, 0.4], dtype=np.float32)
+        )
+        self.assertEqual(data.token_plddt_source, "structure_b_factor")
 
     def test_boltz_api_run_root_falls_back_to_run_json_metrics(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -306,6 +343,10 @@ class LoaderProviderTests(unittest.TestCase):
             {"0": {"0": 0.8, "1": 0.4}, "1": {"0": 0.3, "1": 0.7}},
         )
         self.assertIs(data.confidence["has_clash"], False)
+        np.testing.assert_allclose(
+            data.token_plddt, np.array([0.8, 0.4], dtype=np.float32)
+        )
+        self.assertEqual(data.token_plddt_source, "structure_b_factor")
 
     def test_chai_older_ranked_names_support_model_idx_and_pde(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -405,6 +446,10 @@ class LoaderProviderTests(unittest.TestCase):
             {"0": {"0": 0.0, "1": 0.4}, "1": {"0": 0.4, "1": 0.0}},
         )
         self.assertIsNone(data.pae)
+        np.testing.assert_allclose(
+            data.token_plddt, np.array([0.8, 0.4], dtype=np.float32)
+        )
+        self.assertEqual(data.token_plddt_source, "structure_b_factor")
 
     def test_protenix_full_data_loads_lazily(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -433,7 +478,7 @@ class LoaderProviderTests(unittest.TestCase):
                 load_pae=False,
                 load_pde=False,
                 load_contact_probs=False,
-                load_plddt=False,
+                load_token_plddt=False,
             )
             data = load_prediction_data(
                 files,
@@ -441,7 +486,7 @@ class LoaderProviderTests(unittest.TestCase):
                 load_pae=True,
                 load_pde=True,
                 load_contact_probs=True,
-                load_plddt=True,
+                load_token_plddt=True,
             )
 
         self.assertEqual(files.provider, "protenix")
@@ -452,13 +497,36 @@ class LoaderProviderTests(unittest.TestCase):
         self.assertIsNone(lazy.pae)
         self.assertIsNone(lazy.pde)
         self.assertIsNone(lazy.contact_probs)
-        self.assertIsNone(lazy.plddt)
-        np.testing.assert_allclose(data.plddt, np.array([0.9, 0.4], dtype=np.float32))
+        self.assertIsNone(lazy.token_plddt)
+        self.assertIsNone(lazy.token_plddt_source)
+        np.testing.assert_allclose(
+            data.token_plddt, np.array([0.9, 0.4], dtype=np.float32)
+        )
+        self.assertEqual(data.token_plddt_source, "provider_atom_mean")
         np.testing.assert_allclose(data.pae, np.array([[0.0, 1.0], [2.0, 0.0]]))
         np.testing.assert_allclose(data.pde, np.array([[0.0, 3.0], [3.5, 0.0]]))
         np.testing.assert_allclose(
             data.contact_probs, np.array([[1.0, 0.25], [0.25, 1.0]])
         )
+
+    def test_protenix_malformed_atom_plddt_is_an_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "protenix_full"
+            predictions = root / "seed_7" / "predictions"
+            predictions.mkdir(parents=True)
+            (predictions / "target_sample_0.cif").write_text(CIF_TEXT)
+            _write_json(
+                predictions / "target_summary_confidence_sample_0.json",
+                {"ranking_score": 0.95},
+            )
+            _write_json(
+                predictions / "target_full_data_sample_0.json",
+                {"atom_plddt": [0.8]},
+            )
+
+            files = scan_prediction_path(root)
+            with self.assertRaisesRegex(ValueError, "does not match 3 atoms"):
+                load_prediction_data(files)
 
     def test_af3_samples_sort_by_ranking_score_without_root_duplicate(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -608,11 +676,41 @@ class LoaderProviderTests(unittest.TestCase):
             data = load_prediction_data(files, load_pae=True, load_contact_probs=True)
 
         self.assertEqual(files.provider, "alphafold3")
-        np.testing.assert_allclose(data.plddt, np.array([0.9, 0.4], dtype=np.float32))
+        np.testing.assert_allclose(
+            data.token_plddt, np.array([0.9, 0.4], dtype=np.float32)
+        )
+        self.assertEqual(data.token_plddt_source, "provider_atom_mean")
         np.testing.assert_allclose(data.pae, np.array([[0.0, 1.0], [2.0, 0.0]]))
         np.testing.assert_allclose(
             data.contact_probs, np.array([[1.0, 0.25], [0.25, 1.0]])
         )
+
+    def test_af3_without_atom_plddts_falls_back_to_structure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "af3"
+            root.mkdir()
+            (root / "af3_model.cif").write_text(CIF_TEXT)
+            _write_json(root / "af3_summary_confidences.json", {"ptm": 0.5})
+            _write_json(root / "af3_confidences.json", {})
+
+            data = load_prediction_data(scan_prediction_path(root))
+
+        np.testing.assert_allclose(
+            data.token_plddt, np.array([0.8, 0.4], dtype=np.float32)
+        )
+        self.assertEqual(data.token_plddt_source, "structure_b_factor")
+
+    def test_af3_malformed_atom_plddts_are_an_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "af3"
+            root.mkdir()
+            (root / "af3_model.cif").write_text(CIF_TEXT)
+            _write_json(root / "af3_summary_confidences.json", {"ptm": 0.5})
+            _write_json(root / "af3_confidences.json", {"atom_plddts": [80.0]})
+
+            files = scan_prediction_path(root)
+            with self.assertRaisesRegex(ValueError, "does not match 3 atoms"):
+                load_prediction_data(files)
 
     def test_af3_server_flat_ranked_files_are_detected(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -643,7 +741,10 @@ class LoaderProviderTests(unittest.TestCase):
         self.assertTrue(files.supports_ensemble)
         self.assertEqual(files.models[0].display_label, "rank 0")
         self.assertEqual(files.models[0].object_name, "server_job_model_0")
-        np.testing.assert_allclose(data.plddt, np.array([0.9, 0.4], dtype=np.float32))
+        np.testing.assert_allclose(
+            data.token_plddt, np.array([0.9, 0.4], dtype=np.float32)
+        )
+        self.assertEqual(data.token_plddt_source, "provider_atom_mean")
         np.testing.assert_allclose(data.pae, np.array([[0.0, 1.0], [2.0, 0.0]]))
         np.testing.assert_allclose(
             data.contact_probs, np.array([[1.0, 0.25], [0.25, 1.0]])
@@ -658,12 +759,17 @@ class LoaderProviderTests(unittest.TestCase):
             _write_json(root / "full_data_0.json", {})
 
             files = scan_prediction_path(root)
+            data = load_prediction_data(files)
 
         self.assertEqual(files.provider, "af3_server")
         self.assertEqual(
             files.models[0].summary_path.name, "summary_confidences_0.json"
         )
         self.assertEqual(files.models[0].confidence_path.name, "full_data_0.json")
+        np.testing.assert_allclose(
+            data.token_plddt, np.array([0.8, 0.4], dtype=np.float32)
+        )
+        self.assertEqual(data.token_plddt_source, "structure_b_factor")
 
     def test_wrapped_prediction_zip_scans_and_loads(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -693,7 +799,10 @@ class LoaderProviderTests(unittest.TestCase):
         self.assertEqual(files.input_path.name, "wrapped.zip")
         self.assertEqual(files.pred_dir.name, "server_job")
         self.assertEqual(files.n_models, 1)
-        np.testing.assert_allclose(data.plddt, np.array([0.9, 0.4], dtype=np.float32))
+        np.testing.assert_allclose(
+            data.token_plddt, np.array([0.9, 0.4], dtype=np.float32)
+        )
+        self.assertEqual(data.token_plddt_source, "provider_atom_mean")
         np.testing.assert_allclose(data.pae, np.array([[0.0, 1.0], [2.0, 0.0]]))
 
     def test_boltz_api_tar_gz_scans_and_loads(self) -> None:
@@ -1021,6 +1130,10 @@ class LoaderProviderTests(unittest.TestCase):
         self.assertEqual(files.input_path.name, "protenix.zip")
         self.assertEqual(files.name, "target")
         self.assertEqual(data.confidence["chains_ptm"], {"0": 0.9})
+        np.testing.assert_allclose(
+            data.token_plddt, np.array([0.8, 0.4], dtype=np.float32)
+        )
+        self.assertEqual(data.token_plddt_source, "structure_b_factor")
 
     def test_af3_full_confidence_json_is_lazy(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1035,12 +1148,12 @@ class LoaderProviderTests(unittest.TestCase):
                 files,
                 load_pae=False,
                 load_contact_probs=False,
-                load_plddt=False,
+                load_token_plddt=False,
             )
 
             self.assertEqual(data.summary_confidence["ptm"], 0.5)
             with self.assertRaises(json.JSONDecodeError):
-                load_prediction_data(files, load_pae=True, load_plddt=False)
+                load_prediction_data(files, load_pae=True, load_token_plddt=False)
 
 
 if __name__ == "__main__":

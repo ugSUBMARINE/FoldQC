@@ -557,8 +557,7 @@ class _SessionPredictionFiles:
         self.has_pae = False
         self.has_pde = False
         self.has_contact_probs = False
-        self.has_plddt = False
-        self.has_structure_plddt = True
+        self.has_plddt = True
         self.supports_ensemble = len(ranks) > 1
 
     def structure_path(self, rank: int) -> Path:
@@ -1161,8 +1160,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
             data = types.SimpleNamespace(
                 rank=model.rank,
                 structure_path=pred_files.structure_path(model.rank),
-                plddt=np.array([0.9, 0.8, 0.7], dtype=np.float32),
-                structure_plddt=None,
+                token_plddt=np.array([0.9, 0.8, 0.7], dtype=np.float32),
                 pae=None,
                 pde=None,
                 contact_probs=None,
@@ -1662,8 +1660,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
                     provider="structure_only",
                     rank=rank,
                     structure_path=pred_files.structure_path(rank),
-                    structure_plddt=np.array([0.8], dtype=np.float32),
-                    plddt=None,
+                    token_plddt=np.array([0.8], dtype=np.float32),
                     confidence=None,
                     summary_confidence=None,
                     pae=None,
@@ -1827,8 +1824,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
                     provider="structure_only",
                     rank=rank,
                     structure_path=pred_files.structure_path(rank),
-                    structure_plddt=np.array([0.8], dtype=np.float32),
-                    plddt=None,
+                    token_plddt=np.array([0.8], dtype=np.float32),
                     confidence=None,
                     summary_confidence=None,
                     pae=None,
@@ -1877,8 +1873,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
                         provider="structure_only",
                         rank=0,
                         structure_path=files.structure_path(0),
-                        structure_plddt=np.array([0.8], dtype=np.float32),
-                        plddt=None,
+                        token_plddt=np.array([0.8], dtype=np.float32),
                         confidence=None,
                         summary_confidence=None,
                         pae=None,
@@ -1908,8 +1903,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
                 provider="structure_only",
                 rank=0,
                 structure_path=files.structure_path(0),
-                structure_plddt=np.array([0.8], dtype=np.float32),
-                plddt=None,
+                token_plddt=np.array([0.8], dtype=np.float32),
                 confidence=None,
                 summary_confidence=None,
                 pae=None,
@@ -1973,8 +1967,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
                         provider="boltz_api",
                         rank=0,
                         structure_path=files.structure_path(0),
-                        structure_plddt=np.array([0.8], dtype=np.float32),
-                        plddt=None,
+                        token_plddt=np.array([0.8], dtype=np.float32),
                         confidence=None,
                         summary_confidence=None,
                         pae=None,
@@ -2018,8 +2011,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
                         provider="structure_only",
                         rank=0,
                         structure_path=files.structure_path(0),
-                        structure_plddt=np.array([0.8], dtype=np.float32),
-                        plddt=None,
+                        token_plddt=np.array([0.8], dtype=np.float32),
                         confidence=None,
                         summary_confidence=None,
                         pae=None,
@@ -2066,8 +2058,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
                         provider="structure_only",
                         rank=0,
                         structure_path=files_b.structure_path(0),
-                        structure_plddt=np.array([0.8], dtype=np.float32),
-                        plddt=None,
+                        token_plddt=np.array([0.8], dtype=np.float32),
                         confidence=None,
                         summary_confidence=None,
                         pae=None,
@@ -2200,8 +2191,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
                 provider="structure_only",
                 rank=0,
                 structure_path=files.structure_path(0),
-                structure_plddt=np.array([0.8], dtype=np.float32),
-                plddt=None,
+                token_plddt=np.array([0.8], dtype=np.float32),
                 confidence=None,
                 summary_confidence=None,
                 pae=None,
@@ -2286,8 +2276,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
                 provider="structure_only",
                 rank=0,
                 structure_path=files.structure_path(0),
-                structure_plddt=np.array([0.8], dtype=np.float32),
-                plddt=None,
+                token_plddt=np.array([0.8], dtype=np.float32),
                 confidence=None,
                 summary_confidence=None,
                 pae=None,
@@ -2298,8 +2287,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
                 provider="structure_only",
                 rank=1,
                 structure_path=files.structure_path(1),
-                structure_plddt=np.array([0.9], dtype=np.float32),
-                plddt=None,
+                token_plddt=np.array([0.9], dtype=np.float32),
                 confidence=None,
                 summary_confidence=None,
                 pae=None,
@@ -2419,8 +2407,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
             provider="structure_only",
             rank=0,
             structure_path=files.structure_path(0),
-            structure_plddt=np.array([0.8], dtype=np.float32),
-            plddt=None,
+            token_plddt=np.array([0.8], dtype=np.float32),
             confidence=None,
             summary_confidence=None,
             pae=None,
@@ -2431,8 +2418,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
             provider="structure_only",
             rank=1,
             structure_path=files.structure_path(1),
-            structure_plddt=np.array([0.9], dtype=np.float32),
-            plddt=None,
+            token_plddt=np.array([0.9], dtype=np.float32),
             confidence=None,
             summary_confidence=None,
             pae=None,
@@ -2500,16 +2486,14 @@ class GuiModelSwitchingTests(unittest.TestCase):
             pae=None,
             pde=old_pde,
             contact_probs=None,
-            structure_plddt=np.array([0.8], dtype=np.float32),
-            plddt=None,
+            token_plddt=np.array([0.8], dtype=np.float32),
         )
         new_data = types.SimpleNamespace(
             rank=0,
             pae=np.array([[2.0]], dtype=np.float32),
             pde=old_pde,
             contact_probs=None,
-            structure_plddt=np.array([0.8], dtype=np.float32),
-            plddt=None,
+            token_plddt=np.array([0.8], dtype=np.float32),
         )
         dialog = self._session_dialog()
         dialog._pred_files = files
@@ -2544,7 +2528,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         self.assertEqual(resumed, [new_data])
         self.assertTrue(calls[0][2]["load_pae"])
         self.assertTrue(calls[0][2]["load_pde"])
-        self.assertTrue(calls[0][2]["load_structure_plddt"])
+        self.assertTrue(calls[0][2]["load_token_plddt"])
 
     def test_lazy_action_with_loaded_arrays_runs_without_a_job(self) -> None:
         files = _SessionPredictionFiles(Path("/tmp"), ranks=(0,))
@@ -2553,8 +2537,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
             pae=np.array([[1.0]], dtype=np.float32),
             pde=None,
             contact_probs=None,
-            structure_plddt=None,
-            plddt=None,
+            token_plddt=None,
         )
         dialog = self._session_dialog()
         dialog._pred_files = files
@@ -2586,8 +2569,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
                 pae=None,
                 pde=None,
                 contact_probs=None,
-                structure_plddt=np.array([0.8], dtype=np.float32),
-                plddt=None,
+                token_plddt=np.array([0.8], dtype=np.float32),
             )
             for rank in (0, 1)
         ]
@@ -2622,8 +2604,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
                 pae=np.array([[2.0]], dtype=np.float32),
                 pde=None,
                 contact_probs=None,
-                structure_plddt=np.array([0.8], dtype=np.float32),
-                plddt=None,
+                token_plddt=np.array([0.8], dtype=np.float32),
             )
 
         with mock.patch("FoldQC.loader.load_prediction_data", side_effect=load_data):
@@ -2647,16 +2628,14 @@ class GuiModelSwitchingTests(unittest.TestCase):
             pae=None,
             pde=None,
             contact_probs=None,
-            structure_plddt=None,
-            plddt=None,
+            token_plddt=None,
         )
         new_data = types.SimpleNamespace(
             rank=0,
             pae=np.array([[1.0]], dtype=np.float32),
             pde=None,
             contact_probs=None,
-            structure_plddt=None,
-            plddt=None,
+            token_plddt=None,
         )
         dialog = self._session_dialog()
         dialog._pred_files = files
@@ -2720,8 +2699,8 @@ class GuiModelSwitchingTests(unittest.TestCase):
 
         self.assertEqual(by_key["plddt_class"]["group"], "pLDDT")
         self.assertEqual(by_key["plddt"]["group"], "pLDDT")
-        self.assertTrue(by_key["plddt_class"]["needs_any_plddt"])
-        self.assertTrue(by_key["plddt"]["needs_any_plddt"])
+        self.assertTrue(by_key["plddt_class"]["needs_plddt"])
+        self.assertTrue(by_key["plddt"]["needs_plddt"])
         self.assertEqual(by_key["pae_row_mean"]["group"], "PAE")
         self.assertEqual(by_key["pae_row_mean"]["tier"], "normal")
         self.assertEqual(by_key["pae_col_mean"]["tier"], "normal")
@@ -3192,7 +3171,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
             dialog._compute_property_for(
                 "plddt",
                 None,
-                types.SimpleNamespace(structure_plddt=None, plddt=None),
+                types.SimpleNamespace(token_plddt=None),
                 [],
                 "target_model_0",
             )
@@ -3200,14 +3179,13 @@ class GuiModelSwitchingTests(unittest.TestCase):
         self.assertEqual(len(msg.warnings), 1)
         self.assertIn("pLDDT data are not available", msg.warnings[0][1])
 
-    def test_plddt_class_coloring_uses_selected_fallback_source(self) -> None:
+    def test_plddt_class_coloring_uses_canonical_values(self) -> None:
         dialog = _new_dialog()
-        structure_values = np.array([0.9, 0.8], dtype=np.float32)
-        provider_values = np.array([0.1, 0.2], dtype=np.float32)
+        canonical_values = np.array([0.1, 0.2], dtype=np.float32)
         token_map = _token_map(_token(0), _token(1))
         dialog._pred_data = types.SimpleNamespace(
-            structure_plddt=structure_values,
-            plddt=provider_values,
+            token_plddt=canonical_values,
+            token_plddt_source="provider_token",
         )
         dialog._token_map = token_map
         dialog._build_token_map_if_needed = lambda _obj_name: None
@@ -3226,20 +3204,8 @@ class GuiModelSwitchingTests(unittest.TestCase):
             dialog._apply_plddt_class_coloring("plddt_class", "target_model_0")
 
         np.testing.assert_array_equal(
-            paint.call_args.kwargs["values"], structure_values
+            paint.call_args.kwargs["values"], canonical_values
         )
-
-        dialog._pred_data = types.SimpleNamespace(
-            structure_plddt=None,
-            plddt=provider_values,
-        )
-        with (
-            mock.patch("FoldQC.gui_coloring.paint_plddt_class_coloring") as paint,
-            mock.patch("FoldQC.gui_coloring.delete_colorbar"),
-        ):
-            dialog._apply_plddt_class_coloring("plddt_class", "target_model_0")
-
-        np.testing.assert_array_equal(paint.call_args.kwargs["values"], provider_values)
 
     def test_single_statistics_update_writes_text_box(self) -> None:
         dialog = _new_dialog()
@@ -3282,8 +3248,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         dialog._ensemble_group_name = None
         dialog._pred_data = types.SimpleNamespace(
             structure_path=Path("/tmp/target_model_0.cif"),
-            structure_plddt=np.array([0.8, 0.9], dtype=np.float32),
-            plddt=None,
+            token_plddt=np.array([0.8, 0.9], dtype=np.float32),
         )
         dialog._pred_files = object()
         dialog._token_map = _token_map(_token(0, res_num=1), _token(1, res_num=2))
@@ -3445,8 +3410,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         dialog = _new_dialog()
         dialog._pred_data = types.SimpleNamespace(
             structure_path=Path("/tmp/target_model_0.cif"),
-            structure_plddt=np.array([0.8, 0.9], dtype=np.float32),
-            plddt=None,
+            token_plddt=np.array([0.8, 0.9], dtype=np.float32),
         )
         dialog._token_map = _token_map(_token(0, res_num=1), _token(1, res_num=2))
         dialog._build_token_map_if_needed = lambda _obj_name: None
@@ -3479,13 +3443,11 @@ class GuiModelSwitchingTests(unittest.TestCase):
             has_pae=False,
             has_pde=False,
             has_contact_probs=False,
-            has_plddt=False,
-            has_structure_plddt=True,
+            has_plddt=True,
             supports_ensemble=False,
         )
         dialog._pred_data = types.SimpleNamespace(
-            plddt=None,
-            structure_plddt=np.array([0.9], dtype=np.float32),
+            token_plddt=np.array([0.9], dtype=np.float32),
             confidence=None,
             summary_confidence=None,
         )
@@ -3512,12 +3474,10 @@ class GuiModelSwitchingTests(unittest.TestCase):
             has_pde=False,
             has_contact_probs=False,
             has_plddt=False,
-            has_structure_plddt=False,
             supports_ensemble=False,
         )
         dialog._pred_data = types.SimpleNamespace(
-            plddt=None,
-            structure_plddt=None,
+            token_plddt=None,
             confidence={"chains_iptm": {"0": 0.8}},
             summary_confidence=None,
         )
@@ -3539,13 +3499,11 @@ class GuiModelSwitchingTests(unittest.TestCase):
             has_pae=False,
             has_pde=False,
             has_contact_probs=False,
-            has_plddt=False,
-            has_structure_plddt=True,
+            has_plddt=True,
             supports_ensemble=False,
         )
         dialog._pred_data = types.SimpleNamespace(
-            plddt=None,
-            structure_plddt=np.array([0.9], dtype=np.float32),
+            token_plddt=np.array([0.9], dtype=np.float32),
             confidence={
                 "confidence_score": 0.91,
                 "chains_ptm": {},
@@ -3576,12 +3534,10 @@ class GuiModelSwitchingTests(unittest.TestCase):
             has_pde=False,
             has_contact_probs=False,
             has_plddt=True,
-            has_structure_plddt=True,
             supports_ensemble=True,
         )
         dialog._pred_data = types.SimpleNamespace(
-            plddt=np.array([0.8], dtype=np.float32),
-            structure_plddt=np.array([0.8], dtype=np.float32),
+            token_plddt=np.array([0.8], dtype=np.float32),
             confidence=None,
             summary_confidence=None,
         )
@@ -3605,20 +3561,18 @@ class GuiModelSwitchingTests(unittest.TestCase):
         for row in ensemble_rows:
             self.assertTrue(dialog._prop_combo.model().item(row).flags() & enabled)
 
-    def test_ensemble_plddt_properties_accept_structure_plddt_only(self) -> None:
+    def test_ensemble_plddt_properties_accept_canonical_plddt(self) -> None:
         enabled = _PYMOL.Qt.QtCore.Qt.ItemFlag.ItemIsEnabled
         dialog = _new_dialog()
         dialog._pred_files = types.SimpleNamespace(
             has_pae=False,
             has_pde=False,
             has_contact_probs=False,
-            has_plddt=False,
-            has_structure_plddt=True,
+            has_plddt=True,
             supports_ensemble=True,
         )
         dialog._pred_data = types.SimpleNamespace(
-            plddt=None,
-            structure_plddt=np.array([0.8], dtype=np.float32),
+            token_plddt=np.array([0.8], dtype=np.float32),
             confidence=None,
             summary_confidence=None,
         )
@@ -3645,12 +3599,10 @@ class GuiModelSwitchingTests(unittest.TestCase):
             has_pde=False,
             has_contact_probs=False,
             has_plddt=False,
-            has_structure_plddt=False,
             supports_ensemble=False,
         )
         dialog._pred_data = types.SimpleNamespace(
-            plddt=None,
-            structure_plddt=None,
+            token_plddt=None,
             confidence=None,
             summary_confidence=None,
         )
@@ -3739,8 +3691,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         )
         data = types.SimpleNamespace(
             pae=np.zeros((3, 3), dtype=np.float32),
-            structure_plddt=None,
-            plddt=None,
+            token_plddt=None,
         )
 
         # All-zero PAE: threshold=6.25 puts all 3 tokens in one cluster.
@@ -3758,8 +3709,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         dialog._pae_domain_dependency_available = lambda method: method == "spectral"
         data = types.SimpleNamespace(
             pae=np.zeros((3, 3), dtype=np.float32),
-            structure_plddt=None,
-            plddt=None,
+            token_plddt=None,
         )
 
         # All-zero PAE: threshold=8.5 puts all 3 tokens in one cluster.
@@ -3775,8 +3725,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         dialog._cutoff_edit = _LineEdit("5.0")
         data = types.SimpleNamespace(
             pae=np.zeros((2, 2), dtype=np.float32),
-            structure_plddt=None,
-            plddt=None,
+            token_plddt=None,
         )
         prompts = []
         dialog._prompt_dependency_action = lambda keys, **kwargs: (
@@ -3799,8 +3748,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         dialog._cutoff_edit = _LineEdit("5.0")
         data = types.SimpleNamespace(
             pae=np.zeros((2, 2), dtype=np.float32),
-            structure_plddt=None,
-            plddt=None,
+            token_plddt=None,
         )
         prompts = []
         dialog._prompt_dependency_action = lambda keys, **kwargs: (
@@ -4102,8 +4050,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
             label="target_model_0",
             obj_name="target_model_0",
             data=types.SimpleNamespace(
-                structure_plddt=np.array([0.9, 0.8], dtype=np.float32),
-                plddt=np.array([0.1, 0.2], dtype=np.float32),
+                token_plddt=np.array([0.9, 0.8], dtype=np.float32),
             ),
             token_map=token_map,
         )
@@ -4230,8 +4177,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
                 rank=0,
                 display_label="rank 0",
                 structure_path=root / "target_model_0.cif",
-                structure_plddt=np.array([0.91, 0.42], dtype=np.float32),
-                plddt=None,
+                token_plddt=np.array([0.91, 0.42], dtype=np.float32),
             )
             token_map = [_token(0), _token(1, chain_id="L", is_hetatm=True)]
             target = _PlotTarget(
@@ -4287,8 +4233,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
             display_label="rank 0",
             structure_path=root / "target_model_0.cif",
             pde=pde,
-            structure_plddt=None,
-            plddt=None,
+            token_plddt=None,
             confidence=None,
         )
         token_map = [
@@ -4358,8 +4303,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
             display_label="rank 0",
             structure_path=root / "target_model_0.cif",
             pae=pae,
-            structure_plddt=None,
-            plddt=None,
+            token_plddt=None,
             confidence=None,
         )
         token_map = [
@@ -4424,8 +4368,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
                     provider="boltz",
                     name="target",
                     structure_path=root / "target_model_0.cif",
-                    structure_plddt=np.array([0.8, 0.9], dtype=np.float32),
-                    plddt=None,
+                    token_plddt=np.array([0.8, 0.9], dtype=np.float32),
                 ),
                 token_map=token_map,
             ),
@@ -4438,8 +4381,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
                     provider="boltz",
                     name="target",
                     structure_path=root / "target_model_1.cif",
-                    structure_plddt=np.array([0.7, 0.6], dtype=np.float32),
-                    plddt=None,
+                    token_plddt=np.array([0.7, 0.6], dtype=np.float32),
                 ),
                 token_map=token_map,
             ),
@@ -4906,8 +4848,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
             ),
             pde=None,
             contact_probs=None,
-            structure_plddt=None,
-            plddt=None,
+            token_plddt=None,
         )
         target = _PlotTarget(
             kind="single",
@@ -5132,8 +5073,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
             _token(2, chain_id="A", res_num=11),
         ]
         data = types.SimpleNamespace(
-            structure_plddt=np.array([0.8, np.nan, 0.6], dtype=np.float32),
-            plddt=None,
+            token_plddt=np.array([0.8, np.nan, 0.6], dtype=np.float32),
             pae=np.array(
                 [[0.0, 2.0, 4.0], [6.0, 0.0, 8.0], [10.0, 12.0, 0.0]],
                 dtype=np.float32,
@@ -5237,11 +5177,10 @@ class GuiModelSwitchingTests(unittest.TestCase):
             np.arange(9, dtype=np.float32).reshape(3, 3) + 10.0,
         ]
 
-        def ensure(
-            member, *, load_pae=False, load_pde=False, load_structure_plddt=False
-        ):
+        def ensure(member, *, load_pae=False, load_pde=False, load_token_plddt=False):
             self.assertFalse(load_pae)
             self.assertTrue(load_pde)
+            self.assertFalse(load_token_plddt)
             member.data.pde = matrices[member.rank]
 
         dialog._ensure_member_data_for_plot = ensure
@@ -5528,8 +5467,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
                 rank=0,
                 obj_name="target_model_0",
                 data=types.SimpleNamespace(
-                    structure_plddt=None,
-                    plddt=np.array([0.8, 0.6], dtype=np.float32),
+                    token_plddt=np.array([0.8, 0.6], dtype=np.float32),
                     pae=None,
                     pde=None,
                 ),
@@ -5538,8 +5476,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
                 rank=1,
                 obj_name="target_model_1",
                 data=types.SimpleNamespace(
-                    structure_plddt=None,
-                    plddt=np.array([1.0, 0.2], dtype=np.float32),
+                    token_plddt=np.array([1.0, 0.2], dtype=np.float32),
                     pae=None,
                     pde=None,
                 ),
@@ -5591,8 +5528,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         pae = np.arange(16, dtype=np.float32).reshape(4, 4)
         pde = np.arange(16, dtype=np.float32).reshape(4, 4) + 100.0
         dialog._pred_data = types.SimpleNamespace(
-            structure_plddt=plddt,
-            plddt=None,
+            token_plddt=plddt,
             pae=pae,
             pde=pde,
         )
@@ -5714,8 +5650,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         plddt = np.linspace(0.5, 0.9, len(token_map), dtype=np.float32)
         dialog._pred_data = types.SimpleNamespace(
             rank=0,
-            structure_plddt=plddt,
-            plddt=None,
+            token_plddt=plddt,
             pae=None,
             pde=None,
             contact_probs=None,
@@ -5926,8 +5861,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         data = types.SimpleNamespace(
             pde=pde,
             confidence=None,
-            plddt=None,
-            structure_plddt=None,
+            token_plddt=None,
         )
         token_map = [
             _token(0, chain_id="L", is_hetatm=True),
@@ -5987,8 +5921,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         data = types.SimpleNamespace(
             pae=pae,
             confidence=None,
-            plddt=None,
-            structure_plddt=None,
+            token_plddt=None,
         )
         token_map = [
             _token(0, chain_id="L", is_hetatm=True),

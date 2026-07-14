@@ -55,11 +55,11 @@ def test_has_multiple_token_chains_counts_hetatm_chains() -> None:
 @pytest.mark.parametrize(
     ("key", "expected"),
     [
-        ("pae_to_sel", (True, False, False, False, False)),
-        ("pae_contact", (True, False, False, False, False)),
-        ("pde_contact", (False, True, False, False, False)),
-        ("contact_prob_to_sel", (False, False, True, False, False)),
-        ("plddt_class", (False, False, False, True, True)),
+        ("pae_to_sel", (True, False, False, False)),
+        ("pae_contact", (True, False, False, False)),
+        ("pde_contact", (False, True, False, False)),
+        ("contact_prob_to_sel", (False, False, True, False)),
+        ("plddt_class", (False, False, False, True)),
     ],
 )
 def test_line_member_load_flags(key: str, expected: tuple[bool, ...]) -> None:
@@ -223,8 +223,8 @@ def test_format_matrix_cell_text_handles_std_and_nonfinite() -> None:
 
 def test_fingerprint_arrays_and_series_for_single_model() -> None:
     data = types.SimpleNamespace(
-        structure_plddt=np.array([0.9, 0.8, 0.7], dtype=np.float32),
-        plddt=np.array([0.1, 0.2, 0.3], dtype=np.float32),
+        token_plddt=np.array([0.9, 0.8, 0.7], dtype=np.float32),
+        token_plddt_source="structure_b_factor",
         pae=np.arange(9, dtype=np.float32).reshape(3, 3),
         pde=np.arange(9, dtype=np.float32).reshape(3, 3) + 100.0,
         contact_probs=np.array(
@@ -235,7 +235,7 @@ def test_fingerprint_arrays_and_series_for_single_model() -> None:
 
     series = plot_data.fingerprint_series_for_single(data, [0, 2])
 
-    np.testing.assert_array_equal(series["plddt"], data.structure_plddt)
+    np.testing.assert_array_equal(series["plddt"], data.token_plddt)
     np.testing.assert_allclose(
         series["pae_to_ligand"], np.array([1.0, 4.0, 7.0], dtype=np.float32)
     )
@@ -256,15 +256,15 @@ def test_fingerprint_arrays_and_series_for_single_model() -> None:
 def test_fingerprint_series_for_ensemble_aggregates_mean_and_std() -> None:
     data_items = [
         types.SimpleNamespace(
-            structure_plddt=None,
-            plddt=np.array([0.8, 0.6], dtype=np.float32),
+            token_plddt=np.array([0.8, 0.6], dtype=np.float32),
+            token_plddt_source="provider_token",
             pae=None,
             pde=None,
             contact_probs=None,
         ),
         types.SimpleNamespace(
-            structure_plddt=None,
-            plddt=np.array([1.0, 0.2], dtype=np.float32),
+            token_plddt=np.array([1.0, 0.2], dtype=np.float32),
+            token_plddt_source="provider_token",
             pae=None,
             pde=None,
             contact_probs=None,
@@ -282,8 +282,8 @@ def test_fingerprint_series_for_ensemble_aggregates_mean_and_std() -> None:
 
 def test_site_summary_values_use_finite_site_means() -> None:
     data = types.SimpleNamespace(
-        structure_plddt=np.array([0.8, np.nan, 0.6], dtype=np.float32),
-        plddt=None,
+        token_plddt=np.array([0.8, np.nan, 0.6], dtype=np.float32),
+        token_plddt_source="structure_b_factor",
         pae=np.array(
             [[0.0, 2.0, 4.0], [6.0, 0.0, 8.0], [10.0, 12.0, 0.0]],
             dtype=np.float32,

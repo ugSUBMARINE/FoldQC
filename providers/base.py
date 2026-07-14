@@ -21,9 +21,8 @@ class LoadOptions:
     load_pae: bool = True
     load_pde: bool = True
     load_embeddings: bool = False
-    load_structure_plddt: bool = True
+    load_token_plddt: bool = True
     load_contact_probs: bool = False
-    load_plddt: bool = True
 
 
 class BaseProvider(ABC):
@@ -52,12 +51,13 @@ class BaseProvider(ABC):
             provider=pred_files.provider,
             display_label=model.display_label,
         )
-        if options.load_structure_plddt:
-            data.structure_plddt = extract_structure_plddt(model.structure_path)
         if model.summary_path is not None:
             data.summary_confidence = _load_json(model.summary_path)
             data.confidence = _normalise_confidence(data.summary_confidence)
         self.load_model_data(pred_files, model, data, options)
+        if options.load_token_plddt and data.token_plddt is None:
+            data.token_plddt = extract_structure_plddt(model.structure_path)
+            data.token_plddt_source = "structure_b_factor"
         if data.confidence is None and data.summary_confidence is not None:
             data.confidence = _normalise_confidence(data.summary_confidence)
         return data
