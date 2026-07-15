@@ -20,8 +20,9 @@ from .compat import (
 )
 from .gui_application import GuiApplicationServices
 from .gui_layout import build_dialog_ui
-from .gui_presenter import QtPresenter
+from .gui_presenter import QtGuiScheduler, QtPresenter
 from .gui_state import PluginState, ResolvedTarget
+from .gui_view import QtDialogView
 from .mol_viewer import PyMOLViewer, get_selection_examples, get_viewer_name
 
 APP_TITLE = "FoldQC"
@@ -52,161 +53,33 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
         self.setWindowTitle(APP_TITLE)
         self.setMinimumWidth(480)
 
-        # Non-widget state is shared with the GUI-side workflow coordinators.
+        self._build_ui()
+        self._presenter = QtPresenter(self)
+        self._scheduler = QtGuiScheduler()
+        self._view = QtDialogView(self, self.widgets)
+
+        # Non-widget state is shared with the injected workflow coordinators.
         self.state = PluginState()
         self._viewer = PyMOLViewer()
-        self._presenter = QtPresenter(self)
-        self.services = GuiApplicationServices(self)
-        self._plot_windows = []  # Qt plot dialogs kept alive while visible
         self._guide_dialog = None  # Lightweight first-run guide dialog
         if job_runner is None:
             from .gui_jobs import QtJobRunner
 
             job_runner = QtJobRunner()
         self._job_runner = job_runner
-        self._active_load_handle = None
-        self._active_deferred_analysis = None
-        self._active_data_error_title = f"{APP_TITLE} - error"
-        self._model_switch_previous_store = None
-        self._model_switch_previous_viewer_context = None
-        self._active_ensemble_viewer_transaction = None
-        self._load_progress_dialog = None
-        self._progress_show_generation = 0
+        self.services = GuiApplicationServices(
+            self,
+            state=self.state,
+            viewer=self._viewer,
+            presenter=self._presenter,
+            view=self._view,
+            scheduler=self._scheduler,
+            job_runner=self._job_runner,
+        )
         self.services.dependencies.initialize()
-
-        self._build_ui()
         self._connect_signals()
         self._restore_session_settings()
-        self._on_property_changed()  # set initial reference-field visibility
-
-    def __getattr__(self, name: str):
-        """Resolve implementation methods from explicitly owned services."""
-        widgets = self.__dict__.get("widgets")
-        if widgets is not None and hasattr(widgets, name):
-            return getattr(widgets, name)
-        services = self.__dict__.get("services")
-        if services is not None:
-            method = services.resolve_implementation_method(name)
-            if method is not None:
-                return method
-        raise AttributeError(name)
-
-    @property
-    def _pred_files(self):
-        return self.state.pred_files
-
-    @_pred_files.setter
-    def _pred_files(self, value) -> None:
-        self.state.pred_files = value
-
-    @property
-    def _model_states(self):
-        return self.state.model_states
-
-    @_model_states.setter
-    def _model_states(self, value) -> None:
-        self.state.model_states = value
-
-    @property
-    def _active_model_rank(self):
-        return self.state.active_model_rank
-
-    @_active_model_rank.setter
-    def _active_model_rank(self, value) -> None:
-        self.state.active_model_rank = value
-
-    @property
-    def _active_model_state(self):
-        return self.state.active_model_state
-
-    @property
-    def _paint_mappings(self):
-        viewer = self.__dict__.get("_viewer")
-        return (
-            self.services.analysis.paint_mappings
-            if viewer is None
-            else viewer.paint_mappings
-        )
-
-    @_paint_mappings.setter
-    def _paint_mappings(self, value) -> None:
-        viewer = self.__dict__.get("_viewer")
-        if viewer is None:
-            self.services.analysis.paint_mappings = value
-        else:
-            viewer.paint_mappings = value
-
-    @property
-    def _ensemble(self):
-        return self.state.ensemble
-
-    @_ensemble.setter
-    def _ensemble(self, value) -> None:
-        self.state.ensemble = value
-
-    @property
-    def _accepted_token_overlap_warnings(self):
-        return self.services.analysis.accepted_overlap_warnings
-
-    @_accepted_token_overlap_warnings.setter
-    def _accepted_token_overlap_warnings(self, value) -> None:
-        self.services.analysis.accepted_overlap_warnings = value
-
-    @property
-    def _loading_prediction(self):
-        return self.services.lifecycle.loading_prediction
-
-    @_loading_prediction.setter
-    def _loading_prediction(self, value) -> None:
-        self.services.lifecycle.loading_prediction = value
-
-    @property
-    def _loading_data(self):
-        return self.services.lifecycle.loading_data
-
-    @_loading_data.setter
-    def _loading_data(self, value) -> None:
-        self.services.lifecycle.loading_data = value
-
-    @property
-    def _gui_job_request_id(self):
-        return self.services.lifecycle.gui_job_request_id
-
-    @_gui_job_request_id.setter
-    def _gui_job_request_id(self, value) -> None:
-        self.services.lifecycle.gui_job_request_id = value
-
-    @property
-    def _prediction_load_request_id(self):
-        return self.services.lifecycle.prediction_load_request_id
-
-    @_prediction_load_request_id.setter
-    def _prediction_load_request_id(self, value) -> None:
-        self.services.lifecycle.prediction_load_request_id = value
-
-    @property
-    def _data_load_request_id(self):
-        return self.services.lifecycle.data_load_request_id
-
-    @_data_load_request_id.setter
-    def _data_load_request_id(self, value) -> None:
-        self.services.lifecycle.data_load_request_id = value
-
-    @property
-    def _restoring_settings(self):
-        return self.services.lifecycle.restoring_settings
-
-    @_restoring_settings.setter
-    def _restoring_settings(self, value) -> None:
-        self.services.lifecycle.restoring_settings = value
-
-    @property
-    def _pending_session_restore(self):
-        return self.services.lifecycle.pending_session_restore
-
-    @_pending_session_restore.setter
-    def _pending_session_restore(self, value) -> None:
-        self.services.lifecycle.pending_session_restore = value
+        self.services.context.on_property_changed()
 
     # -----------------------------------------------------------------------
     # UI construction
@@ -232,8 +105,10 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
 
     def _populate_property_combo(self) -> None:
         """Populate Color by with disabled group headers and metric rows."""
-        self._prop_combo_rows = {}
-        self._populate_property_combo_for(self._prop_combo, self._prop_combo_rows)
+        self.widgets._prop_combo_rows = {}
+        self._populate_property_combo_for(
+            self.widgets._prop_combo, self.widgets._prop_combo_rows
+        )
 
     def _populate_property_combo_for(self, combo, rows: dict[str, int]) -> None:
         """Populate a provided metric combo while the widget registry is built."""
@@ -254,49 +129,75 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
             item.setFlags(item.flags() & ~ItemIsEnabled)
 
     def _connect_signals(self) -> None:
-        self._dir_btn.clicked.connect(self._browse_directory)
-        self._file_btn.clicked.connect(self._browse_file)
-        self._dir_edit.returnPressed.connect(self.services.lifecycle.load_prediction)
-        self._dir_edit.textChanged.connect(self._save_session_settings)
-        self._model_combo.currentIndexChanged.connect(self._on_model_changed)
-        self._model_combo.currentIndexChanged.connect(self._save_session_settings)
-        self._obj_refresh_btn.clicked.connect(self._refresh_objects)
-        self._obj_combo.currentIndexChanged.connect(self._refresh_contextual_ui)
-        self._obj_combo.currentIndexChanged.connect(self._save_session_settings)
-        self._prop_combo.currentIndexChanged.connect(self._on_property_changed)
-        self._prop_combo.currentIndexChanged.connect(self._save_session_settings)
-        self._ref_edit.textChanged.connect(self._refresh_contextual_ui)
-        self._ref_edit.textChanged.connect(self._save_session_settings)
-        self._ref_edit.textChanged.connect(self.services.analysis.bump_revision)
-        self._cutoff_edit.textChanged.connect(self._refresh_contextual_ui)
-        self._cutoff_edit.textChanged.connect(self._save_session_settings)
-        self._cutoff_edit.textChanged.connect(self.services.analysis.bump_revision)
-        self._palette_combo.currentIndexChanged.connect(self._save_session_settings)
-        self._palette_reverse_chk.stateChanged.connect(self._save_session_settings)
-        self._vmin_edit.textChanged.connect(self._save_session_settings)
-        self._vmax_edit.textChanged.connect(self._save_session_settings)
-        self._model_combo.currentIndexChanged.connect(
+        self.widgets._dir_btn.clicked.connect(self._browse_directory)
+        self.widgets._file_btn.clicked.connect(self._browse_file)
+        self.widgets._dir_edit.returnPressed.connect(
+            self.services.lifecycle.load_prediction
+        )
+        self.widgets._dir_edit.textChanged.connect(self._save_session_settings)
+        self.widgets._model_combo.currentIndexChanged.connect(
+            self.services.lifecycle._on_model_changed
+        )
+        self.widgets._model_combo.currentIndexChanged.connect(
+            self._save_session_settings
+        )
+        self.widgets._obj_refresh_btn.clicked.connect(
+            self.services.context._refresh_objects
+        )
+        self.widgets._obj_combo.currentIndexChanged.connect(
+            self.services.context.refresh
+        )
+        self.widgets._obj_combo.currentIndexChanged.connect(self._save_session_settings)
+        self.widgets._prop_combo.currentIndexChanged.connect(
+            self.services.context.on_property_changed
+        )
+        self.widgets._prop_combo.currentIndexChanged.connect(
+            self._save_session_settings
+        )
+        self.widgets._ref_edit.textChanged.connect(self.services.context.refresh)
+        self.widgets._ref_edit.textChanged.connect(self._save_session_settings)
+        self.widgets._ref_edit.textChanged.connect(self.services.analysis.bump_revision)
+        self.widgets._cutoff_edit.textChanged.connect(self.services.context.refresh)
+        self.widgets._cutoff_edit.textChanged.connect(self._save_session_settings)
+        self.widgets._cutoff_edit.textChanged.connect(
             self.services.analysis.bump_revision
         )
-        self._obj_combo.currentIndexChanged.connect(
+        self.widgets._palette_combo.currentIndexChanged.connect(
+            self._save_session_settings
+        )
+        self.widgets._palette_reverse_chk.stateChanged.connect(
+            self._save_session_settings
+        )
+        self.widgets._vmin_edit.textChanged.connect(self._save_session_settings)
+        self.widgets._vmax_edit.textChanged.connect(self._save_session_settings)
+        self.widgets._model_combo.currentIndexChanged.connect(
             self.services.analysis.bump_revision
         )
-        self._prop_combo.currentIndexChanged.connect(
+        self.widgets._obj_combo.currentIndexChanged.connect(
             self.services.analysis.bump_revision
         )
-        self._palette_combo.currentIndexChanged.connect(
+        self.widgets._prop_combo.currentIndexChanged.connect(
             self.services.analysis.bump_revision
         )
-        self._palette_reverse_chk.stateChanged.connect(
+        self.widgets._palette_combo.currentIndexChanged.connect(
             self.services.analysis.bump_revision
         )
-        self._vmin_edit.textChanged.connect(self.services.analysis.bump_revision)
-        self._vmax_edit.textChanged.connect(self.services.analysis.bump_revision)
-        self._guide_btn.clicked.connect(self._show_guide)
-        self._apply_btn.clicked.connect(self.services.analysis.apply_coloring)
-        self._export_csv_btn.clicked.connect(self.services.analysis.export_csv)
-        self._ensemble_btn.clicked.connect(self.services.lifecycle.show_ensemble)
-        self._close_btn.clicked.connect(self.close)
+        self.widgets._palette_reverse_chk.stateChanged.connect(
+            self.services.analysis.bump_revision
+        )
+        self.widgets._vmin_edit.textChanged.connect(
+            self.services.analysis.bump_revision
+        )
+        self.widgets._vmax_edit.textChanged.connect(
+            self.services.analysis.bump_revision
+        )
+        self.widgets._guide_btn.clicked.connect(self._show_guide)
+        self.widgets._apply_btn.clicked.connect(self.services.analysis.apply_coloring)
+        self.widgets._export_csv_btn.clicked.connect(self._export_csv)
+        self.widgets._ensemble_btn.clicked.connect(
+            self.services.lifecycle.show_ensemble
+        )
+        self.widgets._close_btn.clicked.connect(self.close)
 
     def _guide_text(self) -> str:
         """Return compact non-computing guidance for common FoldQC workflows."""
@@ -362,30 +263,31 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
 
     def _save_session_settings(self, *_args) -> None:
         """Persist lightweight GUI state for the next FoldQC dialog."""
-        if getattr(self, "_restoring_settings", False):
+        if self.services.lifecycle.restoring_settings:
             return
-        if self._gui_job_is_busy():
+        if self.services.lifecycle._gui_job_is_busy():
             return
 
         try:
             settings = self._settings()
-            rank = self._model_combo.currentData()
-            metric_key = self._prop_combo.currentData()
-            palette_key, reverse_palette = self._selected_palette()
+            rank = self.widgets._model_combo.currentData()
+            metric_key = self.widgets._prop_combo.currentData()
+            palette_key = str(self.widgets._palette_combo.currentData())
+            reverse_palette = bool(self.widgets._palette_reverse_chk.isChecked())
             geometry = None
             if hasattr(self, "saveGeometry"):
                 geometry = self.saveGeometry()
             state = session.SessionState(
-                path=self._dir_edit.text(),
+                path=self.widgets._dir_edit.text(),
                 model_rank=rank,
                 metric_key="" if metric_key is None else metric_key,
-                target_name=self._obj_combo.currentText(),
-                reference_text=self._ref_edit.text(),
-                cutoff_text=self._cutoff_edit.text(),
+                target_name=self.widgets._obj_combo.currentText(),
+                reference_text=self.widgets._ref_edit.text(),
+                cutoff_text=self.widgets._cutoff_edit.text(),
                 palette_key=palette_key,
                 palette_reversed=reverse_palette,
-                scale_min=self._vmin_edit.text(),
-                scale_max=self._vmax_edit.text(),
+                scale_min=self.widgets._vmin_edit.text(),
+                scale_max=self.widgets._vmax_edit.text(),
                 geometry=geometry,
             )
             session.write_session_state(settings, state)
@@ -394,27 +296,31 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
 
     def _restore_session_settings(self) -> None:
         """Restore saved lightweight GUI state and reload a valid last path."""
-        self._restoring_settings = True
+        self.services.lifecycle.restoring_settings = True
         try:
             settings = self._settings()
             state = session.read_session_state(settings)
-            self._pending_session_restore = session.PendingSessionRestore(
-                model_rank=state.model_rank,
-                metric_key=state.metric_key or None,
-                target_name=state.target_name or None,
+            self.services.lifecycle.pending_session_restore = (
+                session.PendingSessionRestore(
+                    model_rank=state.model_rank,
+                    metric_key=state.metric_key or None,
+                    target_name=state.target_name or None,
+                )
             )
 
-            self._dir_edit.setText(state.path)
-            self._ref_edit.setText(state.reference_text)
+            self.widgets._dir_edit.setText(state.path)
+            self.widgets._ref_edit.setText(state.reference_text)
             if state.cutoff_text:
-                self._cutoff_edit.setText(state.cutoff_text)
-            self._vmin_edit.setText(state.scale_min)
-            self._vmax_edit.setText(state.scale_max)
-            self._palette_reverse_chk.setChecked(state.palette_reversed)
+                self.widgets._cutoff_edit.setText(state.cutoff_text)
+            self.widgets._vmin_edit.setText(state.scale_min)
+            self.widgets._vmax_edit.setText(state.scale_max)
+            self.widgets._palette_reverse_chk.setChecked(state.palette_reversed)
             if state.palette_key:
-                self._select_combo_data(self._palette_combo, state.palette_key)
+                self._view.select_combo_data(
+                    self.widgets._palette_combo, state.palette_key
+                )
             if state.metric_key:
-                self._select_property_if_available(state.metric_key)
+                self._view.select_property_if_available(state.metric_key)
 
             if state.geometry and hasattr(self, "restoreGeometry"):
                 try:
@@ -423,20 +329,20 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
                     pass
 
             if state.path and Path(state.path).exists():
-                self._load_prediction_dir()
+                self.services.lifecycle.load_prediction(state.path)
         finally:
-            self._restoring_settings = False
+            self.services.lifecycle.restoring_settings = False
 
     def closeEvent(self, event) -> None:
         """Persist session state when the dialog closes."""
-        if self._dependency_close_is_blocked(event):
+        if self.services.dependencies._dependency_close_is_blocked(event):
             return
-        if self._gui_job_is_busy():
-            self._abandon_active_gui_job()
+        if self.services.lifecycle._gui_job_is_busy():
+            self.services.lifecycle._abandon_active_gui_job()
         else:
             self._save_session_settings()
-        pred_files = self._pred_files
-        self._pred_files = None
+        pred_files = self.state.pred_files
+        self.state.pred_files = None
         if pred_files is not None:
             self._job_runner.dispose(pred_files)
         try:
@@ -452,11 +358,11 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
         path = QtWidgets.QFileDialog.getExistingDirectory(
             self,
             "Select prediction output folder",
-            self._dir_edit.text() or str(Path.home()),
+            self.widgets._dir_edit.text() or str(Path.home()),
         )
         if path:
-            self._dir_edit.setText(path)
-            self._load_prediction_dir()
+            self.widgets._dir_edit.setText(path)
+            self.services.lifecycle.load_prediction(path)
         else:
             self._raise_after_native_dialog()
 
@@ -465,13 +371,30 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
         result = QtWidgets.QFileDialog.getOpenFileName(
             self,
             "Select predicted structure file or prediction archive",
-            self._dir_edit.text() or str(Path.home()),
+            self.widgets._dir_edit.text() or str(Path.home()),
             PREDICTION_FILE_FILTER,
         )
         path = result[0] if isinstance(result, tuple) else result
         if path:
-            self._dir_edit.setText(path)
-            self._load_prediction_dir()
+            self.widgets._dir_edit.setText(path)
+            self.services.lifecycle.load_prediction(path)
+        else:
+            self._raise_after_native_dialog()
+
+    def _export_csv(self) -> None:
+        """Capture a native save path before submitting the export request."""
+        default_path = self.services.analysis.default_export_path()
+        if default_path is None:
+            return
+        result = QtWidgets.QFileDialog.getSaveFileName(
+            self,
+            "Export token metric CSV",
+            default_path,
+            "CSV files (*.csv);;All files (*)",
+        )
+        path = result[0] if isinstance(result, tuple) else result
+        if path:
+            self.services.analysis.export_csv(path)
         else:
             self._raise_after_native_dialog()
 
@@ -479,51 +402,3 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
         """Bring this dialog back after a native file dialog returns focus."""
         self.raise_()
         self.activateWindow()
-
-    # -----------------------------------------------------------------------
-    # Action handlers
-    # -----------------------------------------------------------------------
-
-    def _select_object(self, obj_name: str) -> None:
-        """Select an object by name in the object combo when present."""
-        for i in range(self._obj_combo.count()):
-            if self._obj_combo.itemText(i) == obj_name:
-                self._obj_combo.setCurrentIndex(i)
-                return
-
-    def _select_combo_data(self, combo, value) -> bool:
-        """Select the first combo row whose item data matches *value*."""
-        for i in range(combo.count()):
-            if combo.itemData(i) == value:
-                combo.setCurrentIndex(i)
-                return True
-        return False
-
-    def _combo_contains_text(self, combo, text: str) -> bool:
-        """Return True when a combo has an item with exactly *text*."""
-        for i in range(combo.count()):
-            if combo.itemText(i) == text:
-                return True
-        return False
-
-    def _select_model_rank(self, rank: int) -> bool:
-        """Select a model rank if it is present in the model combo."""
-        return self._select_combo_data(self._model_combo, rank)
-
-    def _select_property(self, key: str) -> None:
-        """Select a property combo item by internal key."""
-        for i in range(self._prop_combo.count()):
-            if self._prop_combo.itemData(i) == key:
-                self._prop_combo.setCurrentIndex(i)
-                return
-
-    def _select_property_if_available(self, key: str) -> bool:
-        """Select a property only when the combo row exists and is enabled."""
-        row = self._property_combo_row(key)
-        if row is None:
-            return False
-        item = self._prop_combo.model().item(row)
-        if item is not None and not (item.flags() & ItemIsEnabled):
-            return False
-        self._prop_combo.setCurrentIndex(row)
-        return True

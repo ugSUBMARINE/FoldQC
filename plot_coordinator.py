@@ -1,28 +1,45 @@
-"""Plot target resolution, data coordination, and figure dispatch."""
+"""Plot request resolution, lazy coordination, and presentation dispatch."""
 
 from __future__ import annotations
 
 import numpy as np
 
 from . import gui_rules, metrics, plot_data
-from .compat import QtWidgets
 from .gui_state import ResolvedTarget as _PlotTarget
 from .loader_models import DataCapability
 from .mol_viewer import get_viewer_name, selection_to_token_indices
+from .plot_preparation import PlotPreparationService
 from .token_map import TokenMap
+from .workflow_presentation import present_error, present_information, present_warning
 
 APP_TITLE = "FoldQC"
 VIEWER_NAME = get_viewer_name()
 
+_PLOT_PREPARERS = {
+    "line": "_show_line_plot",
+    "distribution": "_show_distribution_plot",
+    "matrix": "_show_matrix_plot",
+    "pae_summary": "_show_pae_summary_plot",
+    "pde_summary": "_show_pde_summary_plot",
+    "binding_site_fingerprint": "_show_binding_site_fingerprint",
+    "ensemble_site_summary": "_show_ensemble_site_summary",
+}
+_REGISTERED_PLOT_KEYS = frozenset(spec.key for spec in metrics.PLOTS)
+if frozenset(_PLOT_PREPARERS) != _REGISTERED_PLOT_KEYS:
+    missing = sorted(_REGISTERED_PLOT_KEYS - _PLOT_PREPARERS.keys())
+    unknown = sorted(_PLOT_PREPARERS.keys() - _REGISTERED_PLOT_KEYS)
+    raise RuntimeError(
+        "Plot preparation dispatch does not match PlotRegistry "
+        f"(missing={missing}, unknown={unknown})."
+    )
 
-class PlotWorkflow:
+
+class PlotCoordinator(PlotPreparationService):
     def _resolve_plot_target(self) -> _PlotTarget | None:
         """Resolve the current viewer target into data and token-map context."""
         obj_name = self._get_obj_name()
         if obj_name is None:
-            QtWidgets.QMessageBox.warning(
-                self, APP_TITLE, f"No {VIEWER_NAME} target selected."
-            )
+            present_warning(self, APP_TITLE, f"No {VIEWER_NAME} target selected.")
             return None
 
         ensemble_state = getattr(self, "_ensemble", None)
@@ -33,7 +50,7 @@ class PlotWorkflow:
         if obj_name == ensemble_group_name:
             members = sorted(ensemble_members or [], key=lambda member: member.rank)
             if not members:
-                QtWidgets.QMessageBox.information(
+                present_information(
                     self,
                     APP_TITLE,
                     "The ensemble target is not active.\nUse the Ensemble\u2026 button first.",
@@ -45,7 +62,7 @@ class PlotWorkflow:
                     for member in members
                 )
             except ValueError as exc:
-                QtWidgets.QMessageBox.warning(self, APP_TITLE, str(exc))
+                present_warning(self, APP_TITLE, str(exc))
                 return None
             reference = members[0]
             return _PlotTarget(
@@ -61,7 +78,7 @@ class PlotWorkflow:
             try:
                 state = self._canonical_state_for_ensemble_member(member)
             except ValueError as exc:
-                QtWidgets.QMessageBox.warning(self, APP_TITLE, str(exc))
+                present_warning(self, APP_TITLE, str(exc))
                 return None
             return _PlotTarget(
                 kind="ensemble_member",
@@ -73,37 +90,13 @@ class PlotWorkflow:
 
         state = self._active_model_state
         if state is None:
-            QtWidgets.QMessageBox.warning(self, APP_TITLE, "No prediction data loaded.")
+            present_warning(self, APP_TITLE, "No prediction data loaded.")
             return None
         return _PlotTarget(
             kind="single",
             label=obj_name,
             obj_name=obj_name,
             model_states=(state,),
-        )
-
-    def _canonical_state_for_ensemble_member(self, member):
-        ensemble_state = getattr(self, "_ensemble", None)
-        state = self._model_states.get(member.rank)
-        if (
-            ensemble_state is None
-            or member not in ensemble_state.members
-            or state is None
-        ):
-            raise ValueError(
-                f"Ensemble model_{member.rank} is no longer present in the "
-                "canonical model store. Reload the ensemble."
-            )
-        return state
-
-    def _member_supports_data(self, member, family: str) -> bool:
-        state = self._canonical_state_for_ensemble_member(member)
-        data_attr = "token_plddt" if family == "plddt" else family
-        if getattr(state.data, data_attr, None) is not None:
-            return True
-        model_getter = getattr(self._pred_files, "model", None)
-        return bool(
-            callable(model_getter) and model_getter(member.rank).supports(family)
         )
 
     def _resolve_reference_indices(
@@ -114,10 +107,10 @@ class PlotWorkflow:
         required: bool = False,
     ) -> list[int] | None:
         """Resolve the Reference field to token indices, preserving token order."""
-        ref_sel = self._ref_edit.text().strip()
+        ref_sel = self._analysis_reference_selection()
         if not ref_sel:
             if required:
-                QtWidgets.QMessageBox.warning(
+                present_warning(
                     self,
                     APP_TITLE,
                     "This plot requires a reference selection.\n"
@@ -126,254 +119,21 @@ class PlotWorkflow:
                 return None
             return []
 
-        indices = selection_to_token_indices(token_map, ref_sel, obj_name=obj_name)
+        indices = self._viewer_operation(
+            "selection_token_indices",
+            selection_to_token_indices,
+            token_map,
+            ref_sel,
+            obj_name=obj_name,
+        )
         if not indices:
-            QtWidgets.QMessageBox.warning(
+            present_warning(
                 self,
                 APP_TITLE,
                 f"Reference selection '{ref_sel}' matched no tokens in {obj_name}.",
             )
             return None
         return indices
-
-    def _compute_line_plot_data(
-        self,
-        key: str,
-        target: _PlotTarget,
-        ref_indices: list[int],
-        *,
-        plot_type: str = "line",
-    ) -> tuple[np.ndarray, list[tuple[str, np.ndarray, np.ndarray | None]], str]:
-        """Return x values, series tuples, and y-axis label for a line plot."""
-        token_map = target.token_map
-        spec = metrics.METRICS.require(key)
-        use_ref_scope = bool(ref_indices) and plot_type in spec.reference_scoped_plots
-        indices = list(ref_indices) if use_ref_scope else list(range(len(token_map)))
-        if not indices:
-            raise ValueError("No tokens are available for the line plot.")
-
-        compute_key = key
-        ref_edit = getattr(self, "_ref_edit", None)
-        ref_sel = None if ref_edit is None else ref_edit.text().strip() or None
-
-        if target.kind == "ensemble_group":
-            if compute_key == "ensemble_rmsd":
-                values = self._compute_ensemble_property("ensemble_rmsd")
-                return (
-                    np.asarray(indices, dtype=np.int32),
-                    [(metrics.metric_label(key), values[indices], None)],
-                    spec.line_ylabel,
-                )
-            if compute_key == "ensemble_plddt_mean":
-                mean = self._compute_ensemble_property("ensemble_plddt_mean")
-                std = self._compute_ensemble_property("ensemble_plddt_std")
-                return (
-                    np.asarray(indices, dtype=np.int32),
-                    [(metrics.metric_label(key), mean[indices], std[indices])],
-                    spec.line_ylabel,
-                )
-            if compute_key == "ensemble_plddt_std":
-                values = self._compute_ensemble_property("ensemble_plddt_std")
-                return (
-                    np.asarray(indices, dtype=np.int32),
-                    [(metrics.metric_label(key), values[indices], None)],
-                    spec.line_ylabel,
-                )
-
-            arrays = []
-            for member in target.members or []:
-                self._ensure_member_data_for_property(member, spec)
-                state = self._canonical_state_for_ensemble_member(member)
-                values = self._compute_property_for(
-                    compute_key,
-                    ref_sel,
-                    state.data,
-                    state.token_map,
-                    member.obj_name,
-                )
-                if values is None:
-                    raise ValueError("Could not compute the selected property.")
-                self._validate_token_count(values, state.token_map, member.obj_name)
-                arrays.append(np.asarray(values, dtype=np.float32))
-            mean, std = plot_data.nan_mean_std(arrays, len(token_map))
-            if mean is None:
-                raise ValueError("No ensemble values are available for this plot.")
-            return (
-                np.asarray(indices, dtype=np.int32),
-                [(f"{metrics.metric_label(key)} mean", mean[indices], std[indices])],
-                spec.line_ylabel,
-            )
-
-        if compute_key.startswith("ensemble_"):
-            values = self._compute_ensemble_property(compute_key)
-        else:
-            values = self._compute_property_for(
-                compute_key, ref_sel, target.data, token_map, target.obj_name
-            )
-        if values is None:
-            raise ValueError("Could not compute the selected property.")
-        self._validate_token_count(values, token_map, target.label)
-        return (
-            np.asarray(indices, dtype=np.int32),
-            [(metrics.metric_label(key), np.asarray(values)[indices], None)],
-            spec.line_ylabel,
-        )
-
-    def _summary_plot_has_matrix_data(self, kind: str, target: _PlotTarget) -> bool:
-        """Return whether the target can provide the requested summary matrix."""
-        attr = "pae" if kind == "pae" else "pde"
-        if self._has_matrix_data_family(attr):
-            return True
-        if target.kind == "ensemble_group":
-            return any(
-                getattr(
-                    self._canonical_state_for_ensemble_member(member).data,
-                    attr,
-                    None,
-                )
-                is not None
-                for member in target.members or []
-            )
-        return getattr(target.data, attr, None) is not None
-
-    def _compute_summary_plot_data(
-        self,
-        kind: str,
-        target: _PlotTarget,
-        ref_indices: list[int],
-    ) -> tuple[
-        np.ndarray,
-        list[
-            tuple[str, np.ndarray, np.ndarray | None]
-            | tuple[str, np.ndarray, np.ndarray | None, str]
-        ],
-        str,
-    ]:
-        """Return x values, series tuples, and y-axis label for a summary plot."""
-        if kind not in {"pae", "pde"}:
-            raise ValueError(f"Unknown summary plot kind: {kind}")
-        if not plot_data.has_multiple_token_chains(target.token_map):
-            raise ValueError("Summary plots require a target with more than one chain.")
-
-        indices = (
-            list(ref_indices) if ref_indices else list(range(len(target.token_map)))
-        )
-        if not indices:
-            raise ValueError("No tokens are available for the summary plot.")
-
-        capabilities: frozenset[DataCapability] = frozenset({kind})
-        if target.kind == "ensemble_group":
-            data_items = []
-            token_maps = []
-            for member in sorted(target.members or [], key=lambda item: item.rank):
-                self._ensure_member_data_for_plot(member, capabilities)
-                state = self._canonical_state_for_ensemble_member(member)
-                data_items.append(state.data)
-                token_maps.append(state.token_map)
-            series = plot_data.summary_series_for_ensemble(
-                kind,
-                data_items,
-                target.token_map,
-                token_maps=token_maps,
-            )
-        else:
-            if target.kind == "ensemble_member" and target.members:
-                self._ensure_member_data_for_plot(target.members[0], capabilities)
-            series = plot_data.summary_series_for_data(
-                kind, target.data, target.token_map
-            )
-
-        sliced = []
-        for item in series:
-            label, values, std = item[0], item[1], item[2]
-            sliced_item = (
-                label,
-                np.asarray(values, dtype=np.float32)[indices],
-                None if std is None else np.asarray(std, dtype=np.float32)[indices],
-            )
-            if len(item) == 4:
-                sliced.append((*sliced_item, item[3]))
-            else:
-                sliced.append(sliced_item)
-        ylabel = "PAE gap (Å)" if kind == "pae" else "PDE gap (Å)"
-        return np.asarray(indices, dtype=np.int32), sliced, ylabel
-
-    def _compute_matrix_plot_data(
-        self,
-        key: str,
-        target: _PlotTarget,
-        ref_indices: list[int],
-    ) -> tuple[
-        np.ndarray,
-        list[int],
-        list[int],
-        str,
-        str,
-        list[str] | None,
-        list[str] | None,
-        np.ndarray | None,
-    ]:
-        """Return matrix data and display metadata for a matrix plot."""
-        spec = metrics.METRICS.require(key)
-        if spec.matrix is None:
-            raise ValueError(
-                "Matrix plots are only available for PAE, PDE, interaction "
-                "probability, and chain ipTM properties."
-            )
-        attr = spec.matrix.source
-        title = spec.matrix.title
-        label = spec.matrix.colorbar_label
-        if attr == "chain_iptm":
-            return plot_data.chain_iptm_matrix_plot_data(
-                target_kind=target.kind,
-                data=target.model_states[0].data,
-                token_map=target.token_map,
-                title=title,
-                label=label,
-                members=list(target.model_states),
-            )
-
-        matrix_capabilities: frozenset[DataCapability] = frozenset({attr})
-
-        if target.kind == "ensemble_group":
-            matrices = []
-            for member in target.members or []:
-                self._ensure_member_data_for_plot(member, matrix_capabilities)
-                state = self._canonical_state_for_ensemble_member(member)
-                matrix = getattr(state.data, attr, None)
-                if matrix is None:
-                    raise ValueError(
-                        f"{label} matrix is not available for model_{member.rank}."
-                    )
-                matrices.append(np.asarray(matrix, dtype=np.float32))
-            matrix = np.stack(matrices, axis=0).mean(axis=0)
-            title = f"{title} — ensemble mean"
-        else:
-            if target.kind == "ensemble_member" and target.members:
-                self._ensure_member_data_for_plot(
-                    target.members[0], matrix_capabilities
-                )
-            matrix = getattr(target.data, attr, None)
-            if matrix is None:
-                raise ValueError(f"{label} matrix is not available for this model.")
-            matrix = np.asarray(matrix, dtype=np.float32)
-
-        if key == "pae_row_mean" and ref_indices:
-            row_indices = list(ref_indices)
-            col_indices = list(range(matrix.shape[1]))
-        elif key == "pae_col_to_sel" and ref_indices:
-            row_indices = list(ref_indices)
-            col_indices = list(range(matrix.shape[1]))
-        elif key == "pae_sym_within_sel" and ref_indices:
-            row_indices = list(ref_indices)
-            col_indices = list(ref_indices)
-        else:
-            row_indices = list(range(matrix.shape[0]))
-            col_indices = (
-                list(ref_indices) if ref_indices else list(range(matrix.shape[1]))
-            )
-        submatrix = matrix[np.ix_(row_indices, col_indices)]
-        return submatrix, row_indices, col_indices, title, label, None, None, None
 
     def _ensemble_site_summary_for_member(
         self,
@@ -389,8 +149,12 @@ class PlotWorkflow:
         )
         self._ensure_member_data_for_plot(member, capabilities)
         state = self._canonical_state_for_ensemble_member(member)
-        ref_indices = selection_to_token_indices(
-            state.token_map, ref_sel, obj_name=member.obj_name
+        ref_indices = self._viewer_operation(
+            "selection_token_indices",
+            selection_to_token_indices,
+            state.token_map,
+            ref_sel,
+            obj_name=member.obj_name,
         )
         if not ref_indices:
             raise ValueError(
@@ -443,52 +207,19 @@ class PlotWorkflow:
                 series.append((label, values, color))
         return members, labels, series, site_indices
 
-    def _compute_fingerprint_data(
-        self,
-        target: _PlotTarget,
-        ref_indices: list[int],
-    ) -> dict[str, np.ndarray | None]:
-        """Return mean/std fingerprint series for a single target or ensemble."""
-        size = len(target.token_map)
-        if target.kind != "ensemble_group":
-            if target.kind == "ensemble_member" and target.members:
-                member = target.members[0]
-                capabilities: frozenset[DataCapability] = frozenset(
-                    capability
-                    for capability in ("pae", "pde", "contact_probs")
-                    if self._member_supports_data(member, capability)
-                )
-                self._ensure_member_data_for_plot(member, capabilities)
-            return plot_data.fingerprint_series_for_single(target.data, ref_indices)
-
-        data_items = []
-        for member in target.members or []:
-            capabilities: frozenset[DataCapability] = frozenset(
-                capability
-                for capability in ("pae", "pde", "contact_probs")
-                if self._member_supports_data(member, capability)
-            )
-            self._ensure_member_data_for_plot(member, capabilities)
-            state = self._canonical_state_for_ensemble_member(member)
-            data_items.append(state.data)
-
-        return plot_data.fingerprint_series_for_ensemble(
-            data_items, ref_indices, size=size
-        )
-
     def _show_selected_plot(self, plot_type: str | None = None) -> None:
         """Dispatch the selected plot type to its plot handler."""
         if plot_type is None and hasattr(self, "_plot_type_combo"):
             plot_type = self._plot_type_combo.currentData()
         if plot_type is None:
-            QtWidgets.QMessageBox.warning(self, APP_TITLE, "No plot type selected.")
+            present_warning(self, APP_TITLE, "No plot type selected.")
             return
-        key = self._prop_combo.currentData()
+        key = self._analysis_metric_key()
         state = gui_rules.plot_action_state(
             plot_type,
             key,
             self._current_target_kind(),
-            bool(self._ref_edit.text().strip()),
+            bool(self._analysis_reference_selection()),
             bool(getattr(self, "_ensemble", None)),
             has_fingerprint_data=self._has_fingerprint_data(),
             has_pae_data=self._has_matrix_data_family("pae"),
@@ -496,7 +227,7 @@ class PlotWorkflow:
             has_multiple_chains=self._current_target_has_multiple_chains(),
         )
         if not state.enabled:
-            QtWidgets.QMessageBox.information(
+            present_information(
                 self,
                 APP_TITLE,
                 state.reason or f"{plot_type} is not available.",
@@ -512,24 +243,13 @@ class PlotWorkflow:
             feature_label=f"The {plot_spec.label.lower()} plot",
         ):
             return
-        if plot_type == "line":
-            self._show_line_plot()
-        elif plot_type == "distribution":
-            self._show_distribution_plot()
-        elif plot_type == "matrix":
-            self._show_matrix_plot()
-        elif plot_type == "pae_summary":
-            self._show_summary_plot("pae")
-        elif plot_type == "pde_summary":
-            self._show_summary_plot("pde")
-        elif plot_type == "binding_site_fingerprint":
-            self._show_binding_site_fingerprint()
-        elif plot_type == "ensemble_site_summary":
-            self._show_ensemble_site_summary()
-        else:
-            QtWidgets.QMessageBox.warning(
-                self, APP_TITLE, f"Unknown plot type: {plot_type}"
-            )
+        getattr(self, _PLOT_PREPARERS[plot_type])()
+
+    def _show_pae_summary_plot(self) -> None:
+        self._show_summary_plot("pae")
+
+    def _show_pde_summary_plot(self) -> None:
+        self._show_summary_plot("pde")
 
     def _fingerprint_capabilities(self, *, include_contact_probs: bool) -> frozenset:
         capabilities = {"plddt"}
@@ -547,10 +267,10 @@ class PlotWorkflow:
         if target is None:
             return
 
-        key = self._prop_combo.currentData()
+        key = self._analysis_metric_key()
         spec = metrics.METRICS.require(key)
         if spec.is_domain_label:
-            QtWidgets.QMessageBox.information(
+            present_information(
                 self,
                 APP_TITLE,
                 "Line plots are not available for PAE domain labels.\n"
@@ -559,7 +279,7 @@ class PlotWorkflow:
             return
         if spec.needs_contact_shell:
             metric_name = "PAE" if key == "pae_contact" else "PDE"
-            QtWidgets.QMessageBox.information(
+            present_information(
                 self,
                 APP_TITLE,
                 f"Line plots are not available for {metric_name} "
@@ -575,7 +295,6 @@ class PlotWorkflow:
         if self._defer_action_for_data(
             target,
             spec.load_capabilities,
-            self._show_line_plot,
             error_title=f"{APP_TITLE} - error",
             deferred_action=self.services.analysis.capture_current("line"),
         ):
@@ -594,7 +313,7 @@ class PlotWorkflow:
                 for item in series
             )
             if not has_finite_values:
-                QtWidgets.QMessageBox.warning(
+                present_warning(
                     self,
                     APP_TITLE,
                     "No finite values are available for this line plot.",
@@ -628,7 +347,7 @@ class PlotWorkflow:
             )
             self._show_plot_figure(fig, title)
         except Exception as exc:
-            QtWidgets.QMessageBox.critical(self, f"{APP_TITLE} - error", str(exc))
+            present_error(self, f"{APP_TITLE} - error", str(exc))
 
     def _show_summary_plot(self, kind: str) -> None:
         """Open a PAE/PDE intra-chain versus inter-chain summary line plot."""
@@ -638,14 +357,14 @@ class PlotWorkflow:
 
         label = "PAE" if kind == "pae" else "PDE"
         if not self._summary_plot_has_matrix_data(kind, target):
-            QtWidgets.QMessageBox.information(
+            present_information(
                 self,
                 APP_TITLE,
                 f"{label} summary requires {label} data.",
             )
             return
         if not plot_data.has_multiple_token_chains(target.token_map):
-            QtWidgets.QMessageBox.information(
+            present_information(
                 self,
                 APP_TITLE,
                 f"{label} summary requires a target with more than one chain.",
@@ -661,7 +380,6 @@ class PlotWorkflow:
         if self._defer_action_for_data(
             target,
             capabilities,
-            lambda: self._show_summary_plot(kind),
             error_title=f"{APP_TITLE} - error",
             deferred_action=self.services.analysis.capture_current(f"{kind}_summary"),
         ):
@@ -678,7 +396,7 @@ class PlotWorkflow:
                 for item in series
             )
             if not has_finite_values:
-                QtWidgets.QMessageBox.warning(
+                present_warning(
                     self,
                     APP_TITLE,
                     "No finite values are available for this summary plot.",
@@ -713,7 +431,7 @@ class PlotWorkflow:
             )
             self._show_plot_figure(fig, title)
         except Exception as exc:
-            QtWidgets.QMessageBox.critical(self, f"{APP_TITLE} - error", str(exc))
+            present_error(self, f"{APP_TITLE} - error", str(exc))
 
     def _show_distribution_plot(self) -> None:
         """Open a quality-class bar plot or continuous-value histogram."""
@@ -721,10 +439,10 @@ class PlotWorkflow:
         if target is None:
             return
 
-        key = self._prop_combo.currentData()
+        key = self._analysis_metric_key()
         spec = metrics.METRICS.require(key)
         if spec.is_domain_label and target.kind == "ensemble_group":
-            QtWidgets.QMessageBox.information(
+            present_information(
                 self,
                 APP_TITLE,
                 "Distribution plots for PAE domain labels are available for "
@@ -733,7 +451,7 @@ class PlotWorkflow:
             )
             return
         if key == "chain_iptm":
-            QtWidgets.QMessageBox.information(
+            present_information(
                 self,
                 APP_TITLE,
                 "Distribution plots are not available for chain ipTM.\n"
@@ -749,7 +467,6 @@ class PlotWorkflow:
         if self._defer_action_for_data(
             target,
             spec.load_capabilities,
-            self._show_distribution_plot,
             error_title=f"{APP_TITLE} - error",
             deferred_action=self.services.analysis.capture_current("distribution"),
         ):
@@ -822,13 +539,13 @@ class PlotWorkflow:
             )
             self._show_plot_figure(fig, title)
         except Exception as exc:
-            QtWidgets.QMessageBox.critical(self, f"{APP_TITLE} - error", str(exc))
+            present_error(self, f"{APP_TITLE} - error", str(exc))
 
     def _show_ensemble_site_summary(self) -> None:
         """Open the ensemble ligand-site summary plot."""
-        ref_sel = self._ref_edit.text().strip()
+        ref_sel = self._analysis_reference_selection()
         if not ref_sel:
-            QtWidgets.QMessageBox.warning(
+            present_warning(
                 self,
                 APP_TITLE,
                 "Ensemble site summary requires a reference selection.\n"
@@ -840,7 +557,7 @@ class PlotWorkflow:
             return
         ensemble_state = getattr(self, "_ensemble", None)
         if ensemble_state is None:
-            QtWidgets.QMessageBox.information(
+            present_information(
                 self,
                 APP_TITLE,
                 "The ensemble target is not active.\nUse Load Ensemble\u2026 first.",
@@ -862,12 +579,11 @@ class PlotWorkflow:
                     members=tuple(members),
                 )
             except ValueError as exc:
-                QtWidgets.QMessageBox.warning(self, APP_TITLE, str(exc))
+                present_warning(self, APP_TITLE, str(exc))
                 return
             if self._defer_action_for_data(
                 target,
                 self._fingerprint_capabilities(include_contact_probs=False),
-                self._show_ensemble_site_summary,
                 error_title=f"{APP_TITLE} - error",
                 allow_partial=True,
                 deferred_action=self.services.analysis.capture_current(
@@ -883,7 +599,7 @@ class PlotWorkflow:
                 self._compute_ensemble_site_summary_data(ref_sel, cutoff)
             )
             if not series:
-                QtWidgets.QMessageBox.warning(
+                present_warning(
                     self,
                     APP_TITLE,
                     "No pLDDT, PAE, or PDE data are available for the "
@@ -907,7 +623,7 @@ class PlotWorkflow:
             )
             self._show_plot_figure(fig, "Ensemble site summary")
         except Exception as exc:
-            QtWidgets.QMessageBox.critical(self, f"{APP_TITLE} - error", str(exc))
+            present_error(self, f"{APP_TITLE} - error", str(exc))
 
     def _show_matrix_plot(self) -> None:
         """Open a PAE or PDE matrix plot for the selected target/property."""
@@ -915,10 +631,10 @@ class PlotWorkflow:
         if target is None:
             return
 
-        key = self._prop_combo.currentData()
+        key = self._analysis_metric_key()
         spec = metrics.METRICS.require(key)
         if spec.matrix is None:
-            QtWidgets.QMessageBox.information(
+            present_information(
                 self,
                 APP_TITLE,
                 "Matrix plots are only available when Color by is a PAE, PDE, "
@@ -942,7 +658,6 @@ class PlotWorkflow:
         if self._defer_action_for_data(
             target,
             capabilities,
-            self._show_matrix_plot,
             error_title=f"{APP_TITLE} - error",
             deferred_action=self.services.analysis.capture_current("matrix"),
         ):
@@ -1010,13 +725,13 @@ class PlotWorkflow:
             self._show_plot_figure(fig, f"{title} ({target.label})")
 
         except Exception as exc:
-            QtWidgets.QMessageBox.critical(self, f"{APP_TITLE} - error", str(exc))
+            present_error(self, f"{APP_TITLE} - error", str(exc))
 
     def _show_binding_site_fingerprint(self) -> None:
         """Open a binding-site confidence fingerprint for the current target."""
-        ref_sel = self._ref_edit.text().strip()
+        ref_sel = self._analysis_reference_selection()
         if not ref_sel:
-            QtWidgets.QMessageBox.warning(
+            present_warning(
                 self,
                 APP_TITLE,
                 "Fingerprint requires a reference selection.\n"
@@ -1040,7 +755,6 @@ class PlotWorkflow:
         if self._defer_action_for_data(
             target,
             self._fingerprint_capabilities(include_contact_probs=True),
-            self._show_binding_site_fingerprint,
             error_title=f"{APP_TITLE} - error",
             allow_partial=True,
             deferred_action=self.services.analysis.capture_current(
@@ -1056,7 +770,7 @@ class PlotWorkflow:
                 target.token_map, target.obj_name, ref_sel, ref_indices, cutoff
             )
             if not binding_indices:
-                QtWidgets.QMessageBox.warning(
+                present_warning(
                     self,
                     APP_TITLE,
                     "No polymer binding-site residues were found within "
@@ -1071,7 +785,7 @@ class PlotWorkflow:
                 and series["pde_to_ligand"] is None
                 and series["interaction_prob_to_ligand"] is None
             ):
-                QtWidgets.QMessageBox.warning(
+                present_warning(
                     self,
                     APP_TITLE,
                     "No confidence data are available for the fingerprint.",
@@ -1079,7 +793,7 @@ class PlotWorkflow:
                 return
 
             if len(binding_indices) > plots.MAX_BINDING_SITE_RESIDUES:
-                QtWidgets.QMessageBox.warning(
+                present_warning(
                     self,
                     APP_TITLE,
                     "The binding-site fingerprint found "
@@ -1120,7 +834,7 @@ class PlotWorkflow:
             )
             self._show_plot_figure(fig, title)
         except Exception as exc:
-            QtWidgets.QMessageBox.critical(self, f"{APP_TITLE} - error", str(exc))
+            present_error(self, f"{APP_TITLE} - error", str(exc))
 
     def _plot_selection_token_maps(self, target: _PlotTarget) -> list | None:
         """Return all token maps that plot selections should target."""
@@ -1140,37 +854,3 @@ class PlotWorkflow:
             if all(names):
                 return [str(name) for name in names]
         return None
-
-    def _show_plot_figure(self, fig, title: str) -> None:
-        """Show *fig* in an embedded Qt plot window, falling back externally."""
-        from . import plots
-
-        try:
-            from . import plot_viewer
-
-            def forget_window(dialog) -> None:
-                try:
-                    self._plot_windows.remove(dialog)
-                except ValueError:
-                    pass
-
-            if not hasattr(self, "_plot_windows"):
-                self._plot_windows = []
-            dialog = plot_viewer.show_figure(
-                fig, title=title, parent=self, on_close=forget_window
-            )
-            self._plot_windows.append(dialog)
-        except Exception as qt_exc:
-            try:
-                plots.save_and_show(fig)
-            except Exception as external_exc:
-                QtWidgets.QMessageBox.critical(
-                    self,
-                    f"{APP_TITLE} - plot error",
-                    (
-                        "Could not show the plot in Qt or with the external "
-                        "image viewer.\n\n"
-                        f"Qt error: {qt_exc}\n\n"
-                        f"External viewer error: {external_exc}"
-                    ),
-                )

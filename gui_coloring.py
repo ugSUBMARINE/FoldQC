@@ -5,7 +5,6 @@ from __future__ import annotations
 import numpy as np
 
 from . import compute, metrics
-from .compat import QtWidgets
 from .mol_viewer import (
     PaintTarget,
     delete_colorbar,
@@ -20,6 +19,7 @@ from .mol_viewer import (
     show_colorbar,
 )
 from .viewer_transactions import ColorbarChange, PaintTransaction
+from .workflow_presentation import present_error, present_information, present_warning
 
 APP_TITLE = "FoldQC"
 VIEWER_NAME = get_viewer_name()
@@ -80,14 +80,23 @@ class ColoringWorkflow:
         return result
 
     def _get_obj_name(self) -> str | None:
+        action = getattr(self, "_active_analysis_action", None)
+        if action is not None:
+            return action.request.target_name
         name = self._obj_combo.currentText().strip()
         return name if name else None
 
     def _selected_palette(self) -> tuple[str, bool]:
         """Return the selected palette key and reverse checkbox state."""
+        action = getattr(self, "_active_analysis_action", None)
+        options = None if action is None else action.options
+        if options is not None and hasattr(options, "palette_key"):
+            return str(options.palette_key), bool(options.reverse_palette)
+        palette_combo = getattr(self, "_palette_combo", None)
+        reverse_check = getattr(self, "_palette_reverse_chk", None)
         return (
-            str(self._palette_combo.currentData()),
-            bool(self._palette_reverse_chk.isChecked()),
+            "viridis" if palette_combo is None else str(palette_combo.currentData()),
+            False if reverse_check is None else bool(reverse_check.isChecked()),
         )
 
     def _selected_ensemble_member(self, obj_name: str):
@@ -99,6 +108,11 @@ class ColoringWorkflow:
         return None
 
     def _get_vmin_vmax(self) -> tuple[float | None, float | None]:
+        action = getattr(self, "_active_analysis_action", None)
+        options = None if action is None else action.options
+        if options is not None and hasattr(options, "vmin"):
+            return options.vmin, options.vmax
+
         def _parse(text: str) -> float | None:
             t = text.strip()
             if not t or t.lower() == "auto":
@@ -108,10 +122,18 @@ class ColoringWorkflow:
             except ValueError:
                 return None
 
-        return _parse(self._vmin_edit.text()), _parse(self._vmax_edit.text())
+        vmin_edit = getattr(self, "_vmin_edit", None)
+        vmax_edit = getattr(self, "_vmax_edit", None)
+        return (
+            None if vmin_edit is None else _parse(vmin_edit.text()),
+            None if vmax_edit is None else _parse(vmax_edit.text()),
+        )
 
     def _get_cutoff_threshold(self) -> float | None:
         """Return the user-entered positive cutoff/threshold in Å."""
+        action = getattr(self, "_active_analysis_action", None)
+        if action is not None and action.request.cutoff_angstrom is not None:
+            return action.request.cutoff_angstrom
         edit = getattr(self, "_cutoff_edit", None)
         text = "5.0" if edit is None else edit.text().strip()
         if not text:
@@ -119,14 +141,14 @@ class ColoringWorkflow:
         try:
             cutoff = float(text)
         except ValueError:
-            QtWidgets.QMessageBox.warning(
+            present_warning(
                 self,
                 APP_TITLE,
                 "Cutoff / threshold must be a positive number in Å.",
             )
             return None
         if not np.isfinite(cutoff) or cutoff <= 0.0:
-            QtWidgets.QMessageBox.warning(
+            present_warning(
                 self,
                 APP_TITLE,
                 "Cutoff / threshold must be greater than 0 Å.",
@@ -142,20 +164,19 @@ class ColoringWorkflow:
         if target.kind.startswith("ensemble"):
             self._apply_ensemble_coloring(list(target.members))
             return
-        key = self._prop_combo.currentData()
+        key = self._analysis_metric_key()
         spec = metrics.METRICS.require(key)
         obj_name = target.obj_name
         if self._defer_action_for_data(
             target,
             spec.load_capabilities,
-            self._apply_coloring,
             error_title=f"{APP_TITLE} - error",
             deferred_action=self.services.analysis.capture_current("color"),
         ):
             return
 
         if spec.ensemble_level:
-            QtWidgets.QMessageBox.information(
+            present_information(
                 self,
                 APP_TITLE,
                 "This property requires an active ensemble.\n"
@@ -172,12 +193,12 @@ class ColoringWorkflow:
                     key, obj_name, model_state=target.model_states[0]
                 )
             except Exception as exc:
-                QtWidgets.QMessageBox.critical(self, f"{APP_TITLE} - error", str(exc))
+                present_error(self, f"{APP_TITLE} - error", str(exc))
             return
 
         palette, reverse_palette = self._selected_palette()
         vmin, vmax = self._get_vmin_vmax()
-        ref_sel = self._ref_edit.text().strip() or None
+        ref_sel = self._analysis_reference_selection() or None
 
         try:
             self._ensure_current_data_for_property(spec)
@@ -252,11 +273,11 @@ class ColoringWorkflow:
                 token_map=token_map,
             )
         except Exception as exc:
-            QtWidgets.QMessageBox.critical(self, f"{APP_TITLE} - error", str(exc))
+            present_error(self, f"{APP_TITLE} - error", str(exc))
 
     def _apply_ensemble_coloring(self, target_members: list) -> None:
         """Apply the selected property to the chosen ensemble target."""
-        key = self._prop_combo.currentData()
+        key = self._analysis_metric_key()
         spec = metrics.METRICS.require(key)
         if not target_members:
             return
@@ -266,7 +287,6 @@ class ColoringWorkflow:
         if self._defer_action_for_data(
             target,
             spec.load_capabilities,
-            self._apply_coloring,
             error_title=f"{APP_TITLE} - error",
             deferred_action=self.services.analysis.capture_current("color"),
         ):
@@ -280,7 +300,7 @@ class ColoringWorkflow:
                     lambda: self._dispatch_ensemble_coloring(key, spec, target_members)
                 )
         except Exception as exc:
-            QtWidgets.QMessageBox.critical(self, f"{APP_TITLE} - error", str(exc))
+            present_error(self, f"{APP_TITLE} - error", str(exc))
 
     def _dispatch_ensemble_coloring(
         self, key: str, spec: metrics.MetricSpec, target_members: list
@@ -363,7 +383,7 @@ class ColoringWorkflow:
         """Compute selected per-model properties for selected ensemble targets."""
         palette, reverse_palette = self._selected_palette()
         user_vmin, user_vmax = self._get_vmin_vmax()
-        ref_sel = self._ref_edit.text().strip() or None
+        ref_sel = self._analysis_reference_selection() or None
 
         member_values: list[tuple[object, object, np.ndarray, object]] = []
         for member in target_members:
@@ -491,7 +511,7 @@ class ColoringWorkflow:
             state = self._canonical_state_for_ensemble_member(member)
             values, _source = compute.plddt_values_for(state.data)
             if values is None:
-                QtWidgets.QMessageBox.warning(
+                present_warning(
                     self,
                     APP_TITLE,
                     f"pLDDT data are not available for model_{member.rank}.",
@@ -549,7 +569,7 @@ class ColoringWorkflow:
         token_map = state.token_map
         values, _source = compute.plddt_values_for(data)
         if values is None:
-            QtWidgets.QMessageBox.warning(
+            present_warning(
                 self,
                 APP_TITLE,
                 "pLDDT data are not available for this model.",

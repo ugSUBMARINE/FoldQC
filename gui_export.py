@@ -5,55 +5,25 @@ from __future__ import annotations
 from pathlib import Path
 
 from . import export, metrics
-from .compat import QtWidgets
 from .gui_state import MetricContext
 from .gui_state import ResolvedTarget as _PlotTarget
 from .token_map import TokenMap
+from .workflow_presentation import present_error, present_information, present_warning
 
 APP_TITLE = "FoldQC"
 
 
 class ExportWorkflow:
-    def _export_csv(self) -> None:
-        """Export token-level CSV rows for the current metric and target."""
-        target = self._resolve_plot_target()
-        if target is None:
-            return
-        pred_data = (
-            None if target.kind == "ensemble_group" else target.model_states[0].data
-        )
-        default_path = export.default_csv_export_path(
-            getattr(self, "_pred_files", None),
-            pred_data,
-            self._prop_combo.currentData(),
-            ensemble=target.kind == "ensemble_group",
-        )
-        result = QtWidgets.QFileDialog.getSaveFileName(
-            self,
-            "Export token metric CSV",
-            default_path,
-            "CSV files (*.csv);;All files (*)",
-        )
-        path = result[0] if isinstance(result, tuple) else result
-        if not path:
-            self._raise_after_native_dialog()
-            return
-        path_obj = Path(path)
-        if path_obj.suffix.lower() != ".csv":
-            path_obj = path_obj.with_suffix(".csv")
-        self._export_csv_to_path(path_obj)
-
     def _export_csv_to_path(self, path: str | Path) -> None:
         """Build and write CSV rows, reporting GUI errors consistently."""
         if self._pred_files is not None:
-            key = self._prop_combo.currentData()
+            key = self._analysis_metric_key()
             spec = metrics.METRICS.find(key)
             target = self._resolve_plot_target() if spec is not None else None
             if target is not None and not spec.ensemble_level:
                 if self._defer_action_for_data(
                     target,
                     spec.load_capabilities,
-                    lambda: self._export_csv_to_path(path),
                     error_title=f"{APP_TITLE} - export error",
                     deferred_action=self.services.analysis.capture_current(
                         "export", export_path=path
@@ -65,34 +35,30 @@ class ExportWorkflow:
             if rows is None:
                 return
             if not rows:
-                QtWidgets.QMessageBox.warning(
+                present_warning(
                     self, APP_TITLE, "No token rows were available for export."
                 )
                 return
             from .export import write_csv
 
             write_csv(path, rows)
-            QtWidgets.QMessageBox.information(
+            present_information(
                 self,
                 APP_TITLE,
                 f"Exported {len(rows)} token rows to:\n{path}",
             )
         except Exception as exc:
-            QtWidgets.QMessageBox.critical(
-                self, f"{APP_TITLE} - export error", str(exc)
-            )
+            present_error(self, f"{APP_TITLE} - export error", str(exc))
 
     def _build_csv_export_rows(self) -> list[dict[str, object]] | None:
         """Return CSV rows for the current metric/target, or None when cancelled."""
         if self._pred_files is None:
-            QtWidgets.QMessageBox.warning(
-                self, APP_TITLE, "No prediction output loaded."
-            )
+            present_warning(self, APP_TITLE, "No prediction output loaded.")
             return None
-        key = self._prop_combo.currentData()
+        key = self._analysis_metric_key()
         spec = metrics.METRICS.find(key)
         if spec is None:
-            QtWidgets.QMessageBox.warning(
+            present_warning(
                 self, APP_TITLE, "Select a Color by metric before exporting."
             )
             return None
@@ -171,7 +137,7 @@ class ExportWorkflow:
         """Build CSV rows for the active ensemble group target."""
         members = sorted(target.members or [], key=lambda member: member.rank)
         if not members:
-            QtWidgets.QMessageBox.information(
+            present_information(
                 self,
                 APP_TITLE,
                 "The ensemble target is not active.\nUse the Ensemble\u2026 button first.",
@@ -250,7 +216,7 @@ class ExportWorkflow:
             if resolved is None:
                 return None
             reference_indices = list(resolved)
-            reference_selection = self._ref_edit.text().strip()
+            reference_selection = self._analysis_reference_selection()
 
         if spec.needs_contact_shell:
             cutoff = self._get_cutoff_threshold()
@@ -264,7 +230,7 @@ class ExportWorkflow:
                 cutoff,
             )
             if not contact_indices:
-                QtWidgets.QMessageBox.warning(
+                present_warning(
                     self,
                     APP_TITLE,
                     "No polymer binding-site residues were found within "

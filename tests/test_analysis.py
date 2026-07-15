@@ -117,7 +117,7 @@ def test_strict_load_plan_names_members_without_advertised_data(tmp_path: Path) 
     )
     with pytest.raises(AnalysisPreflightError) as caught:
         build_data_load_plan(resolved)
-    assert caught.value.problem.affected_models == ("rank 1",)
+    assert caught.value.notice.affected_models == ("rank 1",)
 
 
 def test_single_load_plan_is_deduplicated_and_converts_capabilities_at_boundary(

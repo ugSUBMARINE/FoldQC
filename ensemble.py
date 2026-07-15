@@ -6,7 +6,8 @@ Utilities for working with multiple ranked prediction models.
 When a provider produces N models, N structure files can be loaded as one
 object-based ensemble ordered by rank. This viewer-independent module prepares
 canonical model states and computes alignment plans, per-token RMSD, and metric
-consensus (mean ± std). Viewer transactions live in :mod:`gui_loading`.
+consensus (mean ± std). Viewer transactions live in
+:mod:`ensemble_lifecycle`.
 """
 
 from __future__ import annotations

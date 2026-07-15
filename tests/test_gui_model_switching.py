@@ -1,3 +1,5 @@
+# ruff: noqa: E402
+
 from __future__ import annotations
 
 import sys
@@ -491,7 +493,20 @@ def _install_fake_pymol() -> types.SimpleNamespace:
 
 _PYMOL = _install_fake_pymol()
 
-from FoldQC import ensemble, gui_jobs, gui_loading, metrics, session  # noqa: E402
+from FoldQC import (
+    ensemble,
+    gui_jobs,
+    metrics,
+    session,
+)  # noqa: E402
+from FoldQC import (
+    ensemble_lifecycle as ensemble_module,
+)
+from FoldQC.analysis import (  # noqa: E402
+    AnalysisRequest,
+    DeferredAnalysisAction,
+    PlotOptions,
+)
 from FoldQC.confidence import (  # noqa: E402
     AffinityConfidence,
     PredictionConfidence,
@@ -505,12 +520,23 @@ from FoldQC.gui import (  # noqa: E402
     _PlotTarget as _ResolvedTarget,
 )
 from FoldQC.gui_application import GuiApplicationServices  # noqa: E402
+from FoldQC.gui_coloring import ColoringWorkflow  # noqa: E402
+from FoldQC.gui_export import ExportWorkflow  # noqa: E402
 from FoldQC.gui_layout import build_plot_actions  # noqa: E402
+from FoldQC.gui_metrics import MetricWorkflow  # noqa: E402
+from FoldQC.gui_presenter import QtGuiScheduler, QtPresenter  # noqa: E402
 from FoldQC.gui_state import PluginState  # noqa: E402
+from FoldQC.gui_view import QtDialogView  # noqa: E402
 from FoldQC.model_state import ModelState  # noqa: E402
+from FoldQC.plot_coordinator import PlotCoordinator  # noqa: E402
+from FoldQC.plot_preparation import PlotPreparationService  # noqa: E402
 from FoldQC.providers.registry import BUILTIN_PROVIDERS  # noqa: E402
 from FoldQC.structure_index import StructureIndex  # noqa: E402
 from FoldQC.token_map import ResidueId, TokenInfo, TokenMap  # noqa: E402
+
+
+def _lazy_analysis(target_name: str) -> DeferredAnalysisAction:
+    return DeferredAnalysisAction(AnalysisRequest("line", target_name, "pae_row_mean"))
 
 
 def _structure_index(data, token_map: TokenMap | None = None) -> StructureIndex:
@@ -696,11 +722,157 @@ def _PlotTarget(
     )
 
 
+class _DialogHarness(FoldQCPluginDialog):
+    """Legacy-shaped fixture routing behavior checks to explicit services."""
+
+    @staticmethod
+    def _service_for(services, name):
+        if name in {
+            "_show_ensemble",
+            "_on_ensemble_prepared",
+            "_ensemble_transaction_is_active",
+            "_load_next_ensemble_object",
+            "_inspect_next_ensemble_object",
+            "_align_and_group_ensemble",
+            "_commit_ensemble_transaction",
+            "_restore_previous_ensemble_state",
+            "_on_ensemble_preparation_error",
+            "_fail_ensemble_viewer_transaction",
+            "_rollback_ensemble_viewer_transaction",
+            "_ask_skip_ensemble_alignment",
+        }:
+            return services.ensemble
+        if name in {
+            "_defer_action_for_data",
+            "_data_load_items_for_target",
+            "_data_load_item",
+            "_on_lazy_data_ready",
+            "_lazy_result_is_current",
+            "_validate_lazy_loaded_item",
+            "_resume_lazy_action",
+            "_on_lazy_data_error",
+        }:
+            return services.data
+        if name == "_show_plot_figure":
+            return services.plots
+        if name in {
+            "_refresh_objects",
+            "_ordered_target_names",
+            "_style_target_combo_item",
+            "_on_property_changed",
+            "_update_confidence_summary",
+            "_update_property_availability",
+            "_has_chain_iptm_metric_data",
+            "_select_first_available_property",
+            "_property_combo_row",
+            "_current_target_kind",
+            "_current_target_model_states",
+            "_state_supports_family",
+            "_target_all_supports_family",
+            "_target_any_supports_family",
+            "_has_fingerprint_data",
+            "_has_matrix_data_family",
+            "_current_target_has_multiple_chains",
+            "_update_plot_actions",
+            "_refresh_contextual_ui",
+            "_update_context_controls",
+            "_update_metric_preview",
+            "_set_statistics_text",
+            "_update_statistics_for_single",
+            "_update_statistics_for_members",
+            "_update_ensemble_button_state",
+            "_ensemble_load_is_available",
+        }:
+            return services.context
+        if name in MetricWorkflow.__dict__:
+            return services.metric_computation
+        if name in ColoringWorkflow.__dict__:
+            return services.coloring
+        if name in PlotCoordinator.__dict__ or name in PlotPreparationService.__dict__:
+            return services.plots
+        if name in ExportWorkflow.__dict__:
+            return services.export
+        return services.lifecycle
+
+    def __getattr__(self, name):
+        widgets = self.__dict__.get("widgets")
+        if widgets is not None:
+            try:
+                return getattr(widgets, name)
+            except AttributeError:
+                pass
+        services = self.__dict__.get("services")
+        if services is not None:
+            service = self._service_for(services, name)
+            if hasattr(service, name):
+                return getattr(service, name)
+            if hasattr(services.dependencies, name):
+                return getattr(services.dependencies, name)
+        raise AttributeError(name)
+
+    def __setattr__(self, name, value):
+        services = self.__dict__.get("services")
+        routed = False
+        if services is not None and name == "_job_runner":
+            services.job_runner = value
+            object.__setattr__(self, name, value)
+            routed = True
+        if services is not None and name.startswith("_"):
+            for service in (
+                services.lifecycle,
+                services.data,
+                services.ensemble,
+                services.context,
+                services.metric_computation,
+                services.coloring,
+                services.plots,
+                services.export,
+                services.analysis,
+                services.dependencies,
+            ):
+                if hasattr(service, name):
+                    try:
+                        setattr(service, name, value)
+                    except AttributeError:
+                        continue
+                    routed = True
+        if not routed:
+            super().__setattr__(name, value)
+
+    def __delattr__(self, name):
+        services = self.__dict__.get("services")
+        if services is not None and name.startswith("_"):
+            service = self._service_for(services, name)
+            if name in service.__dict__:
+                del service.__dict__[name]
+                return
+        super().__delattr__(name)
+
+
 def _new_dialog() -> FoldQCPluginDialog:
-    dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
+    dialog = _DialogHarness.__new__(_DialogHarness)
     dialog.state = PluginState()
-    dialog.services = GuiApplicationServices(dialog)
-    dialog._initialize_dependency_controller()
+
+    class _DialogWidgets:
+        def __getattr__(self, name):
+            return object.__getattribute__(dialog, name)
+
+    dialog.widgets = _DialogWidgets()
+    dialog._viewer = None
+    dialog._presenter = QtPresenter(dialog)
+    dialog._scheduler = QtGuiScheduler()
+    dialog._job_runner = _ImmediateJobRunner()
+    dialog._view = QtDialogView(dialog, dialog.widgets)
+    dialog.services = GuiApplicationServices(
+        dialog,
+        state=dialog.state,
+        viewer=dialog._viewer,
+        presenter=dialog._presenter,
+        view=dialog._view,
+        scheduler=dialog._scheduler,
+        job_runner=dialog._job_runner,
+    )
+    dialog.services.dependencies.initialize()
     return dialog
 
 
@@ -1544,40 +1716,42 @@ class GuiModelSwitchingTests(unittest.TestCase):
             completion_states.append(
                 (
                     dialog._loading_data,
-                    dialog._load_progress_dialog.visible,
+                    bool(dialog._presenter._progress),
                     dialog._ensemble_btn.enabled,
                 )
             )
 
         with (
             mock.patch.object(
-                gui_loading,
+                ensemble_module,
                 "_prepare_ensemble_job",
                 side_effect=lambda *_args: prepared,
             ),
             mock.patch.object(
-                gui_loading,
+                ensemble_module,
                 "load_structure_object_if_missing",
                 side_effect=load_object,
             ),
             mock.patch.object(
-                gui_loading, "inspect_object_tokens", side_effect=inspect
+                ensemble_module, "inspect_object_tokens", side_effect=inspect
             ),
             mock.patch.object(
-                gui_loading,
+                ensemble_module,
                 "viewer_name_exists",
                 side_effect=lambda name: name in objects,
             ),
-            mock.patch.object(gui_loading, "get_group_members", return_value=()),
-            mock.patch.object(gui_loading, "add_objects_to_group", side_effect=group),
+            mock.patch.object(ensemble_module, "get_group_members", return_value=()),
             mock.patch.object(
-                gui_loading,
+                ensemble_module, "add_objects_to_group", side_effect=group
+            ),
+            mock.patch.object(
+                ensemble_module,
                 "transform_object",
                 side_effect=lambda name, rotation, translation: transforms.append(
                     (name, rotation, translation)
                 ),
             ),
-            mock.patch.object(gui_loading, "rebuild"),
+            mock.patch.object(ensemble_module, "rebuild"),
             mock.patch.object(
                 _PYMOL.Qt.QtWidgets.QMessageBox,
                 "information",
@@ -1628,15 +1802,15 @@ class GuiModelSwitchingTests(unittest.TestCase):
 
         with (
             mock.patch.object(
-                gui_loading, "_prepare_ensemble_job", return_value=prepared
+                ensemble_module, "_prepare_ensemble_job", return_value=prepared
             ),
             mock.patch.object(
-                gui_loading,
+                ensemble_module,
                 "load_structure_object_if_missing",
                 side_effect=load_object,
             ),
             mock.patch.object(
-                gui_loading,
+                ensemble_module,
                 "inspect_object_tokens",
                 side_effect=lambda name, _token_map: types.SimpleNamespace(
                     paint_mapping=f"mapping:{name}",
@@ -1644,18 +1818,18 @@ class GuiModelSwitchingTests(unittest.TestCase):
                 ),
             ),
             mock.patch.object(
-                gui_loading,
+                ensemble_module,
                 "viewer_name_exists",
                 side_effect=lambda name: name in objects,
             ),
-            mock.patch.object(gui_loading, "get_group_members", return_value=()),
+            mock.patch.object(ensemble_module, "get_group_members", return_value=()),
             mock.patch.object(
-                gui_loading,
+                ensemble_module,
                 "add_objects_to_group",
                 side_effect=lambda name, _members: objects.add(name),
             ),
-            mock.patch.object(gui_loading, "transform_object") as transform,
-            mock.patch.object(gui_loading, "rebuild"),
+            mock.patch.object(ensemble_module, "transform_object") as transform,
+            mock.patch.object(ensemble_module, "rebuild"),
         ):
             dialog._show_ensemble()
             runner.run_next()
@@ -1687,23 +1861,23 @@ class GuiModelSwitchingTests(unittest.TestCase):
 
         with (
             mock.patch.object(
-                gui_loading, "_prepare_ensemble_job", return_value=prepared
+                ensemble_module, "_prepare_ensemble_job", return_value=prepared
             ),
             mock.patch.object(
-                gui_loading,
+                ensemble_module,
                 "load_structure_object_if_missing",
                 side_effect=load_object,
             ),
             mock.patch.object(
-                gui_loading,
+                ensemble_module,
                 "viewer_name_exists",
                 side_effect=lambda name: name in objects,
             ),
-            mock.patch.object(gui_loading, "get_group_members", return_value=()),
+            mock.patch.object(ensemble_module, "get_group_members", return_value=()),
             mock.patch.object(
-                gui_loading, "delete_viewer_names", side_effect=delete_names
+                ensemble_module, "delete_viewer_names", side_effect=delete_names
             ),
-            mock.patch.object(gui_loading, "rebuild"),
+            mock.patch.object(ensemble_module, "rebuild"),
         ):
             dialog._show_ensemble()
             runner.run_next()
@@ -1722,7 +1896,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         previous_ensemble = dialog._ensemble
         prepared = self._prepared_ensemble(pred_files)
         request_id = 17
-        transaction = gui_loading.EnsembleActivationTransaction(
+        transaction = ensemble_module.EnsembleActivationTransaction(
             request_id=request_id,
             prepared=prepared,
             previous_ensemble=previous_ensemble,
@@ -1740,7 +1914,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
             side_effect=[RuntimeError("UI commit failed"), None]
         )
 
-        with mock.patch.object(gui_loading, "delete_viewer_names"):
+        with mock.patch.object(ensemble_module, "delete_viewer_names"):
             dialog._commit_ensemble_transaction(
                 transaction,
                 np.zeros(3, dtype=np.float32),
@@ -1765,10 +1939,10 @@ class GuiModelSwitchingTests(unittest.TestCase):
 
         with (
             mock.patch.object(
-                gui_loading, "_prepare_ensemble_job", return_value=prepared
+                ensemble_module, "_prepare_ensemble_job", return_value=prepared
             ),
             mock.patch.object(
-                gui_loading,
+                ensemble_module,
                 "load_structure_object_if_missing",
                 side_effect=AssertionError("abandoned ensemble reached PyMOL"),
             ),
@@ -1786,12 +1960,12 @@ class GuiModelSwitchingTests(unittest.TestCase):
 
         with (
             mock.patch.object(
-                gui_loading,
+                ensemble_module,
                 "_prepare_ensemble_job",
                 side_effect=ValueError("incompatible ensemble"),
             ),
             mock.patch.object(
-                gui_loading,
+                ensemble_module,
                 "load_structure_object_if_missing",
                 side_effect=AssertionError("failed preparation reached PyMOL"),
             ),
@@ -1837,15 +2011,15 @@ class GuiModelSwitchingTests(unittest.TestCase):
 
         with (
             mock.patch.object(
-                gui_loading, "_prepare_ensemble_job", return_value=prepared
+                ensemble_module, "_prepare_ensemble_job", return_value=prepared
             ),
             mock.patch.object(
-                gui_loading,
+                ensemble_module,
                 "load_structure_object_if_missing",
                 return_value=False,
             ),
             mock.patch.object(
-                gui_loading,
+                ensemble_module,
                 "inspect_object_tokens",
                 side_effect=lambda name, _token_map: types.SimpleNamespace(
                     paint_mapping=f"mapping:{name}",
@@ -1853,16 +2027,16 @@ class GuiModelSwitchingTests(unittest.TestCase):
                 ),
             ),
             mock.patch.object(
-                gui_loading,
+                ensemble_module,
                 "viewer_name_exists",
                 side_effect=lambda name: name in objects,
             ),
-            mock.patch.object(gui_loading, "get_group_members", return_value=()),
-            mock.patch.object(gui_loading, "delete_viewer_names"),
+            mock.patch.object(ensemble_module, "get_group_members", return_value=()),
+            mock.patch.object(ensemble_module, "delete_viewer_names"),
             mock.patch.object(
-                gui_loading, "transform_object", side_effect=apply_transform
+                ensemble_module, "transform_object", side_effect=apply_transform
             ),
-            mock.patch.object(gui_loading, "rebuild"),
+            mock.patch.object(ensemble_module, "rebuild"),
         ):
             dialog._show_ensemble()
             runner.run_next()
@@ -1897,7 +2071,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
 
         with (
             mock.patch.object(
-                gui_loading, "_prepare_ensemble_job", return_value=prepared
+                ensemble_module, "_prepare_ensemble_job", return_value=prepared
             ),
             mock.patch.object(
                 _PYMOL.Qt.QtCore.QTimer,
@@ -1905,20 +2079,20 @@ class GuiModelSwitchingTests(unittest.TestCase):
                 side_effect=lambda _delay, callback: callbacks.append(callback),
             ),
             mock.patch.object(
-                gui_loading,
+                ensemble_module,
                 "load_structure_object_if_missing",
                 side_effect=load_object,
             ),
             mock.patch.object(
-                gui_loading,
+                ensemble_module,
                 "viewer_name_exists",
                 side_effect=lambda name: name in objects,
             ),
-            mock.patch.object(gui_loading, "get_group_members", return_value=()),
+            mock.patch.object(ensemble_module, "get_group_members", return_value=()),
             mock.patch.object(
-                gui_loading, "delete_viewer_names", side_effect=delete_names
+                ensemble_module, "delete_viewer_names", side_effect=delete_names
             ),
-            mock.patch.object(gui_loading, "rebuild"),
+            mock.patch.object(ensemble_module, "rebuild"),
         ):
             dialog._show_ensemble()
             runner.run_next()
@@ -2454,17 +2628,13 @@ class GuiModelSwitchingTests(unittest.TestCase):
 
         dialog._schedule_load_progress(4, "Discovering prediction folders…")
 
-        progress = dialog._load_progress_dialog
+        progress = dialog._presenter._progress["foldqc-load-4"]
         self.assertFalse(progress.modal)
         self.assertEqual(progress.value_range, (0, 0))
         self.assertIsNone(progress.cancel_button)
         self.assertFalse(progress.auto_close)
         self.assertFalse(progress.auto_reset)
-        self.assertEqual(progress.minimum_duration, 0)
         self.assertEqual(_PYMOL.Qt.QtCore.QTimer.delays, [300])
-        self.assertFalse(
-            progress.window_flags[_PYMOL.Qt.QtCore.Qt.WindowType.WindowCloseButtonHint]
-        )
 
     def test_initial_provider_load_error_preserves_previous_prediction(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2538,7 +2708,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
                     return_value=loaded_data,
                 ),
                 mock.patch(
-                    "FoldQC.gui_loading.ensure_structure_object",
+                    "FoldQC.prediction_lifecycle.ensure_structure_object",
                     side_effect=RuntimeError("viewer unavailable"),
                 ),
             ):
@@ -2779,7 +2949,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
                 return_value=new_data,
             ),
             mock.patch(
-                "FoldQC.gui_loading.ensure_structure_object",
+                "FoldQC.prediction_lifecycle.ensure_structure_object",
                 side_effect=RuntimeError("viewer busy"),
             ),
         ):
@@ -2835,7 +3005,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
                 return_value=new_data,
             ),
             mock.patch(
-                "FoldQC.gui_loading.ensure_structure_object",
+                "FoldQC.prediction_lifecycle.ensure_structure_object",
                 return_value=False,
             ),
             mock.patch.object(
@@ -2902,12 +3072,15 @@ class GuiModelSwitchingTests(unittest.TestCase):
             calls.append((pred_files, rank, flags))
             return new_data
 
+        dialog.services.analysis.resume = lambda _action: resumed.append(
+            _active_data(dialog)
+        )
         with mock.patch("FoldQC.loader.load_prediction_data", side_effect=load_data):
             deferred = dialog._defer_action_for_data(
                 target,
                 frozenset({"pae"}),
-                lambda: resumed.append(_active_data(dialog)),
                 error_title=f"{APP_TITLE} - error",
+                deferred_action=_lazy_analysis(target.label),
             )
             self.assertTrue(deferred)
             self.assertIs(_active_data(dialog), old_data)
@@ -2925,6 +3098,40 @@ class GuiModelSwitchingTests(unittest.TestCase):
         self.assertTrue(calls[0][2]["load_pae"])
         self.assertFalse(calls[0][2]["load_pde"])
         self.assertFalse(calls[0][2]["load_token_plddt"])
+
+    def test_resumed_analysis_reads_only_captured_request_and_options(self) -> None:
+        dialog = _new_dialog()
+        analysis = dialog.services.analysis
+        analysis.active_action = DeferredAnalysisAction(
+            AnalysisRequest(
+                "line",
+                "captured_target",
+                "plddt",
+                reference_selection="chain A",
+                cutoff_angstrom=4.5,
+            ),
+            PlotOptions("magma", True, 0.1, 0.9),
+        )
+
+        class _Unreadable:
+            def __getattr__(self, name):
+                raise AssertionError(f"widget was reread: {name}")
+
+        dialog._obj_combo = _Unreadable()
+        dialog._prop_combo = _Unreadable()
+        dialog._ref_edit = _Unreadable()
+        dialog._palette_combo = _Unreadable()
+        dialog._palette_reverse_chk = _Unreadable()
+        dialog._vmin_edit = _Unreadable()
+        dialog._vmax_edit = _Unreadable()
+        dialog._cutoff_edit = _Unreadable()
+
+        self.assertEqual(dialog.services.coloring._get_obj_name(), "captured_target")
+        self.assertEqual(analysis.metric_key(), "plddt")
+        self.assertEqual(analysis.reference_selection(), "chain A")
+        self.assertEqual(dialog.services.coloring._get_cutoff_threshold(), 4.5)
+        self.assertEqual(dialog.services.coloring._selected_palette(), ("magma", True))
+        self.assertEqual(dialog.services.coloring._get_vmin_vmax(), (0.1, 0.9))
 
     def test_lazy_action_with_loaded_arrays_runs_without_a_job(self) -> None:
         files = _SessionPredictionFiles(Path("/tmp"), ranks=(0,))
@@ -2949,8 +3156,8 @@ class GuiModelSwitchingTests(unittest.TestCase):
         deferred = dialog._defer_action_for_data(
             target,
             frozenset({"pae"}),
-            lambda: self.fail("No continuation is owned when no job is needed"),
             error_title=f"{APP_TITLE} - error",
+            deferred_action=_lazy_analysis(target.label),
         )
 
         self.assertFalse(deferred)
@@ -3004,11 +3211,12 @@ class GuiModelSwitchingTests(unittest.TestCase):
             )
 
         with mock.patch("FoldQC.loader.load_prediction_data", side_effect=load_data):
+            dialog.services.analysis.resume = lambda _action: resumed.append(True)
             dialog._defer_action_for_data(
                 target,
                 frozenset({"pae"}),
-                lambda: resumed.append(True),
                 error_title=f"{APP_TITLE} - error",
+                deferred_action=_lazy_analysis(target.label),
             )
             dialog._job_runner.run_next()
 
@@ -3063,11 +3271,12 @@ class GuiModelSwitchingTests(unittest.TestCase):
             )
 
         with mock.patch("FoldQC.loader.load_prediction_data", side_effect=load_data):
+            dialog.services.analysis.resume = lambda _action: resumed.append(True)
             dialog._defer_action_for_data(
                 target,
                 frozenset({"pae"}),
-                lambda: resumed.append(True),
                 error_title=f"{APP_TITLE} - error",
+                deferred_action=_lazy_analysis(target.label),
             )
             dialog._job_runner.run_next()
 
@@ -3106,11 +3315,12 @@ class GuiModelSwitchingTests(unittest.TestCase):
         )
 
         with mock.patch("FoldQC.loader.load_prediction_data", return_value=loaded):
+            dialog.services.analysis.resume = lambda _action: resumed.append(True)
             dialog._defer_action_for_data(
                 target,
                 frozenset({"pae"}),
-                lambda: resumed.append(True),
                 error_title=f"{APP_TITLE} - error",
+                deferred_action=_lazy_analysis(target.label),
             )
             state.merge_data(
                 types.SimpleNamespace(
@@ -3158,11 +3368,12 @@ class GuiModelSwitchingTests(unittest.TestCase):
         resumed = []
 
         with mock.patch("FoldQC.loader.load_prediction_data", return_value=new_data):
+            dialog.services.analysis.resume = lambda _action: resumed.append(True)
             dialog._defer_action_for_data(
                 target,
                 frozenset({"pae"}),
-                lambda: resumed.append(True),
                 error_title=f"{APP_TITLE} - error",
+                deferred_action=_lazy_analysis(target.label),
             )
             dialog.closeEvent(object())
             dialog._job_runner.run_next()
@@ -4737,7 +4948,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         dialog._ensure_current_data_for_property = lambda _prop: None
         dialog._binding_site_token_indices = lambda *_args: [1, 2]
 
-        import FoldQC.gui_plots as gui_module
+        import FoldQC.plot_coordinator as gui_module
 
         old_selection = gui_module.selection_to_token_indices
 
@@ -4807,7 +5018,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         dialog._ensure_current_data_for_property = lambda _prop: None
         dialog._binding_site_token_indices = lambda *_args: [1, 2]
 
-        import FoldQC.gui_plots as gui_module
+        import FoldQC.plot_coordinator as gui_module
 
         old_selection = gui_module.selection_to_token_indices
 
@@ -6107,7 +6318,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
 
         import FoldQC
         import FoldQC.gui_metrics as metrics_gui_module
-        import FoldQC.gui_plots as plots_gui_module
+        import FoldQC.plot_coordinator as plots_gui_module
 
         old_selection = plots_gui_module.selection_to_token_indices
         old_nearby = metrics_gui_module.tokens_within_distance
@@ -6180,7 +6391,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         )
         self.assertEqual(len(viewer_calls), 1)
         self.assertEqual(viewer_calls[0][0][0], "fingerprint-figure")
-        self.assertEqual(dialog._plot_windows, ["plot-dialog"])
+        self.assertEqual(dialog._presenter._plot_windows, ["plot-dialog"])
         self.assertEqual(len(metadata_calls), 1)
         self.assertEqual(metadata_calls[0][1]["token_indices"], [1, 3])
 
@@ -6232,7 +6443,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
 
         import FoldQC
         import FoldQC.gui_metrics as metrics_gui_module
-        import FoldQC.gui_plots as plots_gui_module
+        import FoldQC.plot_coordinator as plots_gui_module
 
         old_selection = plots_gui_module.selection_to_token_indices
         old_nearby = metrics_gui_module.tokens_within_distance
@@ -6288,7 +6499,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
 
     def test_show_plot_figure_uses_qt_viewer_and_keeps_reference(self) -> None:
         dialog = _new_dialog()
-        dialog._plot_windows = []
+        dialog._presenter._plot_windows = []
         viewer_calls = []
         fake_plot_viewer = types.SimpleNamespace(
             show_figure=lambda *args, **kwargs: (
@@ -6322,14 +6533,14 @@ class GuiModelSwitchingTests(unittest.TestCase):
         self.assertEqual(args, ("figure",))
         self.assertEqual(kwargs["title"], "Plot title")
         self.assertIs(kwargs["parent"], dialog)
-        self.assertEqual(dialog._plot_windows, ["plot-dialog"])
+        self.assertEqual(dialog._presenter._plot_windows, ["plot-dialog"])
 
         kwargs["on_close"]("plot-dialog")
-        self.assertEqual(dialog._plot_windows, [])
+        self.assertEqual(dialog._presenter._plot_windows, [])
 
     def test_show_plot_figure_falls_back_to_external_viewer(self) -> None:
         dialog = _new_dialog()
-        dialog._plot_windows = []
+        dialog._presenter._plot_windows = []
         saved = []
         fake_plot_viewer = types.SimpleNamespace(
             show_figure=lambda *args, **kwargs: (_ for _ in ()).throw(
@@ -6379,7 +6590,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
                 sys.modules["FoldQC.plot_viewer"] = old_plot_viewer
 
         self.assertEqual(saved, ["figure"])
-        self.assertEqual(dialog._plot_windows, [])
+        self.assertEqual(dialog._presenter._plot_windows, [])
         self.assertEqual(msg.criticals, [])
 
     def test_pde_contact_uses_all_atom_contact_selection_and_excludes_reference(

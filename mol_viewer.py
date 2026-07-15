@@ -1316,6 +1316,54 @@ class PyMOLViewer:
         self.paint_mappings: dict[tuple[str, str], ObjectPaintMapping] = {}
         self._managed_colorbar = None
 
+    def object_names(self, additional_names: Sequence[str] = ()) -> list[str]:
+        return get_object_list(additional_names=additional_names)
+
+    def ensure_structure_object(
+        self, path, obj_name: str, *, zoom: bool = True
+    ) -> bool:
+        return ensure_structure_object(path, obj_name, zoom=zoom)
+
+    def load_structure_object_if_missing(self, path, obj_name: str) -> bool:
+        return load_structure_object_if_missing(path, obj_name)
+
+    def delete_names(self, names: Sequence[str]) -> None:
+        delete_viewer_names(names)
+
+    def name_exists(self, name: str) -> bool:
+        return viewer_name_exists(name)
+
+    def group_members(self, group_name: str) -> tuple[str, ...]:
+        return get_group_members(group_name)
+
+    def add_to_group(self, group_name: str, names: Sequence[str]) -> None:
+        add_objects_to_group(group_name, names)
+
+    def remove_from_group(self, group_name: str, names: Sequence[str]) -> None:
+        remove_objects_from_group(group_name, names)
+
+    def inspect_tokens(self, obj_name: str, token_map: TokenMap):
+        return inspect_object_tokens(obj_name, token_map)
+
+    def transform(
+        self, obj_name: str, rotation: np.ndarray, translation: np.ndarray
+    ) -> None:
+        transform_object(obj_name, rotation, translation)
+
+    def selection_token_indices(
+        self, token_map: TokenMap, selection: str, *, obj_name: str
+    ) -> list[int]:
+        return selection_to_token_indices(token_map, selection, obj_name=obj_name)
+
+    def tokens_within_distance(
+        self,
+        token_map: TokenMap,
+        obj_name: str,
+        reference_selection: str,
+        cutoff: float,
+    ) -> list[int]:
+        return tokens_within_distance(token_map, obj_name, reference_selection, cutoff)
+
     def snapshot_atom_visuals(self, obj_name: str):
         return snapshot_atom_visuals(obj_name)
 

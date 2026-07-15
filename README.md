@@ -98,6 +98,19 @@ prediction, model, ensemble, or relevant controls change while work is running,
 the stale result is discarded instead of applying the old action to a new
 target.
 
+The same captured request also owns palette/range, plot, or export options, so
+completion never rereads the dialog controls. Loading progress is modeless and
+shown only after a short delay. Closing the plugin or explicitly cancelling a
+workflow abandons its result safely; user cancellation and stale results stay
+silent, while genuine provider or viewer failures are presented once.
+
+Transient interaction is centralized: workflow notices, confirmations,
+candidate/alignment choices, progress, statistics, window titles, and plot
+windows are presented by the Qt presentation adapter. Ordinary control state
+and previews are rendered separately from a typed context view state. Native
+open/save dialogs remain in the main dialog because their paths are captured
+before a workflow is submitted.
+
 FoldQC painting is transactional. It resolves token-to-atom mappings before
 mutation and snapshots the affected atoms' B-factors and color indices before
 viewer updates are suspended. The managed colorbar is retained as a recreatable

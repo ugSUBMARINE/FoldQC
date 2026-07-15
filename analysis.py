@@ -18,6 +18,7 @@ from .ensemble import EnsembleMember, EnsembleState
 from .gui_state import MetricContext, PluginState, ResolvedTarget
 from .loader_models import DataCapability, PredictionFiles
 from .model_state import ModelState
+from .presentation import Notice
 
 AnalysisAction = Literal[
     "color",
@@ -31,7 +32,6 @@ AnalysisAction = Literal[
     "ensemble_site_summary",
 ]
 CoveragePolicy = Literal["strict", "available"]
-NoticeSeverity = Literal["information", "warning", "error"]
 
 _PLOT_ACTIONS = frozenset(spec.key for spec in metrics.PLOTS)
 _PARTIAL_ACTIONS = frozenset({"binding_site_fingerprint", "ensemble_site_summary"})
@@ -87,6 +87,13 @@ class PlotOptions:
     vmin: float | None = None
     vmax: float | None = None
 
+    def __post_init__(self) -> None:
+        for label, value in (("minimum", self.vmin), ("maximum", self.vmax)):
+            if value is not None and not np.isfinite(float(value)):
+                raise ValueError(f"Plot scale {label} must be finite or automatic.")
+        if self.vmin is not None and self.vmax is not None and self.vmin > self.vmax:
+            raise ValueError("Plot scale minimum must not exceed its maximum.")
+
 
 @dataclass(frozen=True)
 class ExportOptions:
@@ -104,20 +111,10 @@ class DeferredAnalysisAction:
     options: ColorOptions | PlotOptions | ExportOptions | None = None
 
 
-@dataclass(frozen=True)
-class AnalysisProblem:
-    """Typed, presentation-neutral failure from request preflight."""
-
-    code: str
-    message: str
-    severity: NoticeSeverity = "warning"
-    affected_models: tuple[str, ...] = ()
-
-
 class AnalysisPreflightError(ValueError):
-    def __init__(self, problem: AnalysisProblem) -> None:
-        super().__init__(problem.message)
-        self.problem = problem
+    def __init__(self, notice: Notice) -> None:
+        super().__init__(notice.message)
+        self.notice = notice
 
 
 @dataclass(frozen=True)
@@ -240,7 +237,7 @@ class AnalysisResolver:
         files = state.pred_files
         if files is None:
             raise AnalysisPreflightError(
-                AnalysisProblem("no_prediction", "No prediction output loaded.")
+                Notice("no_prediction", "No prediction output loaded.")
             )
         target = self.resolve_target(request.target_name, state)
         metric = (
@@ -259,7 +256,7 @@ class AnalysisResolver:
             and request.action not in metric.plot_modes
         ):
             raise AnalysisPreflightError(
-                AnalysisProblem(
+                Notice(
                     "unsupported_plot",
                     f"{plot.label} is not available for {metric.label}.",
                     severity="information",
@@ -267,7 +264,7 @@ class AnalysisResolver:
             )
         if metric is not None and metric.ensemble_level and state.ensemble is None:
             raise AnalysisPreflightError(
-                AnalysisProblem(
+                Notice(
                     "ensemble_required",
                     "This metric requires an active ensemble.",
                     severity="information",
@@ -317,9 +314,7 @@ class AnalysisResolver:
             members = tuple(sorted(ensemble_state.members, key=lambda item: item.rank))
             if not members:
                 raise AnalysisPreflightError(
-                    AnalysisProblem(
-                        "inactive_ensemble", "The ensemble target is not active."
-                    )
+                    Notice("inactive_ensemble", "The ensemble target is not active.")
                 )
             states = self._member_states(members, state)
             return ResolvedTarget(
@@ -343,7 +338,7 @@ class AnalysisResolver:
         active = state.active_model_state
         if active is None:
             raise AnalysisPreflightError(
-                AnalysisProblem("no_model", "No prediction data loaded.")
+                Notice("no_model", "No prediction data loaded.")
             )
         return ResolvedTarget("single", target_name, target_name, (active,))
 
@@ -356,7 +351,7 @@ class AnalysisResolver:
             model_state = state.model_states.get(member.rank)
             if model_state is None:
                 raise AnalysisPreflightError(
-                    AnalysisProblem(
+                    Notice(
                         "stale_ensemble",
                         f"Ensemble model_{member.rank} is no longer present in the canonical model store.",
                     )
@@ -407,7 +402,7 @@ def build_data_load_plan(analysis: ResolvedAnalysis) -> DataLoadPlan:
             )
     if unavailable:
         raise AnalysisPreflightError(
-            AnalysisProblem(
+            Notice(
                 "missing_capability",
                 "Required data are unavailable for: " + ", ".join(unavailable),
                 affected_models=tuple(unavailable),

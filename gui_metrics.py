@@ -5,7 +5,6 @@ from __future__ import annotations
 import numpy as np
 
 from . import compute, metrics
-from .compat import MessageBoxStandardButton, QtWidgets
 from .gui_state import MetricContext
 from .loader_models import DataCapability
 from .mol_viewer import (
@@ -16,6 +15,7 @@ from .mol_viewer import (
     tokens_within_distance,
 )
 from .token_map import TokenMap
+from .workflow_presentation import confirm, present_information, present_warning
 
 APP_TITLE = "FoldQC"
 VIEWER_NAME = get_viewer_name()
@@ -41,16 +41,22 @@ class MetricWorkflow:
 
         def _need_ref():
             if not ref_sel:
-                QtWidgets.QMessageBox.warning(
+                present_warning(
                     self,
                     APP_TITLE,
                     "This property requires a reference selection.\n"
                     "Enter a viewer selection in the Reference field.",
                 )
                 return None
-            indices = selection_to_token_indices(tm, ref_sel, obj_name=obj_name)
+            indices = self._viewer_operation(
+                "selection_token_indices",
+                selection_to_token_indices,
+                tm,
+                ref_sel,
+                obj_name=obj_name,
+            )
             if not indices:
-                QtWidgets.QMessageBox.warning(
+                present_warning(
                     self,
                     APP_TITLE,
                     f"Reference selection '{ref_sel}' matched no tokens in {obj_name}.",
@@ -64,7 +70,7 @@ class MetricWorkflow:
         spec = metrics.METRICS.require(key)
 
         if key == "ensemble_rmsd":
-            QtWidgets.QMessageBox.information(
+            present_information(
                 self,
                 APP_TITLE,
                 "Ensemble RMSD requires all models to be loaded.\n"
@@ -98,7 +104,7 @@ class MetricWorkflow:
                 tm, obj_name, ref_sel, ref_indices, cutoff
             )
             if not contact_indices:
-                QtWidgets.QMessageBox.warning(
+                present_warning(
                     self,
                     APP_TITLE,
                     "No polymer binding-site residues were found within "
@@ -158,24 +164,24 @@ class MetricWorkflow:
             )
         except compute.MissingMetricDataError:
             if key == "plddt":
-                QtWidgets.QMessageBox.warning(
+                present_warning(
                     self, APP_TITLE, "pLDDT data are not available for this model."
                 )
             elif key.startswith("contact_prob"):
-                QtWidgets.QMessageBox.warning(
+                present_warning(
                     self, APP_TITLE, "Interaction probability data are not available."
                 )
             elif key == "chain_iptm":
-                QtWidgets.QMessageBox.warning(
+                present_warning(
                     self, APP_TITLE, "Chain confidence data are not available."
                 )
             else:
-                QtWidgets.QMessageBox.warning(
+                present_warning(
                     self, APP_TITLE, "Required metric data are not available."
                 )
             return None
         except compute.MissingReferenceError:
-            QtWidgets.QMessageBox.warning(
+            present_warning(
                 self,
                 APP_TITLE,
                 "This property requires a reference selection.\n"
@@ -183,7 +189,7 @@ class MetricWorkflow:
             )
             return None
         except compute.MissingContactError:
-            QtWidgets.QMessageBox.warning(
+            present_warning(
                 self,
                 APP_TITLE,
                 "No polymer binding-site residues were found within "
@@ -192,19 +198,17 @@ class MetricWorkflow:
             return None
         except compute.UnsupportedMetricError:
             if key == "ensemble_rmsd":
-                QtWidgets.QMessageBox.information(
+                present_information(
                     self,
                     APP_TITLE,
                     "Ensemble RMSD requires all models to be loaded.\n"
                     "Use the Ensemble… button.",
                 )
             else:
-                QtWidgets.QMessageBox.warning(
-                    self, APP_TITLE, f"Unknown property key: {key}"
-                )
+                present_warning(self, APP_TITLE, f"Unknown property key: {key}")
             return None
         except compute.MetricComputationError as exc:
-            QtWidgets.QMessageBox.warning(self, APP_TITLE, str(exc))
+            present_warning(self, APP_TITLE, str(exc))
             return None
 
     def _metric_dependencies_available(self, spec: metrics.MetricSpec) -> bool:
@@ -285,15 +289,7 @@ class MetricWorkflow:
             "prediction, but it can be useful for deliberate copies or partial "
             "models. Apply the coloring anyway?"
         )
-        buttons = MessageBoxStandardButton.Yes | MessageBoxStandardButton.Cancel
-        result = QtWidgets.QMessageBox.question(
-            self,
-            APP_TITLE,
-            message,
-            buttons,
-            MessageBoxStandardButton.Cancel,
-        )
-        if result != MessageBoxStandardButton.Yes:
+        if not confirm(self, APP_TITLE, message):
             return False
 
         accepted.add(cache_key)
@@ -318,7 +314,13 @@ class MetricWorkflow:
         """Return a valid cached atom-index mapping for one viewer object."""
         cache_key = self._paint_mapping_cache_key(data, obj_name)
         existing = getattr(self, "_paint_mappings", {}).get(cache_key)
-        mapping, rebuilt = ensure_object_paint_mapping(obj_name, token_map, existing)
+        mapping, rebuilt = self._viewer_operation(
+            "ensure_paint_mapping",
+            ensure_object_paint_mapping,
+            obj_name,
+            token_map,
+            existing,
+        )
         if getattr(self, "_viewer", None) is None:
             mappings = dict(getattr(self, "_paint_mappings", {}))
             mappings[cache_key] = mapping
@@ -342,8 +344,13 @@ class MetricWorkflow:
         cutoff: float,
     ) -> list[int]:
         """Return polymer tokens with any atom within *cutoff* Å of reference."""
-        raw_binding_indices = tokens_within_distance(
-            token_map, obj_name, ref_sel, cutoff
+        raw_binding_indices = self._viewer_operation(
+            "tokens_within_distance",
+            tokens_within_distance,
+            token_map,
+            obj_name,
+            ref_sel,
+            cutoff,
         )
         ref_set = set(ref_indices)
         return [
