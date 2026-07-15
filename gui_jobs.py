@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .compat import QtCore
+from .ownership import Closeable
 
 Signal = getattr(QtCore, "Signal", None)
 if Signal is None:  # PyQt exposes pyqtSignal instead of Signal.
@@ -18,15 +19,10 @@ ProgressReporter = Callable[[str], None]
 JobTask = Callable[[ProgressReporter], Any]
 
 
-def _cleanup_temporary_extraction(value: object) -> None:
-    """Explicitly clean archive ownership carried by a discarded job result."""
-    nested = getattr(value, "pred_files", None)
-    if nested is not None and getattr(value, "_owns_prediction_files", True):
-        _cleanup_temporary_extraction(nested)
-    temporary = getattr(value, "_temporary_directory", None)
-    cleanup = getattr(temporary, "cleanup", None)
-    if callable(cleanup):
-        cleanup()
+def _close_if_owned(value: object) -> None:
+    """Close only explicit top-level owners; never inspect nested fields."""
+    if isinstance(value, Closeable):
+        value.close()
 
 
 @dataclass(frozen=True)
@@ -84,7 +80,7 @@ class _JobRunnable(QtCore.QRunnable):
 
         if self.handle.is_abandoned:
             # Release archive-backed result objects in the worker thread.
-            _cleanup_temporary_extraction(result)
+            _close_if_owned(result)
             del result
             return
         self.signals.result.emit(self.request_id, result)
@@ -98,7 +94,7 @@ class _DiscardRunnable(QtCore.QRunnable):
     def run(self) -> None:
         # Dropping the final reference here keeps temporary extraction cleanup
         # away from the Qt GUI thread.
-        _cleanup_temporary_extraction(self._value)
+        _close_if_owned(self._value)
         self._value = None
 
 

@@ -10,6 +10,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from FoldQC import compute
+from FoldQC.confidence import PredictionConfidence
 from FoldQC.token_map import TokenInfo, TokenMap
 
 
@@ -133,7 +134,6 @@ def test_pae_dispatch_and_reference_requirements() -> None:
     )
     assert labels.shape == (3,)
     assert len(set(labels.tolist())) == 1  # one cluster
-    assert compute.pae_domain_method("pae_domain_spectral") == "spectral"
     with pytest.raises(compute.MissingCutoffError):
         compute.compute_metric("pae_domain_spectral", data, EMPTY_TOKEN_MAP)
 
@@ -237,7 +237,9 @@ def test_chain_iptm_dispatch_and_missing_confidence() -> None:
             _token(2, chain_id="B"),
         )
     )
-    data = types.SimpleNamespace(confidence={"chains_ptm": {"0": 0.8, "1": 0.6}})
+    data = types.SimpleNamespace(
+        confidence=PredictionConfidence(chain_ptm=np.array([0.8, 0.6]))
+    )
 
     np.testing.assert_allclose(
         compute.compute_metric("chain_iptm", data, token_map),
@@ -254,6 +256,3 @@ def test_unknown_metric_raises_unsupported_metric() -> None:
         compute.compute_metric(
             "future_metric", types.SimpleNamespace(), EMPTY_TOKEN_MAP
         )
-
-    with pytest.raises(compute.UnsupportedMetricError):
-        compute.pae_domain_method("pae_row_mean")

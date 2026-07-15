@@ -82,6 +82,31 @@ the displayed x-range is restricted to those tokens; the summary values are
 still computed against the full complex. Ensemble targets show member means
 with shaded standard deviations.
 
+## Data and Confidence Contracts
+
+FoldQC's metric and plot behavior is registry-derived. Each metric specification
+declares its required data family, viewer context, supported plots, optional
+dependencies, matrix presentation, and CSV units/semantics. The GUI resolves
+that specification once when an action starts, then loads only the required
+per-model capabilities. Availability therefore follows the selected rank and
+target rather than a prediction-wide union.
+
+Provider confidence JSON is normalized when parsed. Live model state contains
+one immutable provider-neutral confidence object with these recognized fields
+when available: `ranking_score`, `confidence_score`, `ptm`, `iptm`,
+`ligand_iptm`, `protein_iptm`, `complex_plddt`, `complex_iplddt`, `complex_pde`,
+`complex_ipde`, `fraction_disordered`, `gpde`, `has_clash`, per-chain pTM/ipTM,
+pairwise chain ipTM, and affinity value/probability. Provider aliases such as
+`aggregate_score`, `structure_confidence`, `disorder`, and the various chain
+field spellings are accepted only at the provider boundary.
+
+Unknown provider JSON fields are deliberately discarded. Missing recognized
+values remain unavailable; malformed recognized values report the provider,
+model, field, and source file. Chain vectors and matrices are read-only
+`float32` arrays indexed by canonical first-appearance `TokenMap.chain_order`.
+Missing chain cells use `NaN`; missing or zero pair-matrix diagonal cells are
+filled from per-chain pTM when that value exists.
+
 ## CSV Export Schema
 
 Use `Export CSV...` to write token-level scalar values for the currently
@@ -218,7 +243,7 @@ and made read-only before entering model state.
 | Ensemble RMSD | After ensemble setup, computes per-token coordinate RMSD across ensemble members. By default, models are aligned on a high-confidence polymer core; expert mode can instead use current PyMOL coordinates. | Lower values indicate agreement across models; higher values indicate conformational variability or uncertain placement. |
 | Ensemble pLDDT mean | After ensemble setup, computes the per-token mean pLDDT across loaded models. | Higher values indicate consistently high local confidence across the ensemble. |
 | Ensemble pLDDT std | After ensemble setup, computes the per-token standard deviation of pLDDT across loaded models. | Lower values indicate stable confidence estimates across models; higher values mark positions where model confidence varies between predictions. |
-| Chain ipTM (from JSON) | Reads per-chain ipTM from the confidence JSON (`chains_iptm`, `chain_iptm`, or `chains_ptm`) and assigns each token the score for its chain. Matrix plots show the provider's pairwise chain matrix (`pair_chains_iptm` or `chain_pair_iptm`) with rows as chain `i` and columns as chain `j`. | Higher values indicate higher confidence in chain-level placement or interactions. Off-diagonal cells describe confidence for a chain pair; diagonal cells are chain-restricted pTM/self scores, not interfaces. |
+| Chain ipTM | Uses FoldQC's normalized per-chain ipTM (falling back to per-chain pTM) and assigns each token the score at that chain's position in canonical `TokenMap.chain_order`. Matrix plots use the normalized pairwise chain ipTM matrix. | Higher values indicate higher confidence in chain-level placement or interactions. Off-diagonal cells describe confidence for a chain pair; diagonal cells are chain-restricted pTM/self scores, not interfaces. |
 
 Chai-1 Discovery folders provide structure B-factor pLDDT, PAE matrices, and
 score JSON/NPZ files with global pTM/ipTM, per-chain pTM, pairwise chain ipTM,
@@ -235,9 +260,10 @@ present in the full-data file.
 
 ### Interpreting Pairwise Chain ipTM
 
-The pairwise chain ipTM matrix uses the chain order from the prediction output,
-mapped onto the displayed PyMOL chain IDs. Row `i`, column `j` means the JSON
-cell `[i][j]` for those two chains.
+The pairwise chain ipTM matrix uses the unique first-appearance chain order from
+the canonical structure token map, mapped onto the displayed PyMOL chain IDs.
+Provider JSON indices are converted to this order while loading; row `i`,
+column `j` then represents those two canonical chains.
 
 Do not assume every provider uses the matrix as a simple "reference chain" by
 "placed chain" table. For AlphaFold 3 `chain_pair_iptm`, the off-diagonal

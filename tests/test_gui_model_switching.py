@@ -491,6 +491,10 @@ def _install_fake_pymol() -> types.SimpleNamespace:
 _PYMOL = _install_fake_pymol()
 
 from FoldQC import ensemble, gui_jobs, gui_loading, metrics, session  # noqa: E402
+from FoldQC.confidence import (  # noqa: E402
+    AffinityConfidence,
+    PredictionConfidence,
+)
 from FoldQC.gui import (  # noqa: E402
     APP_TITLE,
     PREDICTION_FILE_FILTER,
@@ -501,6 +505,7 @@ from FoldQC.gui import (  # noqa: E402
 )
 from FoldQC.gui_state import GuiState  # noqa: E402
 from FoldQC.model_state import ModelState  # noqa: E402
+from FoldQC.providers.registry import BUILTIN_PROVIDERS  # noqa: E402
 from FoldQC.structure_index import StructureIndex  # noqa: E402
 from FoldQC.token_map import ResidueId, TokenInfo, TokenMap  # noqa: E402
 
@@ -528,7 +533,7 @@ def _model_state(rank: int, data, token_map: TokenMap | None = None) -> ModelSta
         data.rank = rank
     for field, default in (
         ("name", "target"),
-        ("provider", "boltz"),
+        ("provider", BUILTIN_PROVIDERS.get("boltz").info),
         ("display_label", f"model_{rank}"),
         ("token_plddt", None),
         ("token_plddt_source", None),
@@ -536,13 +541,13 @@ def _model_state(rank: int, data, token_map: TokenMap | None = None) -> ModelSta
         ("pde", None),
         ("contact_probs", None),
         ("confidence", None),
-        ("summary_confidence", None),
-        ("affinity", None),
         ("embeddings_s", None),
         ("embeddings_z", None),
     ):
         if not hasattr(data, field):
             setattr(data, field, default)
+    if not hasattr(data, "structure_path"):
+        data.structure_path = Path(f"/tmp/model_{rank}.cif")
     if data.token_plddt is not None and data.token_plddt_source is None:
         data.token_plddt_source = "provider_token"
     token_count = 0
@@ -554,8 +559,31 @@ def _model_state(rank: int, data, token_map: TokenMap | None = None) -> ModelSta
             if value is not None:
                 token_count = np.asarray(value).shape[0]
                 break
+    if token_map is not None and not isinstance(token_map, TokenMap):
+        token_map = TokenMap(tuple(token_map))
+    confidence_chain_count = 0
+    confidence = getattr(data, "confidence", None)
+    if not token_count and isinstance(confidence, PredictionConfidence):
+        for value in (
+            confidence.chain_ptm,
+            confidence.chain_iptm,
+            confidence.pair_chain_iptm,
+        ):
+            if value is not None:
+                confidence_chain_count = max(confidence_chain_count, len(value))
+        token_count = confidence_chain_count
     if token_map is None or (not token_map and token_count):
-        token_map = TokenMap(tuple(_token(index) for index in range(token_count)))
+        token_map = TokenMap(
+            tuple(
+                _token(
+                    index,
+                    chain_id=(chr(ord("A") + index) if confidence_chain_count else "A"),
+                )
+                for index in range(token_count)
+            )
+        )
+    if isinstance(data.provider, str):
+        data.provider = BUILTIN_PROVIDERS.get(data.provider).info
     return ModelState(rank, data, _structure_index(data, token_map))
 
 
@@ -708,34 +736,44 @@ class _PredictionFiles:
     def structure_path(self, rank: int) -> Path:
         return Path(f"/tmp/target_model_{rank}.cif")
 
+    def close(self) -> None:
+        pass
+
 
 class _SessionPredictionFiles:
     def __init__(self, root: Path, ranks=(0, 1)) -> None:
         self._root = root
         self.name = "target"
+        self.provider = BUILTIN_PROVIDERS.get("boltz").info
         self.models = [
             types.SimpleNamespace(
                 rank=rank,
                 display_label=f"model_{rank}",
                 object_name=f"target_model_{rank}",
+                capabilities=frozenset({"plddt"}),
             )
             for rank in ranks
         ]
-        self.has_pae = False
-        self.has_pde = False
-        self.has_contact_probs = False
-        self.has_plddt = True
         self.supports_ensemble = len(ranks) > 1
+        self.closed = False
         for model in self.models:
-            model.supports = lambda capability, owner=self: bool(
-                getattr(owner, f"has_{capability}", False)
+            model.supports = lambda capability, item=model: (
+                capability in item.capabilities
             )
+
+    def set_capabilities(self, *capabilities: str) -> None:
+        values = frozenset(capabilities)
+        for model in self.models:
+            model.capabilities = values
 
     def structure_path(self, rank: int) -> Path:
         return self._root / f"target_model_{rank}.cif"
 
     def model(self, rank: int):
         return next(model for model in self.models if model.rank == rank)
+
+    def close(self) -> None:
+        self.closed = True
 
 
 class _Discovery:
@@ -745,7 +783,7 @@ class _Discovery:
         self.input_path = input_path
         self.scanned = []
 
-    def scan(self, candidate):
+    def resolve(self, candidate):
         self.scanned.append(candidate)
         for item, files in self.files_by_candidate:
             if item is candidate:
@@ -844,11 +882,14 @@ class _ManualJobRunner:
         self.disposed.append(value)
 
 
-def _candidate(name: str, provider: str = "af3_server", path: Path | None = None):
+def _candidate(name: str, provider="af3_server", path: Path | None = None):
+    provider_info = (
+        BUILTIN_PROVIDERS.get(provider).info if isinstance(provider, str) else provider
+    )
     return types.SimpleNamespace(
         path=Path(f"/tmp/{name}") if path is None else path,
-        provider=provider,
-        provider_label="AlphaFold 3 Server",
+        provider=provider_info,
+        provider_label=provider_info.label,
         relative_path=name,
     )
 
@@ -856,7 +897,7 @@ def _candidate(name: str, provider: str = "af3_server", path: Path | None = None
 class _CsvPredictionFiles:
     def __init__(self, root: Path, ranks=(0, 1)) -> None:
         self.name = "target"
-        self.provider = "boltz"
+        self.provider = BUILTIN_PROVIDERS.get("boltz").info
         self.input_path = root
         self.pred_dir = root
         self.models = [
@@ -1084,9 +1125,9 @@ class _Combo:
 
 
 def _set_metric_combo(dialog, flags: int) -> None:
-    dialog._prop_combo = _Combo(len(metrics.PROPERTIES), flags)
+    dialog._prop_combo = _Combo(len(metrics.METRICS), flags)
     dialog._prop_combo_rows = {
-        prop["key"]: row for row, prop in enumerate(metrics.PROPERTIES)
+        prop.key: row for row, prop in enumerate(metrics.METRICS)
     }
 
 
@@ -1207,11 +1248,7 @@ class QtJobRunnerTests(unittest.TestCase):
     def test_dispose_releases_value_in_discard_runnable(self) -> None:
         queued = []
         cleanup_calls = []
-        temporary = types.SimpleNamespace(
-            cleanup=lambda: cleanup_calls.append("cleaned")
-        )
-        pred_files = types.SimpleNamespace(_temporary_directory=temporary)
-        value = types.SimpleNamespace(pred_files=pred_files)
+        value = types.SimpleNamespace(close=lambda: cleanup_calls.append("cleaned"))
         runner = gui_jobs.QtJobRunner()
 
         with mock.patch.object(gui_jobs._POOL, "start", side_effect=queued.append):
@@ -1228,14 +1265,9 @@ class QtJobRunnerTests(unittest.TestCase):
         queued = []
         cleanup_calls = []
         pred_files = types.SimpleNamespace(
-            _temporary_directory=types.SimpleNamespace(
-                cleanup=lambda: cleanup_calls.append("cleaned")
-            )
+            close=lambda: cleanup_calls.append("cleaned")
         )
-        result = types.SimpleNamespace(
-            pred_files=pred_files,
-            _owns_prediction_files=False,
-        )
+        result = types.SimpleNamespace(pred_files=pred_files)
         runner = gui_jobs.QtJobRunner()
 
         with mock.patch.object(gui_jobs._POOL, "start", side_effect=queued.append):
@@ -1274,6 +1306,12 @@ class GuiModelSwitchingTests(unittest.TestCase):
         )
         self._build_structure_index = structure_index_patcher.start()
         self.addCleanup(structure_index_patcher.stop)
+        scan_patcher = mock.patch(
+            "FoldQC.loader.scan_prediction_candidate",
+            side_effect=lambda discovery, candidate: discovery.resolve(candidate),
+        )
+        self._scan_prediction_candidate = scan_patcher.start()
+        self.addCleanup(scan_patcher.stop)
 
     def _settings(self):
         dialog = _new_dialog()
@@ -1892,7 +1930,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
 
     def test_plot_type_choices_include_ensemble_site_summary(self) -> None:
         self.assertEqual(
-            metrics.PLOT_TYPES,
+            [(spec.label, spec.key) for spec in metrics.PLOTS],
             [
                 ("Line", "line"),
                 ("Distribution", "distribution"),
@@ -1926,12 +1964,11 @@ class GuiModelSwitchingTests(unittest.TestCase):
             def fake_load_prediction_data(pred_files, rank, **kwargs):
                 load_calls.append((pred_files, rank, kwargs))
                 return types.SimpleNamespace(
-                    provider="structure_only",
+                    provider=BUILTIN_PROVIDERS.get("structure_only").info,
                     rank=rank,
                     structure_path=pred_files.structure_path(rank),
                     token_plddt=np.array([0.8], dtype=np.float32),
                     confidence=None,
-                    summary_confidence=None,
                     pae=None,
                     pde=None,
                     contact_probs=None,
@@ -2092,12 +2129,11 @@ class GuiModelSwitchingTests(unittest.TestCase):
             def fake_load_prediction_data(pred_files, rank, **_kwargs):
                 loaded_ranks.append(rank)
                 return types.SimpleNamespace(
-                    provider="structure_only",
+                    provider=BUILTIN_PROVIDERS.get("structure_only").info,
                     rank=rank,
                     structure_path=pred_files.structure_path(rank),
                     token_plddt=np.array([0.8], dtype=np.float32),
                     confidence=None,
-                    summary_confidence=None,
                     pae=None,
                     pde=None,
                     contact_probs=None,
@@ -2141,12 +2177,11 @@ class GuiModelSwitchingTests(unittest.TestCase):
                 mock.patch(
                     "FoldQC.loader.load_prediction_data",
                     return_value=types.SimpleNamespace(
-                        provider="structure_only",
+                        provider=BUILTIN_PROVIDERS.get("structure_only").info,
                         rank=0,
                         structure_path=files.structure_path(0),
                         token_plddt=np.array([0.8], dtype=np.float32),
                         confidence=None,
-                        summary_confidence=None,
                         pae=None,
                         pde=None,
                         contact_probs=None,
@@ -2171,12 +2206,11 @@ class GuiModelSwitchingTests(unittest.TestCase):
             candidate = _candidate("target", path=root / "target")
             discovery = _Discovery([candidate], [(candidate, files)])
             data = types.SimpleNamespace(
-                provider="structure_only",
+                provider=BUILTIN_PROVIDERS.get("structure_only").info,
                 rank=0,
                 structure_path=files.structure_path(0),
                 token_plddt=np.array([0.8], dtype=np.float32),
                 confidence=None,
-                summary_confidence=None,
                 pae=None,
                 pde=None,
                 contact_probs=None,
@@ -2223,7 +2257,11 @@ class GuiModelSwitchingTests(unittest.TestCase):
             archive.write_text("archive")
             extracted = root / "foldqc_archive_x" / "archive" / "prediction"
             files = _SessionPredictionFiles(extracted, ranks=(0,))
-            candidate = _candidate("prediction", provider="boltz_api", path=extracted)
+            candidate = _candidate(
+                "prediction",
+                provider=BUILTIN_PROVIDERS.get("boltz_api").info,
+                path=extracted,
+            )
             discovery = _Discovery(
                 [candidate], [(candidate, files)], input_path=archive
             )
@@ -2242,12 +2280,11 @@ class GuiModelSwitchingTests(unittest.TestCase):
                 mock.patch(
                     "FoldQC.loader.load_prediction_data",
                     return_value=types.SimpleNamespace(
-                        provider="boltz_api",
+                        provider=BUILTIN_PROVIDERS.get("boltz_api").info,
                         rank=0,
                         structure_path=files.structure_path(0),
                         token_plddt=np.array([0.8], dtype=np.float32),
                         confidence=None,
-                        summary_confidence=None,
                         pae=None,
                         pde=None,
                         contact_probs=None,
@@ -2267,7 +2304,9 @@ class GuiModelSwitchingTests(unittest.TestCase):
             structure.write_text("data")
             files = _SessionPredictionFiles(root, ranks=(0,))
             candidate = _candidate(
-                "model.cif", provider="structure_only", path=structure
+                "model.cif",
+                provider=BUILTIN_PROVIDERS.get("structure_only").info,
+                path=structure,
             )
             discovery = _Discovery(
                 [candidate],
@@ -2286,12 +2325,11 @@ class GuiModelSwitchingTests(unittest.TestCase):
                 mock.patch(
                     "FoldQC.loader.load_prediction_data",
                     return_value=types.SimpleNamespace(
-                        provider="structure_only",
+                        provider=BUILTIN_PROVIDERS.get("structure_only").info,
                         rank=0,
                         structure_path=files.structure_path(0),
                         token_plddt=np.array([0.8], dtype=np.float32),
                         confidence=None,
-                        summary_confidence=None,
                         pae=None,
                         pde=None,
                         contact_probs=None,
@@ -2333,12 +2371,11 @@ class GuiModelSwitchingTests(unittest.TestCase):
                 mock.patch(
                     "FoldQC.loader.load_prediction_data",
                     return_value=types.SimpleNamespace(
-                        provider="structure_only",
+                        provider=BUILTIN_PROVIDERS.get("structure_only").info,
                         rank=0,
                         structure_path=files_b.structure_path(0),
                         token_plddt=np.array([0.8], dtype=np.float32),
                         confidence=None,
-                        summary_confidence=None,
                         pae=None,
                         pde=None,
                         contact_probs=None,
@@ -2468,12 +2505,11 @@ class GuiModelSwitchingTests(unittest.TestCase):
             candidate = _candidate("new", path=root / "new")
             discovery = _Discovery([candidate], [(candidate, files)])
             loaded_data = types.SimpleNamespace(
-                provider="structure_only",
+                provider=BUILTIN_PROVIDERS.get("structure_only").info,
                 rank=0,
                 structure_path=files.structure_path(0),
                 token_plddt=np.array([0.8], dtype=np.float32),
                 confidence=None,
-                summary_confidence=None,
                 pae=None,
                 pde=None,
                 contact_probs=None,
@@ -2554,23 +2590,21 @@ class GuiModelSwitchingTests(unittest.TestCase):
             root = Path(tmp)
             files = _SessionPredictionFiles(root, ranks=(0, 1))
             old_data = types.SimpleNamespace(
-                provider="structure_only",
+                provider=BUILTIN_PROVIDERS.get("structure_only").info,
                 rank=0,
                 structure_path=files.structure_path(0),
                 token_plddt=np.array([0.8], dtype=np.float32),
                 confidence=None,
-                summary_confidence=None,
                 pae=None,
                 pde=None,
                 contact_probs=None,
             )
             new_data = types.SimpleNamespace(
-                provider="structure_only",
+                provider=BUILTIN_PROVIDERS.get("structure_only").info,
                 rank=1,
                 structure_path=files.structure_path(1),
                 token_plddt=np.array([0.9], dtype=np.float32),
                 confidence=None,
-                summary_confidence=None,
                 pae=None,
                 pde=None,
                 contact_probs=None,
@@ -2759,23 +2793,21 @@ class GuiModelSwitchingTests(unittest.TestCase):
     ) -> None:
         files = _SessionPredictionFiles(Path("/tmp"), ranks=(0, 1))
         old_data = types.SimpleNamespace(
-            provider="structure_only",
+            provider=BUILTIN_PROVIDERS.get("structure_only").info,
             rank=0,
             structure_path=files.structure_path(0),
             token_plddt=np.array([0.8], dtype=np.float32),
             confidence=None,
-            summary_confidence=None,
             pae=None,
             pde=None,
             contact_probs=None,
         )
         new_data = types.SimpleNamespace(
-            provider="structure_only",
+            provider=BUILTIN_PROVIDERS.get("structure_only").info,
             rank=1,
             structure_path=files.structure_path(1),
             token_plddt=np.array([0.9], dtype=np.float32),
             confidence=None,
-            summary_confidence=None,
             pae=None,
             pde=None,
             contact_probs=None,
@@ -2831,7 +2863,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
 
     def test_lazy_single_model_load_preserves_arrays_and_resumes_once(self) -> None:
         files = _SessionPredictionFiles(Path("/tmp"), ranks=(0,))
-        files.has_pae = True
+        files.set_capabilities("plddt", "pae")
         old_pde = np.array([[1.0]], dtype=np.float32)
         old_data = types.SimpleNamespace(
             rank=0,
@@ -2869,7 +2901,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         with mock.patch("FoldQC.loader.load_prediction_data", side_effect=load_data):
             deferred = dialog._defer_action_for_data(
                 target,
-                {"load_pae": True},
+                frozenset({"pae"}),
                 lambda: resumed.append(_active_data(dialog)),
                 error_title=f"{APP_TITLE} - error",
             )
@@ -2912,7 +2944,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
 
         deferred = dialog._defer_action_for_data(
             target,
-            {"load_pae": True},
+            frozenset({"pae"}),
             lambda: self.fail("No continuation is owned when no job is needed"),
             error_title=f"{APP_TITLE} - error",
         )
@@ -2922,7 +2954,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
 
     def test_lazy_ensemble_failure_commits_no_members(self) -> None:
         files = _SessionPredictionFiles(Path("/tmp"), ranks=(0, 1))
-        files.has_pae = True
+        files.set_capabilities("plddt", "pae")
         old_data = [
             types.SimpleNamespace(
                 rank=rank,
@@ -2970,7 +3002,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         with mock.patch("FoldQC.loader.load_prediction_data", side_effect=load_data):
             dialog._defer_action_for_data(
                 target,
-                {"load_pae": True},
+                frozenset({"pae"}),
                 lambda: resumed.append(True),
                 error_title=f"{APP_TITLE} - error",
             )
@@ -2983,7 +3015,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
 
     def test_lazy_ensemble_missing_array_rejects_whole_batch_atomically(self) -> None:
         files = _SessionPredictionFiles(Path("/tmp"), ranks=(0, 1))
-        files.has_pae = True
+        files.set_capabilities("plddt", "pae")
         states = [
             _model_state(
                 rank,
@@ -3029,7 +3061,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         with mock.patch("FoldQC.loader.load_prediction_data", side_effect=load_data):
             dialog._defer_action_for_data(
                 target,
-                {"load_pae": True},
+                frozenset({"pae"}),
                 lambda: resumed.append(True),
                 error_title=f"{APP_TITLE} - error",
             )
@@ -3041,7 +3073,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
 
     def test_lazy_result_is_rejected_after_state_version_changes(self) -> None:
         files = _SessionPredictionFiles(Path("/tmp"), ranks=(0,))
-        files.has_pae = True
+        files.set_capabilities("plddt", "pae")
         data = types.SimpleNamespace(
             rank=0,
             pae=None,
@@ -3072,7 +3104,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         with mock.patch("FoldQC.loader.load_prediction_data", return_value=loaded):
             dialog._defer_action_for_data(
                 target,
-                {"load_pae": True},
+                frozenset({"pae"}),
                 lambda: resumed.append(True),
                 error_title=f"{APP_TITLE} - error",
             )
@@ -3094,7 +3126,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
 
     def test_close_abandons_lazy_result_without_resuming_action(self) -> None:
         files = _SessionPredictionFiles(Path("/tmp"), ranks=(0,))
-        files.has_pae = True
+        files.set_capabilities("plddt", "pae")
         old_data = types.SimpleNamespace(
             rank=0,
             pae=None,
@@ -3124,7 +3156,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         with mock.patch("FoldQC.loader.load_prediction_data", return_value=new_data):
             dialog._defer_action_for_data(
                 target,
-                {"load_pae": True},
+                frozenset({"pae"}),
                 lambda: resumed.append(True),
                 error_title=f"{APP_TITLE} - error",
             )
@@ -3166,22 +3198,21 @@ class GuiModelSwitchingTests(unittest.TestCase):
         self.assertEqual(values[SETTINGS_KEY_GEOMETRY], b"geometry-bytes")
 
     def test_property_metadata_exposes_groups_and_tiers(self) -> None:
-        by_key = {prop["key"]: prop for prop in metrics.PROPERTIES}
+        by_key = {spec.key: spec for spec in metrics.METRICS}
 
-        self.assertEqual(by_key["plddt_class"]["group"], "pLDDT")
-        self.assertEqual(by_key["plddt"]["group"], "pLDDT")
-        self.assertTrue(by_key["plddt_class"]["needs_plddt"])
-        self.assertTrue(by_key["plddt"]["needs_plddt"])
-        self.assertEqual(by_key["pae_row_mean"]["group"], "PAE")
-        self.assertEqual(by_key["pae_row_mean"]["tier"], "normal")
-        self.assertEqual(by_key["pae_col_mean"]["tier"], "normal")
-        self.assertEqual(by_key["pae_contact"]["tier"], "advanced")
-        self.assertEqual(by_key["pae_domain_complete"]["tier"], "experimental")
-        self.assertEqual(by_key["pde_within_sel"]["tier"], "advanced")
-        self.assertEqual(by_key["pde_contact"]["tier"], "advanced")
-        self.assertEqual(by_key["pae_domain_spectral"]["tier"], "experimental")
-        self.assertEqual(by_key["chain_iptm"]["group"], "Chain/interface")
-        self.assertEqual(by_key["chain_iptm"]["tier"], "normal")
+        self.assertEqual(by_key["plddt_class"].group, "pLDDT")
+        self.assertEqual(by_key["plddt"].group, "pLDDT")
+        self.assertEqual(by_key["plddt"].load_capabilities, {"plddt"})
+        self.assertEqual(by_key["pae_row_mean"].group, "PAE")
+        self.assertEqual(by_key["pae_row_mean"].tier, "normal")
+        self.assertEqual(by_key["pae_col_mean"].tier, "normal")
+        self.assertEqual(by_key["pae_contact"].tier, "advanced")
+        self.assertEqual(by_key["pae_domain_complete"].tier, "experimental")
+        self.assertEqual(by_key["pde_within_sel"].tier, "advanced")
+        self.assertEqual(by_key["pde_contact"].tier, "advanced")
+        self.assertEqual(by_key["pae_domain_spectral"].tier, "experimental")
+        self.assertEqual(by_key["chain_iptm"].group, "Chain/interface")
+        self.assertEqual(by_key["chain_iptm"].tier, "normal")
 
     def test_property_combo_uses_group_headers_and_tier_labels(self) -> None:
         enabled = _PYMOL.Qt.QtCore.Qt.ItemFlag.ItemIsEnabled
@@ -3284,7 +3315,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         action_cls = _PYMOL.Qt.QtGui.QAction
         dialog = _new_dialog()
         dialog._plot_actions = {
-            key: action_cls(label) for label, key in metrics.PLOT_TYPES
+            spec.key: action_cls(spec.label) for spec in metrics.PLOTS
         }
         dialog._current_target_kind = lambda: "single"
         dialog._ensemble = None
@@ -3322,11 +3353,11 @@ class GuiModelSwitchingTests(unittest.TestCase):
         action_cls = _PYMOL.Qt.QtGui.QAction
         dialog = _new_dialog()
         dialog._plot_actions = {
-            key: action_cls(label) for label, key in metrics.PLOT_TYPES
+            spec.key: action_cls(spec.label) for spec in metrics.PLOTS
         }
 
         self.assertEqual(
-            set(dialog._plot_actions), {key for _label, key in metrics.PLOT_TYPES}
+            set(dialog._plot_actions), {spec.key for spec in metrics.PLOTS}
         )
 
     def _context_dialog(self, metric: str, *, ref: str = "", cutoff: str = "5.0"):
@@ -3601,30 +3632,27 @@ class GuiModelSwitchingTests(unittest.TestCase):
         dialog = _new_dialog()
         dialog._conf_browser = _TextBox()
         data = types.SimpleNamespace(
-            provider="boltz",
-            confidence={
-                "confidence_score": 0.67,
-                "ptm": 0.96,
-                "iptm": 0.95,
-                "ligand_iptm": 0.94,
-                "protein_iptm": 0.93,
-                "complex_plddt": 0.61,
-                "complex_iplddt": 0.62,
-                "complex_pde": 0.43,
-                "complex_ipde": 0.44,
-                "chains_ptm": {"1": 0.8, "0": 0.9},
-            },
-            affinity={
-                "affinity_pred_value": -1.234,
-                "affinity_probability_binary": 0.8765,
-            },
+            provider=BUILTIN_PROVIDERS.get("boltz").info,
+            confidence=PredictionConfidence(
+                confidence_score=0.67,
+                ptm=0.96,
+                iptm=0.95,
+                ligand_iptm=0.94,
+                protein_iptm=0.93,
+                complex_plddt=0.61,
+                complex_iplddt=0.62,
+                complex_pde=0.43,
+                complex_ipde=0.44,
+                chain_ptm=np.array([0.9, 0.8], dtype=np.float32),
+                affinity=AffinityConfidence(-1.234, 0.8765),
+            ),
         )
         _set_active_state(dialog, data)
 
         dialog._update_confidence_summary()
 
         text = dialog._conf_browser.text
-        self.assertIn("provider         : Boltz-2", text)
+        self.assertIn("provider         : Boltz", text)
         self.assertIn("protein_iptm", text)
         self.assertIn("complex_iplddt", text)
         self.assertIn("complex_ipde", text)
@@ -3912,17 +3940,10 @@ class GuiModelSwitchingTests(unittest.TestCase):
     def test_chain_iptm_is_disabled_without_confidence_data(self) -> None:
         enabled = _PYMOL.Qt.QtCore.Qt.ItemFlag.ItemIsEnabled
         dialog = _new_dialog()
-        dialog._pred_files = types.SimpleNamespace(
-            has_pae=False,
-            has_pde=False,
-            has_contact_probs=False,
-            has_plddt=True,
-            supports_ensemble=False,
-        )
+        dialog._pred_files = _SessionPredictionFiles(Path("/tmp"), ranks=(0,))
         data = types.SimpleNamespace(
             token_plddt=np.array([0.9], dtype=np.float32),
             confidence=None,
-            summary_confidence=None,
         )
         _set_active_state(dialog, data)
         _set_metric_combo(dialog, enabled)
@@ -3930,12 +3951,10 @@ class GuiModelSwitchingTests(unittest.TestCase):
         dialog._update_property_availability()
 
         chain_row = next(
-            row
-            for row, prop in enumerate(metrics.PROPERTIES)
-            if prop["key"] == "chain_iptm"
+            row for row, prop in enumerate(metrics.METRICS) if prop.key == "chain_iptm"
         )
         plddt_row = next(
-            row for row, prop in enumerate(metrics.PROPERTIES) if prop["key"] == "plddt"
+            row for row, prop in enumerate(metrics.METRICS) if prop.key == "plddt"
         )
         self.assertFalse(dialog._prop_combo.model().item(chain_row).flags() & enabled)
         self.assertTrue(dialog._prop_combo.model().item(plddt_row).flags() & enabled)
@@ -3946,8 +3965,9 @@ class GuiModelSwitchingTests(unittest.TestCase):
         dialog._pred_files = _SessionPredictionFiles(Path("/tmp"), ranks=(0,))
         data = types.SimpleNamespace(
             token_plddt=None,
-            confidence={"chains_iptm": {"0": 0.8}},
-            summary_confidence=None,
+            confidence=PredictionConfidence(
+                chain_iptm=np.array([0.8], dtype=np.float32)
+            ),
         )
         _set_active_state(dialog, data)
         _set_metric_combo(dialog, enabled)
@@ -3955,30 +3975,17 @@ class GuiModelSwitchingTests(unittest.TestCase):
         dialog._update_property_availability()
 
         chain_row = next(
-            row
-            for row, prop in enumerate(metrics.PROPERTIES)
-            if prop["key"] == "chain_iptm"
+            row for row, prop in enumerate(metrics.METRICS) if prop.key == "chain_iptm"
         )
         self.assertTrue(dialog._prop_combo.model().item(chain_row).flags() & enabled)
 
     def test_chain_iptm_is_disabled_when_confidence_lacks_chain_scores(self) -> None:
         enabled = _PYMOL.Qt.QtCore.Qt.ItemFlag.ItemIsEnabled
         dialog = _new_dialog()
-        dialog._pred_files = types.SimpleNamespace(
-            has_pae=False,
-            has_pde=False,
-            has_contact_probs=False,
-            has_plddt=True,
-            supports_ensemble=False,
-        )
+        dialog._pred_files = _SessionPredictionFiles(Path("/tmp"), ranks=(0,))
         data = types.SimpleNamespace(
             token_plddt=np.array([0.9], dtype=np.float32),
-            confidence={
-                "confidence_score": 0.91,
-                "chains_ptm": {},
-                "pair_chains_iptm": {},
-            },
-            summary_confidence=None,
+            confidence=PredictionConfidence(confidence_score=0.91),
         )
         _set_active_state(dialog, data)
         _set_metric_combo(dialog, enabled)
@@ -3986,12 +3993,10 @@ class GuiModelSwitchingTests(unittest.TestCase):
         dialog._update_property_availability()
 
         chain_row = next(
-            row
-            for row, prop in enumerate(metrics.PROPERTIES)
-            if prop["key"] == "chain_iptm"
+            row for row, prop in enumerate(metrics.METRICS) if prop.key == "chain_iptm"
         )
         plddt_row = next(
-            row for row, prop in enumerate(metrics.PROPERTIES) if prop["key"] == "plddt"
+            row for row, prop in enumerate(metrics.METRICS) if prop.key == "plddt"
         )
         self.assertFalse(dialog._prop_combo.model().item(chain_row).flags() & enabled)
         self.assertTrue(dialog._prop_combo.model().item(plddt_row).flags() & enabled)
@@ -3999,17 +4004,10 @@ class GuiModelSwitchingTests(unittest.TestCase):
     def test_ensemble_properties_require_loaded_ensemble(self) -> None:
         enabled = _PYMOL.Qt.QtCore.Qt.ItemFlag.ItemIsEnabled
         dialog = _new_dialog()
-        dialog._pred_files = types.SimpleNamespace(
-            has_pae=False,
-            has_pde=False,
-            has_contact_probs=False,
-            has_plddt=True,
-            supports_ensemble=True,
-        )
+        dialog._pred_files = _SessionPredictionFiles(Path("/tmp"), ranks=(0, 1))
         data = types.SimpleNamespace(
             token_plddt=np.array([0.8], dtype=np.float32),
             confidence=None,
-            summary_confidence=None,
         )
         _set_active_state(dialog, data)
         dialog._ensemble = None
@@ -4018,9 +4016,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         dialog._update_property_availability()
 
         ensemble_rows = [
-            row
-            for row, prop in enumerate(metrics.PROPERTIES)
-            if prop.get("ensemble_level", False)
+            row for row, prop in enumerate(metrics.METRICS) if prop.ensemble_level
         ]
         for row in ensemble_rows:
             self.assertFalse(dialog._prop_combo.model().item(row).flags() & enabled)
@@ -4035,17 +4031,10 @@ class GuiModelSwitchingTests(unittest.TestCase):
     def test_ensemble_plddt_properties_accept_canonical_plddt(self) -> None:
         enabled = _PYMOL.Qt.QtCore.Qt.ItemFlag.ItemIsEnabled
         dialog = _new_dialog()
-        dialog._pred_files = types.SimpleNamespace(
-            has_pae=False,
-            has_pde=False,
-            has_contact_probs=False,
-            has_plddt=True,
-            supports_ensemble=True,
-        )
+        dialog._pred_files = _SessionPredictionFiles(Path("/tmp"), ranks=(0, 1))
         data = types.SimpleNamespace(
             token_plddt=np.array([0.8], dtype=np.float32),
             confidence=None,
-            summary_confidence=None,
         )
         _set_active_state(dialog, data)
         dialog._ensemble = _ensemble_state([types.SimpleNamespace(rank=0)])
@@ -4055,12 +4044,12 @@ class GuiModelSwitchingTests(unittest.TestCase):
 
         for key in ("ensemble_plddt_mean", "ensemble_plddt_std"):
             row = next(
-                row for row, prop in enumerate(metrics.PROPERTIES) if prop["key"] == key
+                row for row, prop in enumerate(metrics.METRICS) if prop.key == key
             )
             self.assertTrue(dialog._prop_combo.model().item(row).flags() & enabled)
 
     def test_pae_domain_label_properties_are_pae_gated(self) -> None:
-        keys = {prop["key"] for prop in metrics.PROPERTIES}
+        keys = {prop.key for prop in metrics.METRICS}
         self.assertIn("pae_domain_complete", keys)
         self.assertIn("pae_domain_spectral", keys)
 
@@ -4070,7 +4059,6 @@ class GuiModelSwitchingTests(unittest.TestCase):
         data = types.SimpleNamespace(
             token_plddt=None,
             confidence=None,
-            summary_confidence=None,
         )
         _set_active_state(dialog, data)
         _set_metric_combo(dialog, enabled)
@@ -4079,13 +4067,13 @@ class GuiModelSwitchingTests(unittest.TestCase):
 
         complete_row = next(
             row
-            for row, prop in enumerate(metrics.PROPERTIES)
-            if prop["key"] == "pae_domain_complete"
+            for row, prop in enumerate(metrics.METRICS)
+            if prop.key == "pae_domain_complete"
         )
         spectral_row = next(
             row
-            for row, prop in enumerate(metrics.PROPERTIES)
-            if prop["key"] == "pae_domain_spectral"
+            for row, prop in enumerate(metrics.METRICS)
+            if prop.key == "pae_domain_spectral"
         )
         self.assertFalse(
             dialog._prop_combo.model().item(complete_row).flags() & enabled
@@ -4094,7 +4082,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
             dialog._prop_combo.model().item(spectral_row).flags() & enabled
         )
 
-        dialog._pred_files.has_pae = True
+        dialog._pred_files.set_capabilities("plddt", "pae")
         _set_metric_combo(dialog, enabled)
         dialog._update_property_availability()
 
@@ -4162,9 +4150,9 @@ class GuiModelSwitchingTests(unittest.TestCase):
     def test_pae_domain_complete_uses_cutoff_and_method(self) -> None:
         dialog = _new_dialog()
         dialog._cutoff_edit = _LineEdit("6.25")
-        # Lambda returns False for "spectral", so any wrong method produces None.
-        dialog._pae_domain_dependency_available = lambda method: (
-            method == "complete_linkage"
+        # Reject any dependency lookup for the wrong metric.
+        dialog._metric_dependencies_available = lambda spec: (
+            spec.key == "pae_domain_complete"
         )
         data = types.SimpleNamespace(
             pae=np.zeros((3, 3), dtype=np.float32),
@@ -4182,8 +4170,9 @@ class GuiModelSwitchingTests(unittest.TestCase):
     def test_pae_domain_spectral_uses_cutoff_and_method(self) -> None:
         dialog = _new_dialog()
         dialog._cutoff_edit = _LineEdit("8.5")
-        # Lambda returns False for "complete_linkage", so wrong method gives None.
-        dialog._pae_domain_dependency_available = lambda method: method == "spectral"
+        dialog._metric_dependencies_available = lambda spec: (
+            spec.key == "pae_domain_spectral"
+        )
         data = types.SimpleNamespace(
             pae=np.zeros((3, 3), dtype=np.float32),
             token_plddt=None,
@@ -4218,7 +4207,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
 
         self.assertIsNone(values)
         self.assertEqual(prompts[0][0], ("scipy",))
-        self.assertIn("complete-linkage", prompts[0][1]["feature_label"])
+        self.assertIn("complete linkage", prompts[0][1]["feature_label"])
 
     def test_pae_domain_dependency_prompt_for_missing_sklearn(self) -> None:
         dialog = _new_dialog()
@@ -4257,8 +4246,9 @@ class GuiModelSwitchingTests(unittest.TestCase):
         with mock.patch(
             "FoldQC.dependencies.importlib.util.find_spec", return_value=object()
         ):
-            available = dialog._ensure_feature_dependencies(
-                ("plot", "pae_domain_spectral"), feature_label="spectral plot"
+            available = dialog._ensure_dependencies(
+                ("matplotlib", "scipy", "sklearn"),
+                feature_label="spectral plot",
             )
 
         self.assertTrue(available)
@@ -4273,8 +4263,9 @@ class GuiModelSwitchingTests(unittest.TestCase):
         with mock.patch(
             "FoldQC.dependencies.importlib.util.find_spec", return_value=None
         ):
-            available = dialog._ensure_feature_dependencies(
-                ("plot", "pae_domain_spectral"), feature_label="spectral plot"
+            available = dialog._ensure_dependencies(
+                ("matplotlib", "scipy", "sklearn"),
+                feature_label="spectral plot",
             )
 
         self.assertFalse(available)
@@ -4363,8 +4354,8 @@ class GuiModelSwitchingTests(unittest.TestCase):
             "FoldQC.dependencies.importlib.util.find_spec", return_value=object()
         ):
             self.assertTrue(
-                dialog._ensure_feature_dependencies(
-                    ("plot",), feature_label="the line plot"
+                dialog._ensure_dependencies(
+                    ("matplotlib",), feature_label="the line plot"
                 )
             )
 
@@ -4442,8 +4433,14 @@ class GuiModelSwitchingTests(unittest.TestCase):
         self.assertTrue(event.ignored)
 
     def test_pae_domain_line_ylabel_is_domain_label(self) -> None:
-        self.assertEqual(metrics.line_ylabel("pae_domain_complete"), "Domain label")
-        self.assertEqual(metrics.line_ylabel("pae_domain_spectral"), "Domain label")
+        self.assertEqual(
+            metrics.METRICS.require("pae_domain_complete").line_ylabel,
+            "Domain label",
+        )
+        self.assertEqual(
+            metrics.METRICS.require("pae_domain_spectral").line_ylabel,
+            "Domain label",
+        )
 
     def test_ensemble_domain_labels_are_painted_per_member_categorically(self) -> None:
         dialog = _new_dialog()
@@ -4490,7 +4487,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         ):
             dialog._apply_individual_property_to_ensemble(
                 "pae_domain_complete",
-                {"needs_pae": True},
+                metrics.METRICS.require("pae_domain_complete"),
                 members,
             )
 
@@ -4644,7 +4641,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
             dialog._pred_files = _CsvPredictionFiles(root, ranks=(0,))
             data = types.SimpleNamespace(
                 name="target",
-                provider="boltz",
+                provider=BUILTIN_PROVIDERS.get("boltz").info,
                 rank=0,
                 display_label="rank 0",
                 structure_path=root / "target_model_0.cif",
@@ -4699,7 +4696,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         )
         data = types.SimpleNamespace(
             name="target",
-            provider="boltz",
+            provider=BUILTIN_PROVIDERS.get("boltz").info,
             rank=0,
             display_label="rank 0",
             structure_path=root / "target_model_0.cif",
@@ -4769,7 +4766,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         )
         data = types.SimpleNamespace(
             name="target",
-            provider="alphafold3",
+            provider=BUILTIN_PROVIDERS.get("alphafold3").info,
             rank=0,
             display_label="rank 0",
             structure_path=root / "target_model_0.cif",
@@ -4833,7 +4830,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
                 types.SimpleNamespace(
                     rank=0,
                     display_label="rank 0",
-                    provider="boltz",
+                    provider=BUILTIN_PROVIDERS.get("boltz").info,
                     name="target",
                     structure_path=root / "target_model_0.cif",
                     token_plddt=np.array([0.8, 0.9], dtype=np.float32),
@@ -4845,7 +4842,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
                 types.SimpleNamespace(
                     rank=1,
                     display_label="rank 1",
-                    provider="boltz",
+                    provider=BUILTIN_PROVIDERS.get("boltz").info,
                     name="target",
                     structure_path=root / "target_model_1.cif",
                     token_plddt=np.array([0.7, 0.6], dtype=np.float32),
@@ -4894,7 +4891,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
             types.SimpleNamespace(
                 rank=0,
                 display_label="rank 0",
-                provider="boltz",
+                provider=BUILTIN_PROVIDERS.get("boltz").info,
                 name="target",
                 structure_path=root / "target_model_0.cif",
             ),
@@ -5354,7 +5351,8 @@ class GuiModelSwitchingTests(unittest.TestCase):
             _token(1, chain_id="A"),
             _token(2, chain_id="B"),
         )
-        dialog._pred_files = types.SimpleNamespace(has_pae=True, has_pde=False)
+        dialog._pred_files = _SessionPredictionFiles(Path("/tmp"), ranks=(0,))
+        dialog._pred_files.set_capabilities("plddt", "pae")
         data = types.SimpleNamespace(
             rank=0,
             pae=np.array(
@@ -5402,8 +5400,8 @@ class GuiModelSwitchingTests(unittest.TestCase):
         dialog._ensemble = _ensemble_state([member])
         calls = []
 
-        def ensure(member_arg, **kwargs):
-            calls.append((member_arg, kwargs))
+        def ensure(member_arg, capabilities):
+            calls.append((member_arg, capabilities))
             dialog._model_states[member_arg.rank].data.pde = np.array(
                 [[0.0, 2.0], [4.0, 0.0]], dtype=np.float32
             )
@@ -5420,7 +5418,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         _x_values, series, ylabel = dialog._compute_summary_plot_data("pde", target, [])
 
         self.assertEqual(ylabel, "PDE gap (Å)")
-        self.assertEqual(calls[0][1], {"load_pae": False, "load_pde": True})
+        self.assertEqual(calls[0][1], frozenset({"pde"}))
         self.assertEqual(series[0][0], "gap (other - within)")
         np.testing.assert_allclose(series[0][1], np.array([2.0, 4.0], dtype=np.float32))
 
@@ -5437,7 +5435,8 @@ class GuiModelSwitchingTests(unittest.TestCase):
             token_map=token_map,
         )
         dialog._resolve_plot_target = lambda: target
-        dialog._pred_files = types.SimpleNamespace(has_pae=False, has_pde=True)
+        dialog._pred_files = _SessionPredictionFiles(Path("/tmp"), ranks=(0,))
+        dialog._pred_files.set_capabilities("plddt", "pde")
         dialog._model_states = {0: target.model_states[0]}
         dialog._active_model_rank = 0
         dialog._ref_edit = _LineEdit("chain B")
@@ -5504,7 +5503,8 @@ class GuiModelSwitchingTests(unittest.TestCase):
             model_states=tuple(states),
         )
         dialog._resolve_plot_target = lambda: target
-        dialog._pred_files = types.SimpleNamespace(has_pae=False, has_pde=True)
+        dialog._pred_files = _SessionPredictionFiles(Path("/tmp"), ranks=(0, 1))
+        dialog._pred_files.set_capabilities("plddt", "pde")
         dialog._model_states = {state.rank: state for state in states}
         dialog._active_model_rank = 0
         dialog._ensemble = _ensemble_state(members)
@@ -5612,7 +5612,8 @@ class GuiModelSwitchingTests(unittest.TestCase):
         state = _model_state(0, data, token_map)
         member = ensemble.EnsembleMember(0, "target_model_0")
         dialog = _new_dialog()
-        dialog._pred_files = types.SimpleNamespace(has_pae=True, has_pde=True)
+        dialog._pred_files = _SessionPredictionFiles(Path("/tmp"), ranks=(0,))
+        dialog._pred_files.set_capabilities("plddt", "pae", "pde")
         dialog._model_states = {0: state}
         dialog._ensemble = _ensemble_state([member])
         dialog._ensure_member_data_for_plot = lambda *args, **kwargs: None
@@ -5683,7 +5684,8 @@ class GuiModelSwitchingTests(unittest.TestCase):
         self,
     ) -> None:
         dialog = _new_dialog()
-        dialog._pred_files = types.SimpleNamespace(has_pae=False, has_pde=True)
+        dialog._pred_files = _SessionPredictionFiles(Path("/tmp"), ranks=(0, 1))
+        dialog._pred_files.set_capabilities("plddt", "pde")
         token_map = _token_map(_token(0), _token(1), _token(2))
         states = [
             _model_state(
@@ -5701,10 +5703,8 @@ class GuiModelSwitchingTests(unittest.TestCase):
             np.arange(9, dtype=np.float32).reshape(3, 3) + 10.0,
         ]
 
-        def ensure(member, *, load_pae=False, load_pde=False, load_token_plddt=False):
-            self.assertFalse(load_pae)
-            self.assertTrue(load_pde)
-            self.assertFalse(load_token_plddt)
+        def ensure(member, capabilities):
+            self.assertEqual(capabilities, frozenset({"pde"}))
             dialog._model_states[member.rank].data.pde = matrices[member.rank]
 
         dialog._ensure_member_data_for_plot = ensure
@@ -5739,7 +5739,8 @@ class GuiModelSwitchingTests(unittest.TestCase):
 
     def test_pae_row_mean_matrix_uses_reference_rows(self) -> None:
         dialog = _new_dialog()
-        dialog._pred_files = types.SimpleNamespace(has_pae=True, has_pde=False)
+        dialog._pred_files = _SessionPredictionFiles(Path("/tmp"), ranks=(0,))
+        dialog._pred_files.set_capabilities("plddt", "pae")
         matrix_data = np.arange(16, dtype=np.float32).reshape(4, 4)
         target = _PlotTarget(
             kind="single",
@@ -5767,7 +5768,8 @@ class GuiModelSwitchingTests(unittest.TestCase):
 
     def test_pae_column_to_selection_matrix_uses_reference_rows(self) -> None:
         dialog = _new_dialog()
-        dialog._pred_files = types.SimpleNamespace(has_pae=True, has_pde=False)
+        dialog._pred_files = _SessionPredictionFiles(Path("/tmp"), ranks=(0,))
+        dialog._pred_files.set_capabilities("plddt", "pae")
         matrix_data = np.arange(16, dtype=np.float32).reshape(4, 4)
         target = _PlotTarget(
             kind="single",
@@ -5797,7 +5799,8 @@ class GuiModelSwitchingTests(unittest.TestCase):
         self,
     ) -> None:
         dialog = _new_dialog()
-        dialog._pred_files = types.SimpleNamespace(has_pae=True, has_pde=False)
+        dialog._pred_files = _SessionPredictionFiles(Path("/tmp"), ranks=(0,))
+        dialog._pred_files.set_capabilities("plddt", "pae")
         matrix_data = np.arange(16, dtype=np.float32).reshape(4, 4)
         target = _PlotTarget(
             kind="single",
@@ -5822,7 +5825,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         self.assertEqual(row_indices, [2, 0])
         self.assertEqual(col_indices, [2, 0])
 
-    def test_chain_iptm_matrix_plot_data_uses_confidence_json(self) -> None:
+    def test_chain_iptm_matrix_plot_data_uses_typed_confidence(self) -> None:
         dialog = _new_dialog()
         token_map = _token_map(
             _token(0, chain_id="A"),
@@ -5834,12 +5837,12 @@ class GuiModelSwitchingTests(unittest.TestCase):
             label="target_model_0",
             obj_name="target_model_0",
             data=types.SimpleNamespace(
-                confidence={
-                    "pair_chains_iptm": {
-                        "0": {"0": 0.91234, "1": 0.81234},
-                        "1": {"0": 0.71234, "1": 0.61234},
-                    }
-                }
+                confidence=PredictionConfidence(
+                    pair_chain_iptm=np.array(
+                        [[0.91234, 0.81234], [0.71234, 0.61234]],
+                        dtype=np.float32,
+                    )
+                )
             ),
             token_map=token_map,
         )
@@ -5875,24 +5878,22 @@ class GuiModelSwitchingTests(unittest.TestCase):
                 rank=0,
                 token_map=token_map,
                 data=types.SimpleNamespace(
-                    confidence={
-                        "pair_chains_iptm": {
-                            "0": {"0": 0.8, "1": 0.6},
-                            "1": {"0": 0.4, "1": 0.2},
-                        }
-                    }
+                    confidence=PredictionConfidence(
+                        pair_chain_iptm=np.array(
+                            [[0.8, 0.6], [0.4, 0.2]], dtype=np.float32
+                        )
+                    )
                 ),
             ),
             types.SimpleNamespace(
                 rank=1,
                 token_map=token_map,
                 data=types.SimpleNamespace(
-                    confidence={
-                        "pair_chains_iptm": {
-                            "0": {"0": 1.0, "1": 0.8},
-                            "1": {"0": 0.6, "1": 0.4},
-                        }
-                    }
+                    confidence=PredictionConfidence(
+                        pair_chain_iptm=np.array(
+                            [[1.0, 0.8], [0.6, 0.4]], dtype=np.float32
+                        )
+                    )
                 ),
             ),
         ]
@@ -5937,11 +5938,11 @@ class GuiModelSwitchingTests(unittest.TestCase):
             kind="single",
             label="target_model_0",
             obj_name="target_model_0",
-            data=types.SimpleNamespace(confidence={}),
+            data=types.SimpleNamespace(confidence=None),
             token_map=[_token(0, chain_id="A")],
         )
 
-        with self.assertRaisesRegex(ValueError, "pair_chains_iptm"):
+        with self.assertRaisesRegex(ValueError, "Chain confidence data"):
             dialog._compute_matrix_plot_data("chain_iptm", target, [])
 
     def test_show_matrix_plot_accepts_chain_iptm_without_reference_resolution(
@@ -5954,12 +5955,9 @@ class GuiModelSwitchingTests(unittest.TestCase):
             label="target_model_0",
             obj_name="target_model_0",
             data=types.SimpleNamespace(
-                confidence={
-                    "pair_chains_iptm": {
-                        "0": {"0": 0.9, "1": 0.8},
-                        "1": {"0": 0.7, "1": 0.6},
-                    }
-                }
+                confidence=PredictionConfidence(
+                    pair_chain_iptm=np.array([[0.9, 0.8], [0.7, 0.6]], dtype=np.float32)
+                )
             ),
             token_map=token_map,
         )
@@ -5982,7 +5980,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
 
     def test_ensemble_fingerprint_data_uses_mean_and_std(self) -> None:
         dialog = _new_dialog()
-        dialog._pred_files = types.SimpleNamespace(has_pae=False, has_pde=False)
+        dialog._pred_files = _SessionPredictionFiles(Path("/tmp"), ranks=(0, 1))
         token_map = _token_map(_token(0), _token(1))
         states = [
             _model_state(
@@ -6144,13 +6142,15 @@ class GuiModelSwitchingTests(unittest.TestCase):
             else:
                 sys.modules["FoldQC.plot_viewer"] = old_plot_viewer
 
-        self.assertEqual(calls[0], (token_map, "resname LIG", "target_model_0"))
+        canonical_map = dialog._active_model_state.token_map
+        self.assertEqual(calls[0], (canonical_map, "resname LIG", "target_model_0"))
         self.assertEqual(
-            nearby_calls[0], (token_map, "target_model_0", "resname LIG", 7.5)
+            nearby_calls[0],
+            (canonical_map, "target_model_0", "resname LIG", 7.5),
         )
         self.assertEqual(len(plot_calls), 1)
         args, kwargs = plot_calls[0]
-        self.assertIs(args[0], token_map)
+        self.assertIs(args[0], canonical_map)
         self.assertEqual(args[1], [1, 3])
         np.testing.assert_array_equal(kwargs["plddt"], plddt)
         np.testing.assert_allclose(
@@ -6184,11 +6184,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
             pde=None,
             contact_probs=None,
         )
-        dialog._pred_files = types.SimpleNamespace(
-            has_pae=False,
-            has_pde=False,
-            has_contact_probs=False,
-        )
+        dialog._pred_files = _SessionPredictionFiles(Path("/tmp"), ranks=(0,))
         _set_active_state(dialog, data, token_map)
         dialog._get_obj_name = lambda: "target_model_0"
         dialog._ref_edit = _LineEdit("chain B")
@@ -6554,8 +6550,8 @@ class GuiModelSwitchingTests(unittest.TestCase):
         _set_metric_combo(dialog, enabled)
         pae_row = next(
             row
-            for row, prop in enumerate(metrics.PROPERTIES)
-            if prop["key"] == "pae_row_mean"
+            for row, prop in enumerate(metrics.METRICS)
+            if prop.key == "pae_row_mean"
         )
 
         dialog._update_property_availability()
@@ -6600,10 +6596,10 @@ class GuiModelSwitchingTests(unittest.TestCase):
         )
 
         with self.assertRaisesRegex(ValueError, r"model_1 \(pae\)"):
-            dialog._data_load_items_for_target(target, {"load_pae": True})
+            dialog._data_load_items_for_target(target, frozenset({"pae"}))
 
         items = dialog._data_load_items_for_target(
-            target, {"load_pae": True}, allow_partial=True
+            target, frozenset({"pae"}), allow_partial=True
         )
         self.assertEqual([item.rank for item in items], [0])
 

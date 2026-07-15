@@ -266,13 +266,15 @@ def build_dialog_ui(self) -> GuiWidgets:
     self._export_csv_btn = QtWidgets.QPushButton("Export CSV\u2026")
     self._plot_menu = QtWidgets.QMenu(self._plot_btn)
     self._plot_actions: dict[str, object] = {}
-    for label, key in metrics.PLOT_TYPES:
-        action = QAction(label, self)
+    for spec in metrics.PLOTS:
+        action = QAction(spec.label, self)
         action.triggered.connect(
-            lambda _checked=False, plot_type=key: self._show_selected_plot(plot_type)
+            lambda _checked=False, plot_type=spec.key: self._show_selected_plot(
+                plot_type
+            )
         )
         self._plot_menu.addAction(action)
-        self._plot_actions[key] = action
+        self._plot_actions[spec.key] = action
     self._plot_btn.setMenu(self._plot_menu)
     self._ensemble_btn = QtWidgets.QPushButton("Load Ensemble\u2026")
     self._close_btn = QtWidgets.QPushButton("Close")

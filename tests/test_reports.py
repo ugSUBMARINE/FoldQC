@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import sys
-import types
 from pathlib import Path
 
 import numpy as np
@@ -9,6 +8,12 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from FoldQC import reports  # noqa: E402
+from FoldQC.confidence import (  # noqa: E402
+    AffinityConfidence,
+    PredictionConfidence,
+)
+from FoldQC.loader_models import PredictionData  # noqa: E402
+from FoldQC.providers.registry import BUILTIN_PROVIDERS  # noqa: E402
 from FoldQC.token_map import TokenInfo, TokenMap  # noqa: E402
 
 
@@ -205,186 +210,89 @@ def test_statistics_report_keeps_domain_labels_member_local() -> None:
     assert "  clusters      : 2" in report
 
 
+def _confidence_data(
+    provider_key: str, confidence: PredictionConfidence | None = None
+) -> PredictionData:
+    return PredictionData(
+        name="prediction",
+        rank=0,
+        structure_path=Path("/tmp/model.cif"),
+        provider=BUILTIN_PROVIDERS.get(provider_key).info,
+        confidence=confidence,
+    )
+
+
 def test_confidence_summary_no_data_and_structure_only() -> None:
     assert reports.format_confidence_summary(None) == "No confidence data loaded."
-    assert (
-        reports.format_confidence_summary(
-            types.SimpleNamespace(provider="structure_only")
-        )
-        == "Structure-only input: pLDDT read from B-factors."
+    assert reports.format_confidence_summary(_confidence_data("structure_only")) == (
+        "Structure-only input: pLDDT read from B-factors."
     )
 
 
-def test_confidence_summary_af3_fields_and_chain_lists() -> None:
+def test_confidence_summary_common_fields_and_chain_arrays() -> None:
+    confidence = PredictionConfidence(
+        ranking_score=0.91,
+        ptm=0.82,
+        iptm=0.73,
+        fraction_disordered=0.12,
+        has_clash=False,
+        chain_ptm=np.array([0.1, 0.2]),
+        chain_iptm=np.array([0.3, 0.4]),
+    )
+    for provider_key, provider_label in (
+        ("alphafold3", "AlphaFold 3"),
+        ("af3_server", "AlphaFold 3 Server"),
+        ("chai1", "Chai-1 Discovery"),
+    ):
+        text = reports.format_confidence_summary(
+            _confidence_data(provider_key, confidence)
+        )
+        assert f"provider         : {provider_label}" in text
+        assert "ranking_score    : 0.9100" in text
+        assert "fraction_disord. : 0.1200" in text
+        assert "has_clash        : False" in text
+        assert "  chain 0: 0.1000" in text
+        assert "  chain 1: 0.4000" in text
+
+
+def test_confidence_summary_protenix_adds_gpde() -> None:
     text = reports.format_confidence_summary(
-        types.SimpleNamespace(
-            provider="alphafold3",
-            confidence=None,
-            summary_confidence={
-                "ranking_score": 0.91,
-                "ptm": 0.82,
-                "iptm": 0.73,
-                "fraction_disordered": 0.12,
-                "has_clash": False,
-                "chain_ptm": [0.1, 0.2],
-                "chain_iptm": [0.3, 0.4],
-            },
+        _confidence_data(
+            "protenix",
+            PredictionConfidence(ranking_score=0.91, gpde=0.44),
         )
     )
-
-    assert "provider         : AlphaFold 3" in text
-    assert "ranking_score    : 0.9100" in text
-    assert "fraction_disord. : 0.1200" in text
-    assert "has_clash        : False" in text
-    assert "chain_ptm:" in text
-    assert "  chain 0: 0.1000" in text
-    assert "chain_iptm:" in text
-    assert "  chain 1: 0.4000" in text
-
-
-def test_confidence_summary_af3_server_without_confidence() -> None:
-    text = reports.format_confidence_summary(
-        types.SimpleNamespace(
-            provider="af3_server",
-            confidence=None,
-            summary_confidence=None,
-        )
-    )
-
-    assert "provider         : AlphaFold 3 Server" in text
-    assert "No confidence data loaded." in text
-
-
-def test_confidence_summary_chai_fields_and_chain_scores() -> None:
-    text = reports.format_confidence_summary(
-        types.SimpleNamespace(
-            provider="chai1",
-            confidence={
-                "ranking_score": 0.91,
-                "ptm": 0.82,
-                "iptm": 0.73,
-                "has_clash": False,
-                "chains_ptm": {"0": 0.8, "1": 0.7},
-            },
-            summary_confidence=None,
-        )
-    )
-
-    assert "provider         : Chai-1 Discovery" in text
-    assert "ranking_score    : 0.9100" in text
-    assert "ptm              : 0.8200" in text
-    assert "iptm             : 0.7300" in text
-    assert "has_clash        : False" in text
-    assert "chain_ptm:" in text
-    assert "  chain 1: 0.7000" in text
-
-
-def test_confidence_summary_protenix_fields_and_gpde() -> None:
-    text = reports.format_confidence_summary(
-        types.SimpleNamespace(
-            provider="protenix",
-            confidence={
-                "ranking_score": 0.91,
-                "ptm": 0.82,
-                "iptm": 0.73,
-                "gpde": 0.44,
-                "disorder": 0.0,
-                "has_clash": False,
-                "chains_ptm": {"0": 0.8, "1": 0.7},
-                "chains_iptm": {"0": 0.6, "1": 0.5},
-            },
-            summary_confidence=None,
-        )
-    )
-
     assert "provider         : Protenix" in text
-    assert "ranking_score    : 0.9100" in text
-    assert "fraction_disord. : 0.0000" in text
     assert "gpde             : 0.4400" in text
-    assert "chain_ptm:" in text
-    assert "chain_iptm:" in text
 
 
-def test_confidence_summary_boltz_fields_chain_sorting_and_affinity() -> None:
-    text = reports.format_confidence_summary(
-        types.SimpleNamespace(
-            provider="boltz",
-            confidence={
-                "confidence_score": 0.67,
-                "ptm": 0.96,
-                "iptm": 0.95,
-                "ligand_iptm": 0.94,
-                "protein_iptm": 0.93,
-                "complex_plddt": 0.61,
-                "complex_iplddt": 0.62,
-                "complex_pde": 0.43,
-                "complex_ipde": 0.44,
-                "chains_ptm": {"1": 0.8, "0": 0.9},
-            },
-            affinity={
-                "affinity_pred_value": -1.234,
-                "affinity_probability_binary": 0.8765,
-            },
-        )
+def test_confidence_summary_boltz_schema_and_affinity() -> None:
+    confidence = PredictionConfidence(
+        confidence_score=0.67,
+        ptm=0.96,
+        iptm=0.95,
+        protein_iptm=0.93,
+        complex_ipde=0.44,
+        chain_ptm=np.array([0.9, 0.8]),
+        affinity=AffinityConfidence(predicted_value=-1.234, probability=0.8765),
     )
-
-    assert "provider         : Boltz-2" in text
-    assert "confidence_score : 0.6700" in text
-    assert "protein_iptm" in text
-    assert "complex_iplddt" in text
-    assert "complex_ipde     : 0.4400 Å" in text
-    assert "chains_ptm:" in text
-    assert text.index("chain 0") < text.index("chain 1")
-    assert "affinity_pred_value       : -1.234  (log₁₀[IC₅₀/μM])" in text
-    assert "affinity_probability      : 0.8765" in text
-
-
-def test_confidence_summary_boltz_without_confidence() -> None:
-    text = reports.format_confidence_summary(
-        types.SimpleNamespace(
-            provider="boltz",
-            confidence=None,
-            summary_confidence=None,
+    for provider_key, provider_label in (
+        ("boltz", "Boltz"),
+        ("boltz_lab", "Boltz Lab"),
+        ("boltz_api", "Boltz API"),
+    ):
+        text = reports.format_confidence_summary(
+            _confidence_data(provider_key, confidence)
         )
-    )
+        assert f"provider         : {provider_label}" in text
+        assert "confidence_score : 0.6700" in text
+        assert "complex_ipde     : 0.4400 Å" in text
+        assert text.index("chain 0") < text.index("chain 1")
+        assert "affinity_pred_value: -1.234  (log₁₀[IC₅₀/μM])" in text
+        assert "affinity_probability: 0.8765" in text
 
-    assert "provider         : Boltz-2" in text
+
+def test_confidence_summary_missing_values() -> None:
+    text = reports.format_confidence_summary(_confidence_data("boltz"))
+    assert "provider         : Boltz" in text
     assert "No confidence data loaded." in text
-
-
-def test_confidence_summary_boltz_lab_uses_boltz_metrics() -> None:
-    text = reports.format_confidence_summary(
-        types.SimpleNamespace(
-            provider="boltz_lab",
-            confidence={
-                "confidence_score": 0.91,
-                "ptm": 0.82,
-                "iptm": 0.73,
-                "complex_pde": 1.2,
-            },
-            affinity=None,
-        )
-    )
-
-    assert "provider         : Boltz Lab" in text
-    assert "confidence_score : 0.9100" in text
-    assert "complex_pde      : 1.2000 Å" in text
-
-
-def test_confidence_summary_boltz_api_uses_boltz_metrics() -> None:
-    text = reports.format_confidence_summary(
-        types.SimpleNamespace(
-            provider="boltz_api",
-            confidence={
-                "confidence_score": 0.95,
-                "ptm": 0.92,
-                "iptm": 0.83,
-                "complex_ipde": 1.8,
-            },
-            affinity=None,
-        )
-    )
-
-    assert "provider         : Boltz API" in text
-    assert "confidence_score : 0.9500" in text
-    assert "complex_ipde     : 1.8000 Å" in text

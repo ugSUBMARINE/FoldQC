@@ -18,6 +18,7 @@ from FoldQC.data_contracts import ProviderContractError  # noqa: E402
 from FoldQC.loader import (  # noqa: E402
     discover_prediction_candidates,
     load_prediction_data,
+    scan_prediction_candidate,
     scan_prediction_path,
 )
 from FoldQC.structure_index import StructureIndex  # noqa: E402
@@ -96,7 +97,7 @@ class LoaderProviderTests(unittest.TestCase):
             files = scan_prediction_path(structure)
             data = load_prediction_data(files)
 
-        self.assertEqual(files.provider, "structure_only")
+        self.assertEqual(files.provider.key, "structure_only")
         self.assertEqual(files.n_models, 1)
         self.assertFalse(files.supports_ensemble)
         self.assertEqual(files.structure_path(0).name, "model.cif")
@@ -149,7 +150,7 @@ class LoaderProviderTests(unittest.TestCase):
             files = scan_prediction_path(pred_dir)
             data = load_prediction_data(files)
 
-        self.assertEqual(files.provider, "boltz")
+        self.assertEqual(files.provider.key, "boltz")
         self.assertEqual(files.models[0].rank, 0)
         self.assertTrue(files.model_supports(0, "plddt"))
         np.testing.assert_allclose(data.token_plddt, np.array([0.7, 0.6]))
@@ -222,7 +223,7 @@ class LoaderProviderTests(unittest.TestCase):
             files = scan_prediction_path(pred_dir)
             data = load_prediction_data(files, rank=0, load_pae=True)
 
-        self.assertEqual(files.provider, "boltz_lab")
+        self.assertEqual(files.provider.key, "boltz_lab")
         self.assertEqual(files.provider_label, "Boltz Lab")
         self.assertEqual(files.name, "lab_job")
         self.assertEqual(files.n_models, 1)
@@ -233,8 +234,7 @@ class LoaderProviderTests(unittest.TestCase):
             files.structure_path(0).name, "sample_0_predicted_structure.cif"
         )
         np.testing.assert_allclose(data.pae, np.array([[0.0, 1.0], [1.0, 0.0]]))
-        self.assertEqual(data.confidence["confidence_score"], 0.91)
-        self.assertEqual(data.confidence["structure_confidence"], 0.91)
+        self.assertEqual(data.confidence.confidence_score, 0.91)
         np.testing.assert_allclose(
             data.token_plddt, np.array([0.8, 0.4], dtype=np.float32)
         )
@@ -265,7 +265,7 @@ class LoaderProviderTests(unittest.TestCase):
             files = scan_prediction_path(root)
             data = load_prediction_data(files, rank=0, load_pae=True)
 
-        self.assertEqual(files.provider, "boltz_api")
+        self.assertEqual(files.provider.key, "boltz_api")
         self.assertEqual(files.provider_label, "Boltz API")
         self.assertEqual(files.name, "api_job")
         self.assertEqual(files.n_models, 2)
@@ -280,8 +280,8 @@ class LoaderProviderTests(unittest.TestCase):
             files.structure_path(0).name, "sample_1_predicted_structure.cif"
         )
         np.testing.assert_allclose(data.pae, np.array([[0.0, 2.0], [2.0, 0.0]]))
-        self.assertEqual(data.confidence["confidence_score"], 0.95)
-        self.assertEqual(data.confidence["ptm"], 0.9)
+        self.assertEqual(data.confidence.confidence_score, 0.95)
+        self.assertEqual(data.confidence.ptm, 0.9)
         np.testing.assert_allclose(
             data.token_plddt, np.array([0.8, 0.4], dtype=np.float32)
         )
@@ -308,9 +308,9 @@ class LoaderProviderTests(unittest.TestCase):
             files = scan_prediction_path(root)
             data = load_prediction_data(files, rank=0)
 
-        self.assertEqual(files.provider, "boltz_api")
-        self.assertEqual(data.confidence["confidence_score"], 0.81)
-        self.assertEqual(data.confidence["iptm"], 0.72)
+        self.assertEqual(files.provider.key, "boltz_api")
+        self.assertEqual(data.confidence.confidence_score, 0.81)
+        self.assertEqual(data.confidence.iptm, 0.72)
 
     def test_boltz_api_extracted_prediction_folder_scans_directly(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -329,10 +329,10 @@ class LoaderProviderTests(unittest.TestCase):
             files = scan_prediction_path(prediction)
             data = load_prediction_data(files, rank=0)
 
-        self.assertEqual(files.provider, "boltz_api")
+        self.assertEqual(files.provider.key, "boltz_api")
         self.assertEqual(files.name, "prediction")
         self.assertEqual(files.n_models, 1)
-        self.assertEqual(data.confidence["confidence_score"], 0.88)
+        self.assertEqual(data.confidence.confidence_score, 0.88)
 
     def test_boltz_lab_and_api_parent_discovery_reports_top_level_candidates(
         self,
@@ -361,7 +361,7 @@ class LoaderProviderTests(unittest.TestCase):
 
         self.assertEqual(
             [
-                (candidate.provider, candidate.relative_path)
+                (candidate.provider.key, candidate.relative_path)
                 for candidate in discovery.candidates
             ],
             [("boltz_api", "api_job"), ("boltz_lab", "lab_job")],
@@ -388,20 +388,20 @@ class LoaderProviderTests(unittest.TestCase):
             files = scan_prediction_path(root)
             data = load_prediction_data(files, rank=0, load_pae=True)
 
-        self.assertEqual(files.provider, "chai1")
+        self.assertEqual(files.provider.key, "chai1")
         self.assertEqual(files.provider_label, "Chai-1 Discovery")
         self.assertEqual(files.n_models, 1)
         self.assertTrue(files.model_supports(0, "pae"))
         self.assertFalse(files.model_supports(0, "contact_probs"))
         self.assertEqual(files.models[0].display_label, "rank 0")
         np.testing.assert_allclose(data.pae, np.array([[0.0, 1.0], [2.0, 0.0]]))
-        self.assertEqual(data.confidence["ranking_score"], 0.91)
-        self.assertEqual(data.confidence["chains_ptm"], {"0": 0.8, "1": 0.7})
-        self.assertEqual(
-            data.confidence["pair_chains_iptm"],
-            {"0": {"0": 0.8, "1": 0.4}, "1": {"0": 0.3, "1": 0.7}},
+        self.assertEqual(data.confidence.ranking_score, 0.91)
+        np.testing.assert_allclose(data.confidence.chain_ptm, [0.8, 0.7])
+        np.testing.assert_allclose(
+            data.confidence.pair_chain_iptm,
+            [[0.8, 0.4], [0.3, 0.7]],
         )
-        self.assertIs(data.confidence["has_clash"], False)
+        self.assertIs(data.confidence.has_clash, False)
         np.testing.assert_allclose(
             data.token_plddt, np.array([0.8, 0.4], dtype=np.float32)
         )
@@ -425,7 +425,7 @@ class LoaderProviderTests(unittest.TestCase):
             lazy = load_prediction_data(files, rank=0, load_pde=False)
             data = load_prediction_data(files, rank=0, load_pde=True)
 
-        self.assertEqual(files.provider, "chai1")
+        self.assertEqual(files.provider.key, "chai1")
         self.assertTrue(files.model_supports(0, "pde"))
         self.assertEqual(files.models[0].metadata["model_idx"], 3)
         self.assertIn("model 3", files.models[0].display_label)
@@ -454,15 +454,14 @@ class LoaderProviderTests(unittest.TestCase):
             files = scan_prediction_path(root)
             data = load_prediction_data(files, rank=0)
 
-        self.assertEqual(files.provider, "chai1")
+        self.assertEqual(files.provider.key, "chai1")
         self.assertEqual(
             [model.metadata["model_idx"] for model in files.models],
             [1, 0],
         )
         self.assertEqual([model.rank for model in files.models], [0, 1])
-        self.assertAlmostEqual(data.confidence["aggregate_score"], 0.95, places=6)
-        self.assertAlmostEqual(data.confidence["ranking_score"], 0.95, places=6)
-        self.assertEqual(set(data.confidence["pair_chains_iptm"]), {"0", "1"})
+        self.assertAlmostEqual(data.confidence.ranking_score, 0.95, places=6)
+        self.assertEqual(data.confidence.pair_chain_iptm.shape, (2, 2))
 
     def test_protenix_summary_only_server_folder_scans(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -488,7 +487,7 @@ class LoaderProviderTests(unittest.TestCase):
             files = scan_prediction_path(root)
             data = load_prediction_data(files, rank=0, load_pae=True)
 
-        self.assertEqual(files.provider, "protenix")
+        self.assertEqual(files.provider.key, "protenix")
         self.assertEqual(files.provider_label, "Protenix")
         self.assertEqual(files.name, "job_a")
         self.assertEqual(files.n_models, 2)
@@ -498,11 +497,11 @@ class LoaderProviderTests(unittest.TestCase):
         self.assertFalse(files.model_supports(0, "pae"))
         self.assertFalse(files.model_supports(0, "pde"))
         self.assertFalse(files.model_supports(0, "contact_probs"))
-        self.assertEqual(data.confidence["ranking_score"], 0.9)
-        self.assertEqual(data.confidence["chains_ptm"], {"0": 0.6, "1": 0.5})
-        self.assertEqual(
-            data.confidence["pair_chains_iptm"],
-            {"0": {"0": 0.0, "1": 0.4}, "1": {"0": 0.4, "1": 0.0}},
+        self.assertEqual(data.confidence.ranking_score, 0.9)
+        np.testing.assert_allclose(data.confidence.chain_ptm, [0.6, 0.5])
+        np.testing.assert_allclose(
+            data.confidence.pair_chain_iptm,
+            [[0.6, 0.4], [0.4, 0.5]],
         )
         self.assertIsNone(data.pae)
         np.testing.assert_allclose(
@@ -548,7 +547,7 @@ class LoaderProviderTests(unittest.TestCase):
                 load_token_plddt=True,
             )
 
-        self.assertEqual(files.provider, "protenix")
+        self.assertEqual(files.provider.key, "protenix")
         self.assertTrue(files.model_supports(0, "pae"))
         self.assertTrue(files.model_supports(0, "pde"))
         self.assertTrue(files.model_supports(0, "contact_probs"))
@@ -608,7 +607,7 @@ class LoaderProviderTests(unittest.TestCase):
 
             files = scan_prediction_path(root)
 
-        self.assertEqual(files.provider, "alphafold3")
+        self.assertEqual(files.provider.key, "alphafold3")
         self.assertEqual(files.n_models, 2)
         self.assertEqual(files.models[0].metadata["sample"], 1)
         self.assertEqual(files.models[1].metadata["sample"], 0)
@@ -634,7 +633,7 @@ class LoaderProviderTests(unittest.TestCase):
 
             files = scan_prediction_path(root)
 
-        self.assertEqual(files.provider, "alphafold3")
+        self.assertEqual(files.provider.key, "alphafold3")
         self.assertEqual(files.n_models, 2)
         self.assertEqual(files.models[0].metadata["sample"], 1)
         self.assertEqual(files.models[0].structure_path.name, "model.cif")
@@ -710,7 +709,7 @@ class LoaderProviderTests(unittest.TestCase):
 
         self.assertEqual(
             [
-                (candidate.provider, candidate.relative_path)
+                (candidate.provider.key, candidate.relative_path)
                 for candidate in discovery.candidates
             ],
             [("af3_server", "server_job")],
@@ -734,7 +733,7 @@ class LoaderProviderTests(unittest.TestCase):
             files = scan_prediction_path(root)
             data = load_prediction_data(files, load_pae=True, load_contact_probs=True)
 
-        self.assertEqual(files.provider, "alphafold3")
+        self.assertEqual(files.provider.key, "alphafold3")
         np.testing.assert_allclose(
             data.token_plddt, np.array([0.9, 0.4], dtype=np.float32)
         )
@@ -798,7 +797,7 @@ class LoaderProviderTests(unittest.TestCase):
                 (root / f"server_job_model_{rank}.cif").write_text(CIF_TEXT)
                 _write_json(
                     root / f"server_job_summary_confidences_{rank}.json",
-                    {"ranking_score": 1.0 - rank, "chain_iptm": [0.5]},
+                    {"ranking_score": 1.0 - rank, "chain_iptm": [0.5, 0.4]},
                 )
                 _write_json(
                     root / f"server_job_full_data_{rank}.json",
@@ -814,7 +813,7 @@ class LoaderProviderTests(unittest.TestCase):
                 files, rank=0, load_pae=True, load_contact_probs=True
             )
 
-        self.assertEqual(files.provider, "af3_server")
+        self.assertEqual(files.provider.key, "af3_server")
         self.assertEqual(files.n_models, 2)
         self.assertTrue(files.supports_ensemble)
         self.assertEqual(files.models[0].display_label, "rank 0")
@@ -839,7 +838,7 @@ class LoaderProviderTests(unittest.TestCase):
             files = scan_prediction_path(root)
             data = load_prediction_data(files, load_pae=False)
 
-        self.assertEqual(files.provider, "af3_server")
+        self.assertEqual(files.provider.key, "af3_server")
         self.assertEqual(
             files.models[0].summary_path.name, "summary_confidences_0.json"
         )
@@ -873,7 +872,7 @@ class LoaderProviderTests(unittest.TestCase):
             files = scan_prediction_path(archive)
             data = load_prediction_data(files, rank=0, load_pae=True)
 
-        self.assertEqual(files.provider, "af3_server")
+        self.assertEqual(files.provider.key, "af3_server")
         self.assertEqual(files.input_path.name, "wrapped.zip")
         self.assertEqual(files.pred_dir.name, "server_job")
         self.assertEqual(files.n_models, 1)
@@ -910,12 +909,12 @@ class LoaderProviderTests(unittest.TestCase):
             files = scan_prediction_path(archive)
             data = load_prediction_data(files, rank=0, load_pae=True)
 
-        self.assertEqual(files.provider, "boltz_api")
+        self.assertEqual(files.provider.key, "boltz_api")
         self.assertEqual(files.input_path.name, "archive.tar.gz")
         self.assertEqual(files.name, "prediction")
         self.assertEqual(files.pred_dir.name, "prediction")
         np.testing.assert_allclose(data.pae, np.array([[0.0, 1.0], [1.0, 0.0]]))
-        self.assertEqual(data.confidence["confidence_score"], 0.91)
+        self.assertEqual(data.confidence.confidence_score, 0.91)
 
     def test_tgz_prediction_archive_scans(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -931,7 +930,7 @@ class LoaderProviderTests(unittest.TestCase):
 
             files = scan_prediction_path(archive)
 
-        self.assertEqual(files.provider, "af3_server")
+        self.assertEqual(files.provider.key, "af3_server")
         self.assertEqual(files.input_path.name, "server_job.tgz")
         self.assertEqual(files.pred_dir.name, "server_job")
 
@@ -949,7 +948,7 @@ class LoaderProviderTests(unittest.TestCase):
 
             files = scan_prediction_path(archive)
 
-        self.assertEqual(files.provider, "af3_server")
+        self.assertEqual(files.provider.key, "af3_server")
         self.assertEqual(files.input_path.name, "server_job.tar")
         self.assertEqual(files.name, "server_job")
         self.assertEqual(files.models[0].object_name, "server_job_model_0")
@@ -968,7 +967,7 @@ class LoaderProviderTests(unittest.TestCase):
 
             files = scan_prediction_path(wrapper)
 
-        self.assertEqual(files.provider, "af3_server")
+        self.assertEqual(files.provider.key, "af3_server")
         self.assertEqual(files.input_path.name, "download")
         self.assertEqual(files.pred_dir.name, "server_job")
         self.assertEqual(files.n_models, 1)
@@ -979,13 +978,13 @@ class LoaderProviderTests(unittest.TestCase):
             _write_af3_server_job(wrapper / "server_job")
 
             discovery = discover_prediction_candidates(wrapper)
-            files = discovery.scan(discovery.candidates[0])
+            files = scan_prediction_candidate(discovery, discovery.candidates[0])
 
         self.assertEqual(
             [c.relative_path for c in discovery.candidates], ["server_job"]
         )
-        self.assertEqual(discovery.candidates[0].provider, "af3_server")
-        self.assertEqual(files.provider, "af3_server")
+        self.assertEqual(discovery.candidates[0].provider.key, "af3_server")
+        self.assertEqual(files.provider.key, "af3_server")
         self.assertEqual(files.input_path.name, "download")
         self.assertEqual(files.pred_dir.name, "server_job")
 
@@ -1001,7 +1000,7 @@ class LoaderProviderTests(unittest.TestCase):
             [c.relative_path for c in discovery.candidates], ["a_job", "b_job"]
         )
         self.assertEqual(
-            [c.provider for c in discovery.candidates], ["af3_server", "af3_server"]
+            [c.provider.key for c in discovery.candidates], ["af3_server", "af3_server"]
         )
 
     def test_discover_protenix_parent_aggregate_prefers_child_jobs(self) -> None:
@@ -1011,15 +1010,15 @@ class LoaderProviderTests(unittest.TestCase):
             _write_protenix_job(wrapper / "a_job")
 
             discovery = discover_prediction_candidates(wrapper)
-            files = discovery.scan(discovery.candidates[1])
+            files = scan_prediction_candidate(discovery, discovery.candidates[1])
 
         self.assertEqual(
             [c.relative_path for c in discovery.candidates], ["a_job", "b_job"]
         )
         self.assertEqual(
-            [c.provider for c in discovery.candidates], ["protenix", "protenix"]
+            [c.provider.key for c in discovery.candidates], ["protenix", "protenix"]
         )
-        self.assertEqual(files.provider, "protenix")
+        self.assertEqual(files.provider.key, "protenix")
         self.assertEqual(files.name, "b_job")
         self.assertEqual(files.input_path.name, "protenix_jobs")
 
@@ -1031,14 +1030,14 @@ class LoaderProviderTests(unittest.TestCase):
             )
 
             discovery = discover_prediction_candidates(wrapper)
-            files = discovery.scan(discovery.candidates[0])
+            files = scan_prediction_candidate(discovery, discovery.candidates[0])
 
         self.assertEqual(
             [c.relative_path for c in discovery.candidates],
             ["SbPZS_Protenix/protenix_prediction_2a4d8576"],
         )
-        self.assertEqual(discovery.candidates[0].provider, "protenix")
-        self.assertEqual(files.provider, "protenix")
+        self.assertEqual(discovery.candidates[0].provider.key, "protenix")
+        self.assertEqual(files.provider.key, "protenix")
         self.assertEqual(files.pred_dir.name, "protenix_prediction_2a4d8576")
 
     def test_discover_multiple_prediction_zip_transfers_extraction_lifetime(
@@ -1056,15 +1055,15 @@ class LoaderProviderTests(unittest.TestCase):
                     zf.writestr(f"{job}/{job}_full_data_0.json", json.dumps({}))
 
             discovery = discover_prediction_candidates(archive)
-            files = discovery.scan(discovery.candidates[0])
+            files = scan_prediction_candidate(discovery, discovery.candidates[0])
             structure_path = files.structure_path(0)
 
             self.assertEqual(
                 [c.relative_path for c in discovery.candidates],
                 ["a_job", "b_job"],
             )
-            self.assertIsNotNone(files._temporary_directory)
-            self.assertIsNone(discovery._temporary_directory)
+            self.assertIsNotNone(files._resource_owner)
+            self.assertIsNone(discovery._resource_owner)
             self.assertTrue(structure_path.exists())
 
     def test_discover_multiple_prediction_tar_transfers_extraction_lifetime(
@@ -1083,15 +1082,15 @@ class LoaderProviderTests(unittest.TestCase):
                     _add_tar_json(tf, f"{job}/{job}_full_data_0.json", {})
 
             discovery = discover_prediction_candidates(archive)
-            files = discovery.scan(discovery.candidates[0])
+            files = scan_prediction_candidate(discovery, discovery.candidates[0])
             structure_path = files.structure_path(0)
 
             self.assertEqual(
                 [c.relative_path for c in discovery.candidates],
                 ["a_job", "b_job"],
             )
-            self.assertIsNotNone(files._temporary_directory)
-            self.assertIsNone(discovery._temporary_directory)
+            self.assertIsNotNone(files._resource_owner)
+            self.assertIsNone(discovery._resource_owner)
             self.assertTrue(structure_path.exists())
 
     def test_invalid_tar_archive_reports_clear_error(self) -> None:
@@ -1158,7 +1157,7 @@ class LoaderProviderTests(unittest.TestCase):
 
             files = scan_prediction_path(archive)
 
-        self.assertEqual(files.provider, "af3_server")
+        self.assertEqual(files.provider.key, "af3_server")
         self.assertEqual(files.name, "fold_ss_fusion")
         self.assertEqual(files.models[0].object_name, "fold_ss_fusion_model_0")
         self.assertEqual(
@@ -1183,7 +1182,7 @@ class LoaderProviderTests(unittest.TestCase):
             files = scan_prediction_path(archive)
             data = load_prediction_data(files, rank=0, load_pae=True)
 
-        self.assertEqual(files.provider, "chai1")
+        self.assertEqual(files.provider.key, "chai1")
         self.assertEqual(files.input_path.name, "chai_job.zip")
         self.assertEqual(files.pred_dir.name, "chai_job")
         np.testing.assert_allclose(data.pae, np.array([[0.0, 1.0], [1.0, 0.0]]))
@@ -1198,16 +1197,16 @@ class LoaderProviderTests(unittest.TestCase):
                 )
                 zf.writestr(
                     "bundle/seed_1/predictions/target_summary_confidence_sample_0.json",
-                    json.dumps({"ranking_score": 1.0, "chain_ptm": [0.9]}),
+                    json.dumps({"ranking_score": 1.0, "chain_ptm": [0.9, 0.8]}),
                 )
 
             files = scan_prediction_path(archive)
             data = load_prediction_data(files, rank=0)
 
-        self.assertEqual(files.provider, "protenix")
+        self.assertEqual(files.provider.key, "protenix")
         self.assertEqual(files.input_path.name, "protenix.zip")
         self.assertEqual(files.name, "target")
-        self.assertEqual(data.confidence["chains_ptm"], {"0": 0.9})
+        np.testing.assert_allclose(data.confidence.chain_ptm, [0.9, 0.8])
         np.testing.assert_allclose(
             data.token_plddt, np.array([0.8, 0.4], dtype=np.float32)
         )
@@ -1229,7 +1228,7 @@ class LoaderProviderTests(unittest.TestCase):
                 load_token_plddt=False,
             )
 
-            self.assertEqual(data.summary_confidence["ptm"], 0.5)
+            self.assertEqual(data.confidence.ptm, 0.5)
             with self.assertRaises(json.JSONDecodeError):
                 load_prediction_data(files, load_pae=True, load_token_plddt=False)
 

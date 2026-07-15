@@ -12,7 +12,8 @@ from typing import TYPE_CHECKING, Literal
 from .session import PendingSessionRestore
 
 if TYPE_CHECKING:
-    from .ensemble import EnsembleState
+    from .ensemble import EnsembleMember, EnsembleState
+    from .loader_models import PredictionFiles
     from .model_state import ModelState
 
 
@@ -24,7 +25,7 @@ class ResolvedTarget:
     label: str
     obj_name: str
     model_states: tuple[ModelState, ...]
-    members: tuple[object, ...] = ()
+    members: tuple[EnsembleMember, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.model_states:
@@ -65,7 +66,7 @@ class MetricContext:
 class GuiState:
     """Mutable non-widget state owned by the main FoldQC dialog."""
 
-    pred_files: object | None = None
+    pred_files: PredictionFiles | None = None
     model_states: dict[int, ModelState] = field(default_factory=dict)
     active_model_rank: int | None = None
     paint_mappings: dict[tuple[str, str], object] = field(default_factory=dict)

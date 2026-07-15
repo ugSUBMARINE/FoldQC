@@ -89,17 +89,17 @@ class ColoringController:
             self._apply_ensemble_coloring(list(target.members))
             return
         key = self._prop_combo.currentData()
-        prop = metrics.PROPERTY_BY_KEY.get(key, {})
+        spec = metrics.METRICS.require(key)
         obj_name = target.obj_name
         if self._defer_action_for_data(
             target,
-            metrics.metric_load_flags(prop),
+            spec.load_capabilities,
             self._apply_coloring,
             error_title=f"{APP_TITLE} - error",
         ):
             return
 
-        if metrics.PROPERTY_BY_KEY.get(key, {}).get("ensemble_level", False):
+        if spec.ensemble_level:
             QtWidgets.QMessageBox.information(
                 self,
                 APP_TITLE,
@@ -112,7 +112,7 @@ class ColoringController:
         # Class-based pLDDT coloring bypasses the B-factor/spectrum path
         if key == "plddt_class":
             try:
-                self._ensure_current_data_for_property(prop)
+                self._ensure_current_data_for_property(spec)
                 self._apply_plddt_class_coloring(
                     key, obj_name, model_state=target.model_states[0]
                 )
@@ -125,7 +125,7 @@ class ColoringController:
         ref_sel = self._ref_edit.text().strip() or None
 
         try:
-            self._ensure_current_data_for_property(prop)
+            self._ensure_current_data_for_property(spec)
             state = target.model_states[0]
             data = state.data
             token_map = state.token_map
@@ -141,7 +141,7 @@ class ColoringController:
                 mapping=mapping,
             ):
                 return
-            if metrics.is_domain_label_metric(key):
+            if spec.is_domain_label:
                 used_vmin, used_vmax = paint_categorical_labels_bulk(
                     obj_name,
                     token_map,
@@ -175,7 +175,7 @@ class ColoringController:
                 obj_name,
                 values,
                 include_chain_stats=key == "pde_chain_mean",
-                include_domain_labels=metrics.is_domain_label_metric(key),
+                include_domain_labels=spec.is_domain_label,
                 token_map=token_map,
             )
         except Exception as exc:
@@ -184,7 +184,7 @@ class ColoringController:
     def _apply_ensemble_coloring(self, target_members: list) -> None:
         """Apply the selected property to the chosen ensemble target."""
         key = self._prop_combo.currentData()
-        prop = metrics.PROPERTY_BY_KEY.get(key, {})
+        spec = metrics.METRICS.require(key)
         if not target_members:
             return
         target = self._resolve_plot_target()
@@ -192,7 +192,7 @@ class ColoringController:
             return
         if self._defer_action_for_data(
             target,
-            metrics.metric_load_flags(prop),
+            spec.load_capabilities,
             self._apply_coloring,
             error_title=f"{APP_TITLE} - error",
         ):
@@ -200,21 +200,21 @@ class ColoringController:
 
         try:
             self._with_viewer_updates_suspended(
-                lambda: self._dispatch_ensemble_coloring(key, prop, target_members)
+                lambda: self._dispatch_ensemble_coloring(key, spec, target_members)
             )
         except Exception as exc:
             QtWidgets.QMessageBox.critical(self, f"{APP_TITLE} - error", str(exc))
 
     def _dispatch_ensemble_coloring(
-        self, key: str, prop: dict, target_members: list
+        self, key: str, spec: metrics.MetricSpec, target_members: list
     ) -> None:
         """Route ensemble coloring while viewer updates are suspended."""
-        if prop.get("ensemble_level", False):
+        if spec.ensemble_level:
             self._apply_ensemble_level_property(key, target_members)
         elif key == "plddt_class":
             self._apply_ensemble_plddt_class_coloring(key, target_members)
         else:
-            self._apply_individual_property_to_ensemble(key, prop, target_members)
+            self._apply_individual_property_to_ensemble(key, spec, target_members)
 
     def _apply_ensemble_level_property(self, key: str, target_members: list) -> None:
         """Compute one ensemble-level array and paint it onto selected targets."""
@@ -270,7 +270,7 @@ class ColoringController:
         self._update_statistics_for_single(key, label, values)
 
     def _apply_individual_property_to_ensemble(
-        self, key: str, prop: dict, target_members: list
+        self, key: str, spec: metrics.MetricSpec, target_members: list
     ) -> None:
         """Compute selected per-model properties for selected ensemble targets."""
         palette, reverse_palette = self._selected_palette()
@@ -279,7 +279,7 @@ class ColoringController:
 
         member_values: list[tuple[object, object, np.ndarray, object]] = []
         for member in target_members:
-            self._ensure_member_data_for_property(member, prop)
+            self._ensure_member_data_for_property(member, spec)
             state = self._canonical_state_for_ensemble_member(member)
             values = self._compute_property_for(
                 key, ref_sel, state.data, state.token_map, member.obj_name
@@ -299,7 +299,7 @@ class ColoringController:
                 return
             member_values.append((member, state, values, mapping))
 
-        if metrics.is_domain_label_metric(key):
+        if spec.is_domain_label:
             result = paint_categorical_labels_batch(
                 [
                     PaintTarget(member.obj_name, state.token_map, values, mapping)
@@ -387,7 +387,7 @@ class ColoringController:
         member_values: list[tuple[object, object, np.ndarray, object]] = []
         for member in target_members:
             self._ensure_member_data_for_property(
-                member, metrics.PROPERTY_BY_KEY["plddt_class"]
+                member, metrics.METRICS.require("plddt_class")
             )
             state = self._canonical_state_for_ensemble_member(member)
             values, _source = compute.plddt_values_for(state.data)

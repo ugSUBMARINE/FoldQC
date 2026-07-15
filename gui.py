@@ -115,14 +115,14 @@ class FoldQCPluginDialog(
         """Populate Color by with disabled group headers and metric rows."""
         self._prop_combo_rows = {}
         current_group = None
-        for prop in metrics.PROPERTIES:
-            group = prop.get("group", "Other")
+        for spec in metrics.METRICS:
+            group = spec.group
             if group != current_group:
                 self._prop_combo.addItem(str(group), None)
                 self._disable_combo_row(self._prop_combo, self._prop_combo.count() - 1)
                 current_group = group
-            self._prop_combo.addItem(metrics.property_combo_label(prop), prop["key"])
-            self._prop_combo_rows[prop["key"]] = self._prop_combo.count() - 1
+            self._prop_combo.addItem(metrics.property_combo_label(spec), spec.key)
+            self._prop_combo_rows[spec.key] = self._prop_combo.count() - 1
 
     def _disable_combo_row(self, combo, row: int) -> None:
         """Disable one combo row when the backing model item is available."""
@@ -293,6 +293,10 @@ class FoldQCPluginDialog(
             self._abandon_active_gui_job()
         else:
             self._save_session_settings()
+        pred_files = self._pred_files
+        self._pred_files = None
+        if pred_files is not None:
+            self._job_runner.dispose(pred_files)
         try:
             super().closeEvent(event)
         except AttributeError:

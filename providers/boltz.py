@@ -5,10 +5,10 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 
+from ..confidence import BOLTZ_CONFIDENCE_SUMMARY
 from ..loader_models import (
     ModelFiles,
     PredictionData,
@@ -18,7 +18,6 @@ from ..loader_utils import (
     _float_or_none,
     _load_json,
     _load_optional_json,
-    _normalise_confidence,
     _safe_object_name,
 )
 from .base import BaseProvider, has_ancestor_candidate
@@ -59,14 +58,9 @@ def _looks_like_boltz_api(pred_dir: Path) -> bool:
     return _is_boltz_api_output(run.get("output") if isinstance(run, dict) else None)
 
 
-def _scan_boltz_dir(pred_dir: Path) -> PredictionFiles:
+def _scan_boltz_dir(pred_dir: Path, provider: BaseProvider) -> PredictionFiles:
     name = pred_dir.name
-    files = PredictionFiles(
-        name=name,
-        pred_dir=pred_dir,
-        provider="boltz",
-        input_path=pred_dir,
-    )
+    files = provider.prediction_files(name=name, pred_dir=pred_dir)
 
     rank_re = re.compile(rf"{re.escape(name)}_model_(\d+)")
 
@@ -134,7 +128,7 @@ def _scan_boltz_dir(pred_dir: Path) -> PredictionFiles:
     return files
 
 
-def _scan_boltz_lab_dir(pred_dir: Path) -> PredictionFiles:
+def _scan_boltz_lab_dir(pred_dir: Path, provider: BaseProvider) -> PredictionFiles:
     candidates = _boltz_sample_candidates(pred_dir)
     if not candidates:
         raise ValueError(
@@ -151,12 +145,7 @@ def _scan_boltz_lab_dir(pred_dir: Path) -> PredictionFiles:
         sample_results = {}
 
     name = pred_dir.name
-    files = PredictionFiles(
-        name=name,
-        pred_dir=pred_dir,
-        provider="boltz_lab",
-        input_path=pred_dir,
-    )
+    files = provider.prediction_files(name=name, pred_dir=pred_dir)
 
     for rank, item in enumerate(sorted(candidates, key=lambda item: item.sample_index)):
         sample_index = item.sample_index
@@ -173,7 +162,12 @@ def _scan_boltz_lab_dir(pred_dir: Path) -> PredictionFiles:
                 ),
                 metadata={
                     "sample_index": sample_index,
-                    "confidence": confidence if isinstance(confidence, dict) else None,
+                    "has_metrics_confidence": isinstance(confidence, dict),
+                    "structure_confidence": _float_or_none(
+                        confidence.get("structure_confidence")
+                    )
+                    if isinstance(confidence, dict)
+                    else None,
                 },
             )
         )
@@ -181,7 +175,7 @@ def _scan_boltz_lab_dir(pred_dir: Path) -> PredictionFiles:
     return files
 
 
-def _scan_boltz_api_dir(pred_dir: Path) -> PredictionFiles:
+def _scan_boltz_api_dir(pred_dir: Path, provider: BaseProvider) -> PredictionFiles:
     prediction_dir = _boltz_api_prediction_dir(pred_dir)
     if prediction_dir is None:
         raise ValueError(
@@ -214,17 +208,12 @@ def _scan_boltz_api_dir(pred_dir: Path) -> PredictionFiles:
     )
 
     name = pred_dir.name
-    files = PredictionFiles(
-        name=name,
-        pred_dir=pred_dir,
-        provider="boltz_api",
-        input_path=pred_dir,
-    )
+    files = provider.prediction_files(name=name, pred_dir=pred_dir)
 
     for rank, item in enumerate(candidates):
-        metadata: dict[str, Any] = {
+        metadata = {
             "sample_index": item.sample_index,
-            "confidence": item.confidence,
+            "has_metrics_confidence": isinstance(item.confidence, dict),
         }
         if item.structure_confidence is not None:
             metadata["structure_confidence"] = item.structure_confidence
@@ -255,7 +244,7 @@ def _load_boltz_model_data(
     load_embeddings: bool,
     load_token_plddt: bool,
     structure_index,
-) -> None:
+) -> tuple[dict | None, dict | None]:
     if load_token_plddt and model.plddt_path is not None:
         with np.load(model.plddt_path) as payload:
             if "plddt" in payload:
@@ -272,14 +261,15 @@ def _load_boltz_model_data(
             if "pde" in payload:
                 data.pde = payload["pde"]
 
+    confidence = None
     if model.confidence_path is not None:
         confidence = _load_json(model.confidence_path)
-        data.confidence = _normalise_confidence(confidence)
-    elif isinstance(model.metadata.get("confidence"), dict):
-        data.confidence = _normalise_confidence(model.metadata["confidence"])
+    else:
+        confidence = _boltz_metrics_confidence(pred_files, model)
 
+    affinity = None
     if pred_files.affinity_file is not None:
-        data.affinity = _load_json(pred_files.affinity_file)
+        affinity = _load_json(pred_files.affinity_file)
 
     if load_embeddings and pred_files.embeddings_file is not None:
         with np.load(pred_files.embeddings_file) as payload:
@@ -287,6 +277,48 @@ def _load_boltz_model_data(
                 data.embeddings_s = payload["s"]
             if "z" in payload:
                 data.embeddings_z = payload["z"]
+    return confidence, affinity
+
+
+def _boltz_metrics_confidence(
+    pred_files: PredictionFiles, model: ModelFiles
+) -> dict | None:
+    """Reparse one metrics entry without retaining raw provider JSON."""
+    sample_index = model.metadata.get("sample_index")
+    if not isinstance(sample_index, int):
+        return None
+    if pred_files.provider.key == "boltz_lab":
+        payload = _load_optional_json(pred_files.pred_dir / "metrics.json")
+        sample_results = (
+            payload.get("sample_results") if isinstance(payload, dict) else None
+        )
+        confidence = (
+            sample_results.get(f"sample_{sample_index}")
+            if isinstance(sample_results, dict)
+            else None
+        )
+        return confidence if isinstance(confidence, dict) else None
+    if pred_files.provider.key == "boltz_api":
+        prediction_dir = _boltz_api_prediction_dir(pred_files.pred_dir)
+        if prediction_dir is None:
+            return None
+        return _boltz_api_metrics_by_sample(pred_files.pred_dir, prediction_dir).get(
+            sample_index
+        )
+    return None
+
+
+def _boltz_confidence_source(
+    pred_files: PredictionFiles, model: ModelFiles
+) -> Path | None:
+    if model.confidence_path is not None:
+        return model.confidence_path
+    if pred_files.provider.key == "boltz_lab":
+        return pred_files.pred_dir / "metrics.json"
+    if pred_files.provider.key == "boltz_api":
+        prediction_dir = _boltz_api_prediction_dir(pred_files.pred_dir)
+        return None if prediction_dir is None else prediction_dir / "metrics.json"
+    return None
 
 
 def _boltz_api_prediction_dir(pred_dir: Path) -> Path | None:
@@ -377,11 +409,14 @@ def _boltz_api_metrics_by_sample(
 
 class BoltzProvider(BaseProvider):
     key, label = "boltz", "Boltz"
+    confidence_summary = BOLTZ_CONFIDENCE_SUMMARY
     detect = staticmethod(_looks_like_boltz)
-    scan = staticmethod(_scan_boltz_dir)
+
+    def scan(self, path: Path) -> PredictionFiles:
+        return _scan_boltz_dir(path, self)
 
     def load_model_data(self, pred_files, model, data, options, *, structure_index):
-        _load_boltz_model_data(
+        confidence_payload, affinity_payload = _load_boltz_model_data(
             pred_files,
             model,
             data,
@@ -391,18 +426,34 @@ class BoltzProvider(BaseProvider):
             load_token_plddt=options.load_token_plddt,
             structure_index=structure_index,
         )
+        if confidence_payload is not None or affinity_payload is not None:
+            self.merge_confidence_payload(
+                data,
+                confidence_payload,
+                model=model,
+                structure_index=structure_index,
+                source=(
+                    _boltz_confidence_source(pred_files, model)
+                    or pred_files.affinity_file
+                ),
+                affinity_payload=affinity_payload,
+            )
 
 
 class BoltzLabProvider(BoltzProvider):
     key, label = "boltz_lab", "Boltz Lab"
     detect = staticmethod(_looks_like_boltz_lab)
-    scan = staticmethod(_scan_boltz_lab_dir)
+
+    def scan(self, path: Path) -> PredictionFiles:
+        return _scan_boltz_lab_dir(path, self)
 
 
 class BoltzAPIProvider(BoltzProvider):
     key, label = "boltz_api", "Boltz API"
     detect = staticmethod(_looks_like_boltz_api)
-    scan = staticmethod(_scan_boltz_api_dir)
+
+    def scan(self, path: Path) -> PredictionFiles:
+        return _scan_boltz_api_dir(path, self)
 
     def is_internal_candidate(self, candidate, candidates):
         return candidate.path.name == "prediction" and has_ancestor_candidate(

@@ -12,45 +12,11 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from . import metrics
+from .confidence import AffinityConfidence, PredictionConfidence
+from .loader_models import ProviderInfo
 
 if TYPE_CHECKING:
     from .token_map import TokenMap
-
-
-def provider_display_label(provider: str) -> str:
-    """Return the user-facing provider label used in summaries."""
-    return {
-        "boltz": "Boltz-2",
-        "boltz_lab": "Boltz Lab",
-        "boltz_api": "Boltz API",
-        "alphafold3": "AlphaFold 3",
-        "af3_server": "AlphaFold 3 Server",
-        "chai1": "Chai-1 Discovery",
-        "protenix": "Protenix",
-        "structure_only": "Structure-only",
-    }.get(provider, provider)
-
-
-def sorted_chain_items(values: dict):
-    """Sort chain-indexed JSON dictionaries numerically when possible."""
-
-    def key(item):
-        chain_key, _ = item
-        try:
-            return (0, int(chain_key))
-        except (TypeError, ValueError):
-            return (1, str(chain_key))
-
-    return sorted(values.items(), key=key)
-
-
-def iter_chain_values(values):
-    """Yield chain-indexed values from dicts or lists in stable order."""
-    if isinstance(values, list):
-        return [(str(idx), value) for idx, value in enumerate(values)]
-    if isinstance(values, dict):
-        return sorted_chain_items(values)
-    return []
 
 
 def format_optional_float(value, *, precision: int = 4) -> str:
@@ -63,83 +29,44 @@ def format_optional_float(value, *, precision: int = 4) -> str:
         return str(value)
 
 
-def _format_confidence_value(values: dict, key: str) -> str:
-    """Format one confidence dictionary value."""
-    return format_optional_float(values.get(key))
-
-
 def format_confidence_summary(pred_data) -> str:
-    """Build confidence summary text from loaded prediction data."""
+    """Render one provider's typed confidence data through its schema."""
     if pred_data is None:
         return "No confidence data loaded."
+    provider = getattr(pred_data, "provider", None)
+    if not isinstance(provider, ProviderInfo):
+        raise TypeError("PredictionData.provider must be ProviderInfo.")
+    spec = provider.confidence_summary
+    if spec.informational_text is not None:
+        return spec.informational_text
 
-    provider = getattr(pred_data, "provider", "unknown")
-    provider_line = f"provider         : {provider_display_label(provider)}"
-
-    if provider == "structure_only":
-        return "Structure-only input: pLDDT read from B-factors."
-
-    if provider in {"alphafold3", "af3_server", "chai1", "protenix"}:
-        conf = getattr(pred_data, "confidence", None) or getattr(
-            pred_data, "summary_confidence", None
-        )
-        if not conf:
-            return f"{provider_line}\nNo confidence data loaded."
-        disorder = conf.get("fraction_disordered", conf.get("disorder"))
-        lines = [
-            provider_line,
-            f"ranking_score    : {_format_confidence_value(conf, 'ranking_score')}",
-            f"ptm              : {_format_confidence_value(conf, 'ptm')}",
-            f"iptm             : {_format_confidence_value(conf, 'iptm')}",
-            f"fraction_disord. : {format_optional_float(disorder)}",
-            f"has_clash        : {conf.get('has_clash', 'n/a')}",
-        ]
-        if "gpde" in conf:
-            lines.append(f"gpde             : {_format_confidence_value(conf, 'gpde')}")
-        chain_ptm = conf.get("chains_ptm") or conf.get("chain_ptm")
-        if chain_ptm:
-            lines += ["", "chain_ptm:"]
-            for chain_key, value in iter_chain_values(chain_ptm):
-                lines.append(f"  chain {chain_key}: {format_optional_float(value)}")
-        chain_iptm = conf.get("chains_iptm") or conf.get("chain_iptm")
-        if chain_iptm:
-            lines += ["", "chain_iptm:"]
-            for chain_key, value in iter_chain_values(chain_iptm):
-                lines.append(f"  chain {chain_key}: {format_optional_float(value)}")
-        return "\n".join(lines)
-
-    conf = getattr(pred_data, "confidence", None)
-    if conf is None:
+    confidence = getattr(pred_data, "confidence", None)
+    provider_line = f"provider         : {provider.label}"
+    if confidence is None:
         return f"{provider_line}\nNo confidence data loaded."
+    if not isinstance(confidence, PredictionConfidence):
+        raise TypeError("PredictionData.confidence must be PredictionConfidence.")
 
-    lines = [
-        provider_line,
-        f"confidence_score : {_format_confidence_value(conf, 'confidence_score')}",
-        f"ptm              : {_format_confidence_value(conf, 'ptm')}",
-        f"iptm             : {_format_confidence_value(conf, 'iptm')}",
-        f"ligand_iptm      : {_format_confidence_value(conf, 'ligand_iptm')}",
-        f"protein_iptm     : {_format_confidence_value(conf, 'protein_iptm')}",
-        f"complex_plddt    : {_format_confidence_value(conf, 'complex_plddt')}",
-        f"complex_iplddt   : {_format_confidence_value(conf, 'complex_iplddt')}",
-        f"complex_pde      : {_format_confidence_value(conf, 'complex_pde')} Å",
-        f"complex_ipde     : {_format_confidence_value(conf, 'complex_ipde')} Å",
-    ]
-    chains_ptm = conf.get("chains_ptm", {})
-    if chains_ptm:
-        lines += ["", "chains_ptm:"]
-        for chain_key, value in sorted_chain_items(chains_ptm):
-            lines.append(f"  chain {chain_key}: {format_optional_float(value)}")
-    affinity = getattr(pred_data, "affinity", None)
-    if affinity:
-        affinity_pred_value = format_optional_float(
-            affinity.get("affinity_pred_value"), precision=3
-        )
-        lines += [
-            "",
-            f"affinity_pred_value       : {affinity_pred_value}  (log₁₀[IC₅₀/μM])",
-            f"affinity_probability      : "
-            f"{format_optional_float(affinity.get('affinity_probability_binary'))}",
-        ]
+    lines = [provider_line]
+    affinity: AffinityConfidence | None = confidence.affinity
+    for field in spec.fields:
+        source = affinity if field.source == "affinity" else confidence
+        value = None if source is None else getattr(source, field.attribute)
+        if value is None and field.omit_when_missing:
+            continue
+        if isinstance(value, bool):
+            formatted = str(value)
+        else:
+            formatted = format_optional_float(value, precision=field.precision)
+        lines.append(f"{field.label:<17}: {formatted}{field.suffix}")
+
+    for section in spec.sections:
+        values = getattr(confidence, section.attribute)
+        if values is None or not np.isfinite(values).any():
+            continue
+        lines += ["", f"{section.label}:"]
+        for index, value in enumerate(values):
+            lines.append(f"  chain {index}: {format_optional_float(value)}")
     return "\n".join(lines)
 
 

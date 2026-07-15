@@ -9,13 +9,13 @@ from typing import Any
 
 import numpy as np
 
+from ..confidence import COMMON_CONFIDENCE_SUMMARY
 from ..loader_models import ModelFiles, PredictionData, PredictionFiles
 from ..loader_utils import (
     STRUCTURE_SUFFIXES,
     _float_or_none,
     _load_json,
     _matrix_list_to_nested_dict,
-    _normalise_confidence,
     _safe_object_name,
 )
 from .base import BaseProvider
@@ -50,15 +50,10 @@ def _looks_like_chai(pred_dir: Path) -> bool:
     )
 
 
-def _scan_chai_dir(pred_dir: Path) -> PredictionFiles:
+def _scan_chai_dir(pred_dir: Path, provider: BaseProvider) -> PredictionFiles:
     """Discover Chai-1 Discovery ranked output files."""
     name = pred_dir.name
-    files = PredictionFiles(
-        name=name,
-        pred_dir=pred_dir,
-        provider="chai1",
-        input_path=pred_dir,
-    )
+    files = provider.prediction_files(name=name, pred_dir=pred_dir)
 
     candidates: list[_ChaiCandidate] = []
     for structure_path in _chai_structure_paths(pred_dir):
@@ -165,10 +160,11 @@ def _load_chai_model_data(
     *,
     load_pae: bool,
     load_pde: bool,
-) -> None:
+) -> dict | None:
+    confidence = None
     if model.confidence_path is not None:
-        data.confidence = _normalise_confidence(
-            _normalise_chai_confidence(_load_chai_scores(model.confidence_path))
+        confidence = _normalise_chai_confidence(
+            _load_chai_scores(model.confidence_path)
         )
 
     if load_pae and model.pae_path is not None:
@@ -176,6 +172,7 @@ def _load_chai_model_data(
 
     if load_pde and model.pde_path is not None:
         data.pde = np.load(model.pde_path).astype(np.float32)
+    return confidence
 
 
 def _chai_structure_paths(pred_dir: Path) -> list[Path]:
@@ -290,11 +287,21 @@ def _chai_first_sample(value):
 
 class ChaiProvider(BaseProvider):
     key, label = "chai1", "Chai-1 Discovery"
+    confidence_summary = COMMON_CONFIDENCE_SUMMARY
     detect = staticmethod(_looks_like_chai)
-    scan = staticmethod(_scan_chai_dir)
+
+    def scan(self, path: Path) -> PredictionFiles:
+        return _scan_chai_dir(path, self)
 
     def load_model_data(self, pred_files, model, data, options, *, structure_index):
-        del structure_index
-        _load_chai_model_data(
+        confidence_payload = _load_chai_model_data(
             model, data, load_pae=options.load_pae, load_pde=options.load_pde
         )
+        if confidence_payload:
+            self.merge_confidence_payload(
+                data,
+                confidence_payload,
+                model=model,
+                structure_index=structure_index,
+                source=model.confidence_path,
+            )

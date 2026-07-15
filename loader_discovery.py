@@ -27,7 +27,7 @@ class _TemporaryExtraction:
             ignore_errors=True,
         )
 
-    def cleanup(self) -> None:
+    def close(self) -> None:
         """Remove extracted contents now; repeated calls are harmless."""
         self._finalizer()
 
@@ -178,8 +178,7 @@ def discover_prediction_candidates(path: str | Path) -> PredictionDiscovery:
                 candidates=(
                     PredictionCandidate(
                         path=source,
-                        provider=provider.key,
-                        provider_label=provider.label,
+                        provider=provider.info,
                         relative_path=source.name,
                     ),
                 ),
@@ -226,7 +225,7 @@ def _discover_archive_file(path: Path) -> PredictionDiscovery:
     return PredictionDiscovery(
         input_path=path,
         candidates=tuple(candidates),
-        _temporary_directory=_TemporaryExtraction(temp_root),
+        _resource_owner=_TemporaryExtraction(temp_root),
     )
 
 
@@ -239,8 +238,7 @@ def _prediction_candidates_in_tree(root: Path) -> list[PredictionCandidate]:
         raw.append(
             PredictionCandidate(
                 path=path,
-                provider=provider.key,
-                provider_label=provider.label,
+                provider=provider.info,
                 relative_path=_candidate_relative_path(root, path),
             )
         )
@@ -260,12 +258,24 @@ def _prediction_candidates_in_tree(root: Path) -> list[PredictionCandidate]:
     )
 
 
-def scan_prediction_path_exact(path: Path, *, input_path: Path) -> PredictionFiles:
-    if not path.exists():
-        raise FileNotFoundError(f"Path does not exist: {path}")
-    provider = BUILTIN_PROVIDERS.detect(path)
-    if provider is None:
-        raise ValueError(f"Unsupported provider in {path}: None")
-    files = provider.scan(path)
-    files.input_path = input_path
+def scan_prediction_candidate(
+    discovery: PredictionDiscovery, candidate: PredictionCandidate
+) -> PredictionFiles:
+    """Scan one candidate and transfer any archive lifetime on success."""
+    if candidate not in discovery.candidates:
+        raise ValueError(f"Unknown prediction candidate: {candidate.path}")
+    provider = BUILTIN_PROVIDERS.get(candidate.provider.key)
+    if not provider.detect(candidate.path):
+        raise ValueError(
+            f"Candidate {candidate.path} no longer matches {candidate.provider.label}."
+        )
+    files = provider.scan(candidate.path)
+    if files.provider != candidate.provider:
+        files.close()
+        raise ValueError(
+            f"Provider scan for {candidate.path} returned mismatched metadata: "
+            f"{files.provider.key!r} != {candidate.provider.key!r}."
+        )
+    files.input_path = discovery.input_path
+    files.adopt_resource_owner(discovery.take_resource_owner())
     return files

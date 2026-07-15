@@ -64,17 +64,6 @@ def has_multiple_token_chains(token_map: TokenMap) -> bool:
     return len(chains) > 1
 
 
-def line_member_load_flags(key: str) -> tuple[bool, bool, bool, bool]:
-    """Return PAE/PDE/contact/pLDDT load flags for one line property."""
-    compute_key = metrics.line_compute_key(key)
-    return (
-        compute_key.startswith("pae"),
-        compute_key.startswith("pde"),
-        compute_key.startswith("contact_prob"),
-        compute_key == "plddt",
-    )
-
-
 def nan_mean_std(
     arrays: list[np.ndarray | None],
     size: int,
@@ -475,9 +464,9 @@ def chain_iptm_matrix_plot_data(
         for member in members or []:
             if member.data.confidence is None:
                 raise ValueError(
-                    f"Confidence JSON is not available for model_{member.rank}."
+                    f"Chain confidence data are not available for model_{member.rank}."
                 )
-            matrix, labels = properties.pair_chains_iptm_matrix(
+            matrix, labels = properties.pair_chain_iptm_matrix(
                 member.data.confidence, member.token_map
             )
             if chain_labels is None:
@@ -506,10 +495,8 @@ def chain_iptm_matrix_plot_data(
         )
 
     if data.confidence is None:
-        raise ValueError("Confidence JSON is not available for this model.")
-    matrix, chain_labels = properties.pair_chains_iptm_matrix(
-        data.confidence, token_map
-    )
+        raise ValueError("Chain confidence data are not available for this model.")
+    matrix, chain_labels = properties.pair_chain_iptm_matrix(data.confidence, token_map)
     return (
         matrix,
         list(range(matrix.shape[0])),

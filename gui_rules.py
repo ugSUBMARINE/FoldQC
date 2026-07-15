@@ -47,27 +47,29 @@ def plot_action_state(
     has_multiple_chains: bool = False,
 ) -> PlotActionState:
     """Return central availability state for one plot menu action."""
-    summary_plot = plot_type in {"pae_summary", "pde_summary"}
-    if not metric_key and not summary_plot:
+    plot_spec = metrics.PLOTS.find(plot_type)
+    if plot_spec is None:
+        return PlotActionState(False, f"Unknown plot type: {plot_type}")
+    if not metric_key and plot_spec.requires_metric:
         return PlotActionState(False, "Select a Color by metric before plotting.")
-    prop = metrics.PROPERTY_BY_KEY.get(metric_key, {})
+    spec = metrics.METRICS.find(metric_key)
     has_target = target_kind != "none"
     if plot_type != "ensemble_site_summary" and not has_target:
         return PlotActionState(False, "Select a viewer target before plotting.")
 
     if plot_type == "line":
-        if metrics.is_domain_label_metric(metric_key):
+        if spec is not None and spec.is_domain_label:
             return PlotActionState(
                 False, "PAE domain labels are categorical; use Distribution instead."
             )
-        if metric_key in metrics.CONTACT_FILTERED_METRICS:
+        if spec is not None and spec.needs_contact_shell:
             metric_label = "PAE/PDE" if metric_key == "pae_contact" else "PDE"
             return PlotActionState(
                 False,
                 f"{metric_label} contact-filtered values are sparse; use "
                 "Distribution or Matrix.",
             )
-        if prop.get("needs_ref", False) and not has_reference:
+        if spec is not None and spec.needs_reference and not has_reference:
             return PlotActionState(
                 False, "This line plot requires a reference selection."
             )
@@ -79,21 +81,22 @@ def plot_action_state(
                 False, "Distribution plots are not available for chain ipTM."
             )
         if (
-            metrics.is_domain_label_metric(metric_key)
+            spec is not None
+            and spec.is_domain_label
             and target_kind == "ensemble_group"
         ):
             return PlotActionState(
                 False,
                 "PAE domain labels are member-local; choose a single model or member.",
             )
-        if prop.get("needs_ref", False) and not has_reference:
+        if spec is not None and spec.needs_reference and not has_reference:
             return PlotActionState(
                 False, "This distribution requires a reference selection."
             )
         return PlotActionState(True)
 
     if plot_type == "matrix":
-        if metrics.matrix_source_for_metric(metric_key) is None:
+        if spec is None or spec.matrix is None:
             return PlotActionState(
                 False,
                 "Matrix plots are only available for PAE, PDE, interaction "
@@ -133,7 +136,7 @@ def plot_action_state(
         return PlotActionState(True)
 
     if plot_type == "ensemble_site_summary":
-        if metrics.is_domain_label_metric(metric_key):
+        if spec is not None and spec.is_domain_label:
             return PlotActionState(
                 False, "Ensemble site summary is not available for PAE domain labels."
             )
@@ -157,16 +160,14 @@ def field_context(
     has_fingerprint_data: bool,
 ) -> FieldContext:
     """Return contextual labels and enabled states for Reference/cutoff."""
-    prop = metrics.PROPERTY_BY_KEY.get(metric_key or "", {})
+    spec = metrics.METRICS.find(metric_key)
     has_target = target_kind != "none"
     supports_site_plot = has_target and has_fingerprint_data
     supports_ensemble_site = (
-        has_ensemble
-        and has_target
-        and not metrics.is_domain_label_metric(metric_key or "")
+        has_ensemble and has_target and not (spec is not None and spec.is_domain_label)
     )
 
-    needs_metric_ref = bool(prop.get("needs_ref", False))
+    needs_metric_ref = bool(spec is not None and spec.needs_reference)
     if needs_metric_ref:
         ref_tooltip = (
             "Viewer selection used by this to-selection metric, mapped back "
@@ -187,11 +188,11 @@ def field_context(
         ref_enabled = False
     ref_label = "Reference selection:"
 
-    if metrics.is_domain_label_metric(metric_key or ""):
+    if spec is not None and spec.is_domain_label:
         cutoff_label = "PAE threshold (Å):"
         cutoff_tooltip = "PAE threshold used to assign categorical domain labels."
         cutoff_enabled = True
-    elif metric_key in metrics.CONTACT_FILTERED_METRICS:
+    elif spec is not None and spec.needs_contact_shell:
         cutoff_label = "Cutoff (Å):"
         cutoff_tooltip = (
             "Distance cutoff for contact-filtered values against the reference "
@@ -241,7 +242,7 @@ def metric_preview_text(
     if not metric_key:
         return "Select a Color by metric."
 
-    spec = metrics.METRIC_BY_KEY.get(metric_key)
+    spec = metrics.METRICS.find(metric_key)
     ref_sel = reference_selection.strip()
     target_text = (
         "all members of the ensemble"
@@ -253,8 +254,8 @@ def metric_preview_text(
         preview = 'Load an ensemble with "Load Ensemble..." to use this metric.'
         return _append_reference_plot_guidance(preview, metric_key, ref_sel)
 
-    if spec is not None and spec.needs_ref and not ref_sel:
-        if metric_key in metrics.CONTACT_FILTERED_METRICS:
+    if spec is not None and spec.needs_reference and not ref_sel:
+        if spec.needs_contact_shell:
             return (
                 "Requires a reference selection and contact cutoff, such as a "
                 "chain, ligand, or residue set."
@@ -297,11 +298,12 @@ def _append_ensemble_plot_guidance(
         return f"{preview} Plots show the ensemble pLDDT standard-deviation values."
 
     plot_details = []
-    if not metrics.is_domain_label_metric(metric_key):
+    spec = metrics.METRICS.find(metric_key)
+    if spec is not None and not spec.is_domain_label:
         plot_details.append("line plots show the member mean and standard deviation")
-    if metric_key != "chain_iptm" and not metrics.is_domain_label_metric(metric_key):
+    if metric_key != "chain_iptm" and spec is not None and not spec.is_domain_label:
         plot_details.append("distribution plots use the member mean")
-    if metrics.matrix_source_for_metric(metric_key) is not None:
+    if spec is not None and spec.matrix is not None:
         if metric_key == "chain_iptm":
             plot_details.append(
                 "matrix plots show the member mean with standard-deviation annotations"
@@ -324,20 +326,25 @@ def _append_reference_plot_guidance(
         return preview
 
     restricted_plots = []
-    if not metrics.is_domain_label_metric(
-        metric_key
-    ) and metrics.plot_uses_reference_scope(metric_key, "line"):
+    spec = metrics.METRICS.find(metric_key)
+    if (
+        spec is not None
+        and not spec.is_domain_label
+        and "line" in spec.reference_scoped_plots
+    ):
         restricted_plots.append("line plot x-ranges")
-    if metrics.matrix_source_for_metric(
-        metric_key
-    ) is not None and metrics.plot_uses_reference_scope(metric_key, "matrix"):
+    if (
+        spec is not None
+        and spec.matrix is not None
+        and "matrix" in spec.reference_scoped_plots
+    ):
         if metric_key in {"pae_row_mean", "pae_col_to_sel"}:
             restricted_plots.append("matrix plot rows")
         elif metric_key == "pae_sym_within_sel":
             restricted_plots.append("matrix plot rows and columns")
         else:
             restricted_plots.append("matrix plot columns")
-    if metrics.plot_uses_reference_scope(metric_key, "distribution"):
+    if spec is not None and "distribution" in spec.reference_scoped_plots:
         restricted_plots.append("distribution plots")
     if not restricted_plots:
         return preview

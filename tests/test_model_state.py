@@ -6,8 +6,10 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from FoldQC.confidence import PredictionConfidence
 from FoldQC.loader_models import PredictionData
 from FoldQC.model_state import ModelState
+from FoldQC.providers.registry import BUILTIN_PROVIDERS
 from FoldQC.structure_index import StructureIndex
 from FoldQC.token_map import ResidueId, TokenInfo, TokenMap
 
@@ -17,7 +19,7 @@ def _data(rank: int, **values) -> PredictionData:
         "name": "prediction",
         "rank": rank,
         "structure_path": Path(f"/tmp/model_{rank}.cif"),
-        "provider": "boltz",
+        "provider": BUILTIN_PROVIDERS.get("boltz").info,
         "display_label": f"model_{rank}",
     }
     defaults.update(values)
@@ -61,7 +63,7 @@ def test_merge_is_in_place_monotonic_and_enriches_metadata() -> None:
     data = _data(
         2,
         pde=original_pde,
-        confidence={"summary": 0.7, "keep": True},
+        confidence=PredictionConfidence(ptm=0.7, has_clash=True),
     )
     state = ModelState(rank=2, data=data, structure_index=_index(data))
     incoming = _data(
@@ -70,7 +72,7 @@ def test_merge_is_in_place_monotonic_and_enriches_metadata() -> None:
         token_plddt_source="provider_token",
         pae=np.array([[2.0]], dtype=np.float32),
         pde=np.array([[9.0]], dtype=np.float32),
-        confidence={"summary": 0.9, "full": True},
+        confidence=PredictionConfidence(iptm=0.9),
     )
 
     changed = state.merge_data(incoming)
@@ -82,11 +84,9 @@ def test_merge_is_in_place_monotonic_and_enriches_metadata() -> None:
     assert state.data.pae is incoming.pae
     assert state.data.token_plddt is incoming.token_plddt
     assert state.data.token_plddt_source == "provider_token"
-    assert state.data.confidence == {
-        "summary": 0.9,
-        "keep": True,
-        "full": True,
-    }
+    assert state.data.confidence.ptm == 0.7
+    assert state.data.confidence.iptm == 0.9
+    assert state.data.confidence.has_clash is True
     assert state.version == 1
 
 
@@ -94,7 +94,7 @@ def test_merge_is_in_place_monotonic_and_enriches_metadata() -> None:
     "incoming",
     [
         _data(3),
-        _data(2, provider="alphafold3"),
+        _data(2, provider=BUILTIN_PROVIDERS.get("alphafold3").info),
         _data(2, structure_path=Path("/tmp/other.cif")),
         _data(2, name="other"),
     ],
@@ -119,6 +119,25 @@ def test_merge_rejects_uncoupled_plddt_and_embedding_fields() -> None:
     with pytest.raises(ValueError, match="must be provided together"):
         state.merge_data(_data(2, embeddings_s=np.ones((1, 1))))
 
+    assert state.version == 0
+
+
+def test_conflicting_confidence_stages_array_additions_transactionally() -> None:
+    data = _data(2, confidence=PredictionConfidence(ptm=0.8))
+    token_map = TokenMap((TokenInfo(0, "A", ResidueId(1), "ALA", False, None),))
+    state = ModelState(rank=2, data=data, structure_index=_index(data, token_map))
+    original_confidence = state.data.confidence
+    incoming = _data(
+        2,
+        pae=np.zeros((1, 1), dtype=np.float32),
+        confidence=PredictionConfidence(ptm=0.7),
+    )
+
+    with pytest.raises(ValueError, match="Conflicting model_2 confidence field: ptm"):
+        state.merge_data(incoming)
+
+    assert state.data.pae is None
+    assert state.data.confidence is original_confidence
     assert state.version == 0
 
 

@@ -7,6 +7,7 @@ import numpy as np
 from . import compute, metrics
 from .compat import MessageBoxStandardButton, QtWidgets
 from .gui_state import MetricContext
+from .loader_models import DataCapability
 from .mol_viewer import (
     ObjectPaintMapping,
     ensure_object_paint_mapping,
@@ -60,6 +61,7 @@ class MetricController:
         ref_indices = None
         contact_indices = None
         cutoff = None
+        spec = metrics.METRICS.require(key)
 
         if key == "ensemble_rmsd":
             QtWidgets.QMessageBox.information(
@@ -76,30 +78,19 @@ class MetricController:
         ):
             return self._compute_metric_with_messages(key, data, tm)
 
-        if key in {
-            "pae_to_sel",
-            "pae_col_to_sel",
-            "pae_sym_sel",
-            "pae_sym_within_sel",
-            "pae_contact",
-            "pde_to_sel",
-            "pde_within_sel",
-            "pde_contact",
-            "contact_prob_to_sel",
-        }:
+        if spec.needs_reference:
             ref_indices = _need_ref()
             if ref_indices is None:
                 return None
 
-        if key in ("pae_domain_complete", "pae_domain_spectral"):
+        if spec.needs_cutoff and not spec.needs_contact_shell:
             cutoff = self._get_cutoff_threshold()
             if cutoff is None:
                 return None
-            method = compute.pae_domain_method(key)
-            if not self._pae_domain_dependency_available(method):
+            if not self._metric_dependencies_available(spec):
                 return None
 
-        if key in metrics.CONTACT_FILTERED_METRICS:
+        if spec.needs_contact_shell:
             cutoff = self._get_cutoff_threshold()
             if cutoff is None:
                 return None
@@ -133,10 +124,9 @@ class MetricController:
     ):
         """Dispatch a metric using already-resolved export context."""
         cutoff = context.cutoff_angstrom
-        if key in ("pae_domain_complete", "pae_domain_spectral"):
-            method = compute.pae_domain_method(key)
-            if not self._pae_domain_dependency_available(method):
-                return None
+        spec = metrics.METRICS.require(key)
+        if spec.dependency_keys and not self._metric_dependencies_available(spec):
+            return None
         return self._compute_metric_with_messages(
             key,
             data,
@@ -177,7 +167,7 @@ class MetricController:
                 )
             elif key == "chain_iptm":
                 QtWidgets.QMessageBox.warning(
-                    self, APP_TITLE, "Confidence JSON not available."
+                    self, APP_TITLE, "Chain confidence data are not available."
                 )
             else:
                 QtWidgets.QMessageBox.warning(
@@ -217,20 +207,14 @@ class MetricController:
             QtWidgets.QMessageBox.warning(self, APP_TITLE, str(exc))
             return None
 
-    def _pae_domain_dependency_available(self, method: str) -> bool:
-        """Offer to install a missing PAE domain-label dependency."""
-        feature = {
-            "complete_linkage": "pae_domain_complete",
-            "spectral": "pae_domain_spectral",
-        }.get(method)
-        if feature is None:
+    def _metric_dependencies_available(self, spec: metrics.MetricSpec) -> bool:
+        """Offer to install optional dependencies declared by a metric."""
+        if not spec.dependency_keys:
             return True
-        label = (
-            "complete-linkage PAE domain labels"
-            if method == "complete_linkage"
-            else "spectral PAE domain labels"
+        return self._ensure_dependencies(
+            spec.dependency_keys,
+            feature_label=spec.label,
         )
-        return self._ensure_feature_dependencies((feature,), feature_label=label)
 
     def _compute_ensemble_property(self, key: str) -> np.ndarray:
         """Return an ensemble-level per-token array."""
@@ -363,61 +347,49 @@ class MetricController:
             if idx not in ref_set and not token_map[idx].is_hetatm
         ]
 
-    def _ensure_current_data_for_property(self, prop: dict) -> None:
+    def _ensure_current_data_for_property(self, spec: metrics.MetricSpec) -> None:
         """Assert that asynchronous preflight supplied the property's arrays."""
         if self._pred_files is None:
             raise ValueError("No prediction output loaded.")
         state = self._require_active_model_state()
-        flags = metrics.metric_load_flags(prop)
-        self._require_loaded_data(state.data, flags)
+        self._require_loaded_data(state.data, spec.load_capabilities)
 
-    def _ensure_member_data_for_property(self, member, prop: dict) -> None:
+    def _ensure_member_data_for_property(
+        self, member, spec: metrics.MetricSpec
+    ) -> None:
         """Assert that asynchronous preflight supplied a member's arrays."""
         if self._pred_files is None:
             raise ValueError("No prediction output loaded.")
-        flags = metrics.metric_load_flags(prop)
         state = self._canonical_state_for_ensemble_member(member)
-        self._require_loaded_data(state.data, flags)
+        self._require_loaded_data(state.data, spec.load_capabilities)
 
     def _ensure_member_data_for_plot(
         self,
         member,
-        *,
-        load_pae: bool = False,
-        load_pde: bool = False,
-        load_contact_probs: bool = False,
-        load_token_plddt: bool = False,
+        capabilities: frozenset[DataCapability],
     ) -> None:
         """Assert that asynchronous preflight supplied plot arrays."""
         if self._pred_files is None:
             raise ValueError("No prediction output loaded.")
         state = self._canonical_state_for_ensemble_member(member)
-        self._require_loaded_data(
-            state.data,
-            {
-                "load_pae": load_pae,
-                "load_pde": load_pde,
-                "load_contact_probs": load_contact_probs,
-                "load_token_plddt": load_token_plddt,
-            },
-        )
+        self._require_loaded_data(state.data, capabilities)
 
     def _require_loaded_data(
         self,
         data,
-        flags: dict[str, bool],
+        capabilities: frozenset[DataCapability],
     ) -> None:
         """Raise if a ready-data continuation is missing required arrays."""
         fields = (
-            ("load_pae", "pae", "PAE"),
-            ("load_pde", "pde", "PDE"),
-            ("load_contact_probs", "contact_probs", "interaction probabilities"),
-            ("load_token_plddt", "token_plddt", "pLDDT"),
+            ("pae", "pae", "PAE"),
+            ("pde", "pde", "PDE"),
+            ("contact_probs", "contact_probs", "interaction probabilities"),
+            ("plddt", "token_plddt", "pLDDT"),
         )
         missing = [
             label
-            for flag, attr, label in fields
-            if flags.get(flag, False) and getattr(data, attr, None) is None
+            for capability, attr, label in fields
+            if capability in capabilities and getattr(data, attr, None) is None
         ]
         if missing:
             raise ValueError(

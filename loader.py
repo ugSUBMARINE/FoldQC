@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .loader_discovery import discover_prediction_candidates
+from .loader_discovery import (
+    discover_prediction_candidates,
+    scan_prediction_candidate,
+)
 from .loader_models import (
     PredictionData,
     PredictionFiles,
@@ -16,7 +19,11 @@ from .structure_index import StructureIndex
 
 def scan_prediction_path(path: str | Path) -> PredictionFiles:
     discovery = discover_prediction_candidates(path)
-    return discovery.scan(discovery.candidates[0])
+    try:
+        return scan_prediction_candidate(discovery, discovery.candidates[0])
+    except Exception:
+        discovery.close()
+        raise
 
 
 def scan_prediction_dir(path: str | Path) -> PredictionFiles:
@@ -24,7 +31,11 @@ def scan_prediction_dir(path: str | Path) -> PredictionFiles:
     if not selected_dir.is_dir():
         raise NotADirectoryError(f"Not a directory: {selected_dir}")
     discovery = discover_prediction_candidates(selected_dir)
-    return discovery.scan(discovery.candidates[0])
+    try:
+        return scan_prediction_candidate(discovery, discovery.candidates[0])
+    except Exception:
+        discovery.close()
+        raise
 
 
 def load_prediction_data(
@@ -66,10 +77,17 @@ def load_prediction_data(
             load_token_plddt,
             load_contact_probs,
         )
+    ) or any(
+        (
+            model.summary_path is not None,
+            model.confidence_path is not None,
+            bool(model.metadata.get("has_metrics_confidence")),
+            pred_files.affinity_file is not None,
+        )
     )
     if needs_structure_index and structure_index is None:
         structure_index = StructureIndex.from_path(model.structure_path)
-    return BUILTIN_PROVIDERS.get(pred_files.provider).load(
+    return BUILTIN_PROVIDERS.get(pred_files.provider.key).load(
         pred_files,
         model,
         options,

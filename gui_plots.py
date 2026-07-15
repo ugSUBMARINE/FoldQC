@@ -7,6 +7,7 @@ import numpy as np
 from . import gui_rules, metrics, plot_data
 from .compat import QtWidgets
 from .gui_state import ResolvedTarget as _PlotTarget
+from .loader_models import DataCapability
 from .mol_viewer import get_viewer_name, selection_to_token_indices
 from .token_map import TokenMap
 
@@ -145,14 +146,13 @@ class PlotController:
     ) -> tuple[np.ndarray, list[tuple[str, np.ndarray, np.ndarray | None]], str]:
         """Return x values, series tuples, and y-axis label for a line plot."""
         token_map = target.token_map
-        use_ref_scope = bool(ref_indices) and metrics.plot_uses_reference_scope(
-            key, plot_type
-        )
+        spec = metrics.METRICS.require(key)
+        use_ref_scope = bool(ref_indices) and plot_type in spec.reference_scoped_plots
         indices = list(ref_indices) if use_ref_scope else list(range(len(token_map)))
         if not indices:
             raise ValueError("No tokens are available for the line plot.")
 
-        compute_key = metrics.line_compute_key(key)
+        compute_key = key
         ref_edit = getattr(self, "_ref_edit", None)
         ref_sel = None if ref_edit is None else ref_edit.text().strip() or None
 
@@ -162,7 +162,7 @@ class PlotController:
                 return (
                     np.asarray(indices, dtype=np.int32),
                     [(metrics.metric_label(key), values[indices], None)],
-                    metrics.line_ylabel(compute_key),
+                    spec.line_ylabel,
                 )
             if compute_key == "ensemble_plddt_mean":
                 mean = self._compute_ensemble_property("ensemble_plddt_mean")
@@ -170,32 +170,19 @@ class PlotController:
                 return (
                     np.asarray(indices, dtype=np.int32),
                     [(metrics.metric_label(key), mean[indices], std[indices])],
-                    metrics.line_ylabel(compute_key),
+                    spec.line_ylabel,
                 )
             if compute_key == "ensemble_plddt_std":
                 values = self._compute_ensemble_property("ensemble_plddt_std")
                 return (
                     np.asarray(indices, dtype=np.int32),
                     [(metrics.metric_label(key), values[indices], None)],
-                    metrics.line_ylabel(compute_key),
+                    spec.line_ylabel,
                 )
 
-            (
-                load_pae,
-                load_pde,
-                load_contact_probs,
-                load_token_plddt,
-            ) = plot_data.line_member_load_flags(key)
             arrays = []
             for member in target.members or []:
-                kwargs = dict(
-                    load_pae=load_pae,
-                    load_pde=load_pde,
-                    load_token_plddt=load_token_plddt,
-                )
-                if load_contact_probs:
-                    kwargs["load_contact_probs"] = True
-                self._ensure_member_data_for_plot(member, **kwargs)
+                self._ensure_member_data_for_property(member, spec)
                 state = self._canonical_state_for_ensemble_member(member)
                 values = self._compute_property_for(
                     compute_key,
@@ -214,7 +201,7 @@ class PlotController:
             return (
                 np.asarray(indices, dtype=np.int32),
                 [(f"{metrics.metric_label(key)} mean", mean[indices], std[indices])],
-                metrics.line_ylabel(compute_key),
+                spec.line_ylabel,
             )
 
         if compute_key.startswith("ensemble_"):
@@ -229,7 +216,7 @@ class PlotController:
         return (
             np.asarray(indices, dtype=np.int32),
             [(metrics.metric_label(key), np.asarray(values)[indices], None)],
-            metrics.line_ylabel(compute_key),
+            spec.line_ylabel,
         )
 
     def _summary_plot_has_matrix_data(self, kind: str, target: _PlotTarget) -> bool:
@@ -274,15 +261,12 @@ class PlotController:
         if not indices:
             raise ValueError("No tokens are available for the summary plot.")
 
-        load_pae = kind == "pae"
-        load_pde = kind == "pde"
+        capabilities: frozenset[DataCapability] = frozenset({kind})
         if target.kind == "ensemble_group":
             data_items = []
             token_maps = []
             for member in sorted(target.members or [], key=lambda item: item.rank):
-                self._ensure_member_data_for_plot(
-                    member, load_pae=load_pae, load_pde=load_pde
-                )
+                self._ensure_member_data_for_plot(member, capabilities)
                 state = self._canonical_state_for_ensemble_member(member)
                 data_items.append(state.data)
                 token_maps.append(state.token_map)
@@ -294,9 +278,7 @@ class PlotController:
             )
         else:
             if target.kind == "ensemble_member" and target.members:
-                self._ensure_member_data_for_plot(
-                    target.members[0], load_pae=load_pae, load_pde=load_pde
-                )
+                self._ensure_member_data_for_plot(target.members[0], capabilities)
             series = plot_data.summary_series_for_data(
                 kind, target.data, target.token_map
             )
@@ -332,13 +314,15 @@ class PlotController:
         np.ndarray | None,
     ]:
         """Return matrix data and display metadata for a matrix plot."""
-        source = metrics.matrix_source_for_metric(key)
-        if source is None:
+        spec = metrics.METRICS.require(key)
+        if spec.matrix is None:
             raise ValueError(
                 "Matrix plots are only available for PAE, PDE, interaction "
                 "probability, and chain ipTM properties."
             )
-        attr, title, label = source
+        attr = spec.matrix.source
+        title = spec.matrix.title
+        label = spec.matrix.colorbar_label
         if attr == "chain_iptm":
             return plot_data.chain_iptm_matrix_plot_data(
                 target_kind=target.kind,
@@ -349,17 +333,12 @@ class PlotController:
                 members=list(target.model_states),
             )
 
-        load_pae = attr == "pae"
-        load_pde = attr == "pde"
-        load_contact_probs = attr == "contact_probs"
+        matrix_capabilities: frozenset[DataCapability] = frozenset({attr})
 
         if target.kind == "ensemble_group":
             matrices = []
             for member in target.members or []:
-                kwargs = dict(load_pae=load_pae, load_pde=load_pde)
-                if load_contact_probs:
-                    kwargs["load_contact_probs"] = True
-                self._ensure_member_data_for_plot(member, **kwargs)
+                self._ensure_member_data_for_plot(member, matrix_capabilities)
                 state = self._canonical_state_for_ensemble_member(member)
                 matrix = getattr(state.data, attr, None)
                 if matrix is None:
@@ -371,10 +350,9 @@ class PlotController:
             title = f"{title} — ensemble mean"
         else:
             if target.kind == "ensemble_member" and target.members:
-                kwargs = dict(load_pae=load_pae, load_pde=load_pde)
-                if load_contact_probs:
-                    kwargs["load_contact_probs"] = True
-                self._ensure_member_data_for_plot(target.members[0], **kwargs)
+                self._ensure_member_data_for_plot(
+                    target.members[0], matrix_capabilities
+                )
             matrix = getattr(target.data, attr, None)
             if matrix is None:
                 raise ValueError(f"{label} matrix is not available for this model.")
@@ -404,12 +382,12 @@ class PlotController:
         cutoff: float,
     ) -> dict:
         """Compute local ligand-site summary values for one ensemble member."""
-        self._ensure_member_data_for_plot(
-            member,
-            load_pae=self._member_supports_data(member, "pae"),
-            load_pde=self._member_supports_data(member, "pde"),
-            load_token_plddt=self._member_supports_data(member, "plddt"),
+        capabilities: frozenset[DataCapability] = frozenset(
+            capability
+            for capability in ("plddt", "pae", "pde")
+            if self._member_supports_data(member, capability)
         )
+        self._ensure_member_data_for_plot(member, capabilities)
         state = self._canonical_state_for_ensemble_member(member)
         ref_indices = selection_to_token_indices(
             state.token_map, ref_sel, obj_name=member.obj_name
@@ -474,24 +452,23 @@ class PlotController:
         size = len(target.token_map)
         if target.kind != "ensemble_group":
             if target.kind == "ensemble_member" and target.members:
-                self._ensure_member_data_for_plot(
-                    target.members[0],
-                    load_pae=self._member_supports_data(target.members[0], "pae"),
-                    load_pde=self._member_supports_data(target.members[0], "pde"),
-                    load_contact_probs=self._member_supports_data(
-                        target.members[0], "contact_probs"
-                    ),
+                member = target.members[0]
+                capabilities: frozenset[DataCapability] = frozenset(
+                    capability
+                    for capability in ("pae", "pde", "contact_probs")
+                    if self._member_supports_data(member, capability)
                 )
+                self._ensure_member_data_for_plot(member, capabilities)
             return plot_data.fingerprint_series_for_single(target.data, ref_indices)
 
         data_items = []
         for member in target.members or []:
-            self._ensure_member_data_for_plot(
-                member,
-                load_pae=self._member_supports_data(member, "pae"),
-                load_pde=self._member_supports_data(member, "pde"),
-                load_contact_probs=self._member_supports_data(member, "contact_probs"),
+            capabilities: frozenset[DataCapability] = frozenset(
+                capability
+                for capability in ("pae", "pde", "contact_probs")
+                if self._member_supports_data(member, capability)
             )
+            self._ensure_member_data_for_plot(member, capabilities)
             state = self._canonical_state_for_ensemble_member(member)
             data_items.append(state.data)
 
@@ -525,13 +502,14 @@ class PlotController:
                 state.reason or f"{plot_type} is not available.",
             )
             return
-        dependency_features = ["plot"]
-        if metrics.is_domain_label_metric(key):
-            dependency_features.append(key)
-        plot_labels = {key: label for label, key in metrics.PLOT_TYPES}
-        plot_label = plot_labels.get(plot_type, plot_type.replace("_", " "))
-        if not self._ensure_feature_dependencies(
-            dependency_features, feature_label=f"The {plot_label.lower()} plot"
+        plot_spec = metrics.PLOTS.require(plot_type)
+        metric_spec = metrics.METRICS.find(key)
+        dependency_keys = plot_spec.dependency_keys + (
+            () if metric_spec is None else metric_spec.dependency_keys
+        )
+        if not self._ensure_dependencies(
+            dependency_keys,
+            feature_label=f"The {plot_spec.label.lower()} plot",
         ):
             return
         if plot_type == "line":
@@ -553,18 +531,15 @@ class PlotController:
                 self, APP_TITLE, f"Unknown plot type: {plot_type}"
             )
 
-    def _fingerprint_load_flags(
-        self, *, include_contact_probs: bool
-    ) -> dict[str, bool]:
-        return {
-            "load_pae": self._target_any_supports_family("pae"),
-            "load_pde": self._target_any_supports_family("pde"),
-            "load_contact_probs": bool(
-                include_contact_probs
-                and self._target_any_supports_family("contact_probs")
-            ),
-            "load_token_plddt": True,
-        }
+    def _fingerprint_capabilities(self, *, include_contact_probs: bool) -> frozenset:
+        capabilities = {"plddt"}
+        if self._target_any_supports_family("pae"):
+            capabilities.add("pae")
+        if self._target_any_supports_family("pde"):
+            capabilities.add("pde")
+        if include_contact_probs and self._target_any_supports_family("contact_probs"):
+            capabilities.add("contact_probs")
+        return frozenset(capabilities)
 
     def _show_line_plot(self) -> None:
         """Open a token-indexed line plot for the selected property."""
@@ -573,7 +548,8 @@ class PlotController:
             return
 
         key = self._prop_combo.currentData()
-        if metrics.is_domain_label_metric(key):
+        spec = metrics.METRICS.require(key)
+        if spec.is_domain_label:
             QtWidgets.QMessageBox.information(
                 self,
                 APP_TITLE,
@@ -581,7 +557,7 @@ class PlotController:
                 "Use Distribution to inspect cluster occupancy.",
             )
             return
-        if key in metrics.CONTACT_FILTERED_METRICS:
+        if spec.needs_contact_shell:
             metric_name = "PAE" if key == "pae_contact" else "PDE"
             QtWidgets.QMessageBox.information(
                 self,
@@ -591,15 +567,14 @@ class PlotController:
                 "Use Distribution or Matrix instead.",
             )
             return
-        prop = metrics.PROPERTY_BY_KEY.get(key, {})
         ref_indices = self._resolve_reference_indices(
-            target.token_map, target.obj_name, required=prop.get("needs_ref", False)
+            target.token_map, target.obj_name, required=spec.needs_reference
         )
         if ref_indices is None:
             return
         if self._defer_action_for_data(
             target,
-            metrics.metric_load_flags(prop),
+            spec.load_capabilities,
             self._show_line_plot,
             error_title=f"{APP_TITLE} - error",
         ):
@@ -607,7 +582,7 @@ class PlotController:
 
         try:
             if target.kind == "single":
-                self._ensure_current_data_for_property(prop)
+                self._ensure_current_data_for_property(spec)
             from . import plots
 
             x_values, series, ylabel = self._compute_line_plot_data(
@@ -681,13 +656,10 @@ class PlotController:
         )
         if ref_indices is None:
             return
-        flags = {
-            "load_pae": kind == "pae",
-            "load_pde": kind == "pde",
-        }
+        capabilities = frozenset({kind})
         if self._defer_action_for_data(
             target,
-            flags,
+            capabilities,
             lambda: self._show_summary_plot(kind),
             error_title=f"{APP_TITLE} - error",
         ):
@@ -748,7 +720,8 @@ class PlotController:
             return
 
         key = self._prop_combo.currentData()
-        if metrics.is_domain_label_metric(key) and target.kind == "ensemble_group":
+        spec = metrics.METRICS.require(key)
+        if spec.is_domain_label and target.kind == "ensemble_group":
             QtWidgets.QMessageBox.information(
                 self,
                 APP_TITLE,
@@ -766,15 +739,14 @@ class PlotController:
             )
             return
 
-        prop = metrics.PROPERTY_BY_KEY.get(key, {})
         ref_indices = self._resolve_reference_indices(
-            target.token_map, target.obj_name, required=prop.get("needs_ref", False)
+            target.token_map, target.obj_name, required=spec.needs_reference
         )
         if ref_indices is None:
             return
         if self._defer_action_for_data(
             target,
-            metrics.metric_load_flags(prop),
+            spec.load_capabilities,
             self._show_distribution_plot,
             error_title=f"{APP_TITLE} - error",
         ):
@@ -782,9 +754,9 @@ class PlotController:
 
         try:
             if target.kind == "single":
-                self._ensure_current_data_for_property(prop)
+                self._ensure_current_data_for_property(spec)
             elif target.kind == "ensemble_member" and target.members:
-                self._ensure_member_data_for_property(target.members[0], prop)
+                self._ensure_member_data_for_property(target.members[0], spec)
 
             from . import plots
 
@@ -810,7 +782,7 @@ class PlotController:
                 )
                 bar_positions = list(range(len(labels)))
                 bar_widths = [0.8 for _label in labels]
-            elif metrics.is_domain_label_metric(key):
+            elif spec.is_domain_label:
                 title = f"{metrics.metric_label(key)} distribution\n({target.label})"
                 labels, counts, bar_groups, colors = (
                     plot_data.domain_label_distribution_groups(values, indices)
@@ -891,7 +863,7 @@ class PlotController:
                 return
             if self._defer_action_for_data(
                 target,
-                self._fingerprint_load_flags(include_contact_probs=False),
+                self._fingerprint_capabilities(include_contact_probs=False),
                 self._show_ensemble_site_summary,
                 error_title=f"{APP_TITLE} - error",
                 allow_partial=True,
@@ -938,8 +910,8 @@ class PlotController:
             return
 
         key = self._prop_combo.currentData()
-        source = metrics.matrix_source_for_metric(key)
-        if source is None:
+        spec = metrics.METRICS.require(key)
+        if spec.matrix is None:
             QtWidgets.QMessageBox.information(
                 self,
                 APP_TITLE,
@@ -948,7 +920,7 @@ class PlotController:
             )
             return
 
-        attr, _, _ = source
+        attr = spec.matrix.source
         if attr == "chain_iptm":
             ref_indices = []
         else:
@@ -958,14 +930,12 @@ class PlotController:
             if ref_indices is None:
                 return
 
-        flags = {
-            "load_pae": attr == "pae",
-            "load_pde": attr == "pde",
-            "load_contact_probs": attr == "contact_probs",
-        }
+        capabilities = frozenset(
+            {attr} if attr in {"pae", "pde", "contact_probs"} else ()
+        )
         if self._defer_action_for_data(
             target,
-            flags,
+            capabilities,
             self._show_matrix_plot,
             error_title=f"{APP_TITLE} - error",
         ):
@@ -1062,7 +1032,7 @@ class PlotController:
 
         if self._defer_action_for_data(
             target,
-            self._fingerprint_load_flags(include_contact_probs=True),
+            self._fingerprint_capabilities(include_contact_probs=True),
             self._show_binding_site_fingerprint,
             error_title=f"{APP_TITLE} - error",
             allow_partial=True,

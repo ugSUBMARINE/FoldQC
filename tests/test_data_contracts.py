@@ -8,9 +8,11 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from FoldQC.confidence import PredictionConfidence
 from FoldQC.data_contracts import normalize_and_validate_prediction_data
 from FoldQC.loader_models import ModelFiles, PredictionData
 from FoldQC.model_state import ModelState
+from FoldQC.providers.registry import BUILTIN_PROVIDERS
 from FoldQC.structure_index import StructureIndex
 from FoldQC.token_map import ResidueId, TokenInfo, TokenMap
 
@@ -20,6 +22,7 @@ def _data(**values) -> PredictionData:
         "name": "prediction",
         "rank": 0,
         "structure_path": Path("/tmp/model.cif"),
+        "provider": BUILTIN_PROVIDERS.get("boltz").info,
     }
     fields.update(values)
     return PredictionData(**fields)
@@ -53,12 +56,10 @@ def test_validation_normalizes_arrays_and_preserves_embedding_dtype() -> None:
         ),
         embeddings_s=np.ones((3, 4), dtype=np.int16),
         embeddings_z=np.ones((3, 3, 2), dtype=np.float64),
-        confidence={},
-        summary_confidence={},
-        affinity={},
+        confidence=PredictionConfidence(),
     )
 
-    result = normalize_and_validate_prediction_data(data, 3)
+    result = normalize_and_validate_prediction_data(data, 3, chain_count=1)
 
     assert result is data
     np.testing.assert_allclose(data.token_plddt[:2], [0.9, 0.8])
@@ -97,7 +98,7 @@ def test_validation_normalizes_arrays_and_preserves_embedding_dtype() -> None:
             },
             "embeddings_s shape",
         ),
-        ({"confidence": []}, "dictionary or None"),
+        ({"confidence": []}, "PredictionConfidence or None"),
     ],
 )
 def test_validation_rejects_malformed_contracts(values, message: str) -> None:

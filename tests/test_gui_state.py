@@ -17,6 +17,7 @@ from FoldQC.gui_state import (  # noqa: E402
 )
 from FoldQC.loader_models import PredictionData  # noqa: E402
 from FoldQC.model_state import ModelState  # noqa: E402
+from FoldQC.providers.registry import BUILTIN_PROVIDERS  # noqa: E402
 from FoldQC.structure_index import StructureIndex  # noqa: E402
 from FoldQC.token_map import ResidueId, TokenInfo, TokenMap  # noqa: E402
 
@@ -66,6 +67,7 @@ def test_resolved_target_distinguishes_ensemble_group() -> None:
                 name="model",
                 rank=rank,
                 structure_path=Path(f"model_{rank}.cif"),
+                provider=BUILTIN_PROVIDERS.get("boltz").info,
             ),
             structure_index=_index(Path(f"model_{rank}.cif"), token_map),
         )
@@ -91,6 +93,7 @@ def test_resolved_target_exposes_live_state_data_and_is_not_assignable() -> None
         name="model",
         rank=0,
         structure_path=Path("model_0.cif"),
+        provider=BUILTIN_PROVIDERS.get("boltz").info,
     )
     state = ModelState(0, data, _index(Path(data.structure_path), token_map))
     target = ResolvedTarget(
@@ -103,6 +106,7 @@ def test_resolved_target_exposes_live_state_data_and_is_not_assignable() -> None
         name="model",
         rank=0,
         structure_path=Path("model_0.cif"),
+        provider=BUILTIN_PROVIDERS.get("boltz").info,
         pae=np.ones((1, 1), dtype=np.float32),
     )
 
@@ -123,7 +127,12 @@ def test_state_backed_properties_share_one_state() -> None:
 
     host = Host()
     host._state = GuiState()
-    data = PredictionData(name="model", rank=2, structure_path=Path("model.cif"))
+    data = PredictionData(
+        name="model",
+        rank=2,
+        structure_path=Path("model.cif"),
+        provider=BUILTIN_PROVIDERS.get("boltz").info,
+    )
     token_map = TokenMap(())
     model_state = ModelState(
         rank=2,

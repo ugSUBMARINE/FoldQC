@@ -8,6 +8,9 @@ from typing import Any, Literal
 
 import numpy as np
 
+from .confidence import ConfidenceSummarySpec, PredictionConfidence
+from .ownership import Closeable
+
 DataCapability = Literal["plddt", "pae", "pde", "contact_probs"]
 _DATA_CAPABILITIES = frozenset({"plddt", "pae", "pde", "contact_probs"})
 PlddtSource = Literal[
@@ -15,6 +18,24 @@ PlddtSource = Literal[
     "provider_token",
     "provider_atom_mean",
 ]
+
+
+@dataclass(frozen=True)
+class ProviderInfo:
+    """Immutable provider identity materialized at discovery time."""
+
+    key: str
+    label: str
+    supports_ensemble: bool = True
+    confidence_summary: ConfidenceSummarySpec = ConfidenceSummarySpec()
+
+    def __post_init__(self) -> None:
+        if not self.key or not self.label:
+            raise ValueError("ProviderInfo requires non-empty key and label.")
+        if not isinstance(self.confidence_summary, ConfidenceSummarySpec):
+            raise ValueError(
+                "ProviderInfo.confidence_summary must be ConfidenceSummarySpec."
+            )
 
 
 @dataclass
@@ -45,12 +66,16 @@ class ModelFiles:
 class PredictionFiles:
     name: str
     pred_dir: Path
-    provider: str = "boltz"
+    provider: ProviderInfo
     input_path: Path | None = None
     models: list[ModelFiles] = field(default_factory=list)
     affinity_file: Path | None = None
     embeddings_file: Path | None = None
-    _temporary_directory: Any | None = field(default=None, repr=False, compare=False)
+    _resource_owner: Closeable | None = field(default=None, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.provider, ProviderInfo):
+            raise ValueError("PredictionFiles.provider must be ProviderInfo.")
 
     @property
     def n_models(self) -> int:
@@ -58,18 +83,11 @@ class PredictionFiles:
 
     @property
     def provider_label(self) -> str:
-        from .providers.registry import BUILTIN_PROVIDERS
-
-        return BUILTIN_PROVIDERS.get(self.provider).label
+        return self.provider.label
 
     @property
     def supports_ensemble(self) -> bool:
-        from .providers.registry import BUILTIN_PROVIDERS
-
-        return (
-            BUILTIN_PROVIDERS.get(self.provider).supports_ensemble
-            and self.n_models >= 2
-        )
+        return self.provider.supports_ensemble and self.n_models >= 2
 
     @property
     def has_affinity(self) -> bool:
@@ -114,47 +132,77 @@ class PredictionFiles:
     def pde_path(self, rank: int) -> Path | None:
         return self.model(rank).pde_path
 
+    def adopt_resource_owner(self, owner: Closeable | None) -> None:
+        if owner is None:
+            return
+        if self._resource_owner is not None:
+            raise RuntimeError("PredictionFiles already owns an external resource.")
+        self._resource_owner = owner
+
+    def close(self) -> None:
+        owner = self._resource_owner
+        self._resource_owner = None
+        if owner is not None:
+            owner.close()
+
 
 @dataclass
 class PredictionData:
     name: str
     rank: int
     structure_path: Path
-    provider: str = "boltz"
+    provider: ProviderInfo
     display_label: str = ""
     token_plddt: np.ndarray | None = None
     token_plddt_source: PlddtSource | None = None
     pae: np.ndarray | None = None
     pde: np.ndarray | None = None
     contact_probs: np.ndarray | None = None
-    confidence: dict | None = None
-    summary_confidence: dict | None = None
-    affinity: dict | None = None
+    confidence: PredictionConfidence | None = None
     embeddings_s: np.ndarray | None = None
     embeddings_z: np.ndarray | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.provider, ProviderInfo):
+            raise ValueError("PredictionData.provider must be ProviderInfo.")
 
 
 @dataclass(frozen=True)
 class PredictionCandidate:
     path: Path
-    provider: str
-    provider_label: str
+    provider: ProviderInfo
     relative_path: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.provider, ProviderInfo):
+            raise ValueError("PredictionCandidate.provider must be ProviderInfo.")
+
+    @property
+    def provider_label(self) -> str:
+        return self.provider.label
 
 
 @dataclass
 class PredictionDiscovery:
     input_path: Path
     candidates: tuple[PredictionCandidate, ...]
-    _temporary_directory: Any | None = field(default=None, repr=False, compare=False)
+    _resource_owner: Closeable | None = field(default=None, repr=False, compare=False)
 
-    def scan(self, candidate: PredictionCandidate) -> PredictionFiles:
-        if candidate not in self.candidates:
-            raise ValueError(f"Unknown prediction candidate: {candidate.path}")
-        from .loader_discovery import scan_prediction_path_exact
+    def __post_init__(self) -> None:
+        self.candidates = tuple(self.candidates)
+        if not all(
+            isinstance(candidate, PredictionCandidate) for candidate in self.candidates
+        ):
+            raise ValueError(
+                "PredictionDiscovery.candidates must contain PredictionCandidate values."
+            )
 
-        files = scan_prediction_path_exact(candidate.path, input_path=self.input_path)
-        if self._temporary_directory is not None:
-            files._temporary_directory = self._temporary_directory
-            self._temporary_directory = None
-        return files
+    def take_resource_owner(self) -> Closeable | None:
+        owner = self._resource_owner
+        self._resource_owner = None
+        return owner
+
+    def close(self) -> None:
+        owner = self.take_resource_owner()
+        if owner is not None:
+            owner.close()

@@ -37,41 +37,6 @@ def _squeezed_float32_array(value) -> np.ndarray:
     return array
 
 
-def _normalise_confidence(confidence: dict | None) -> dict | None:
-    if confidence is None:
-        return None
-    normalised = dict(confidence)
-
-    if "structure_confidence" in normalised and "confidence_score" not in normalised:
-        normalised["confidence_score"] = normalised["structure_confidence"]
-
-    if "chain_ptm" in normalised and "chains_ptm" not in normalised:
-        chain_ptm = normalised["chain_ptm"]
-        if isinstance(chain_ptm, list):
-            normalised["chains_ptm"] = {
-                str(idx): value for idx, value in enumerate(chain_ptm)
-            }
-
-    if "chain_iptm" in normalised and "chains_iptm" not in normalised:
-        chain_iptm = normalised["chain_iptm"]
-        if isinstance(chain_iptm, list):
-            normalised["chains_iptm"] = {
-                str(idx): value for idx, value in enumerate(chain_iptm)
-            }
-
-    if "chain_pair_iptm" in normalised and "pair_chains_iptm" not in normalised:
-        matrix = normalised["chain_pair_iptm"]
-        if isinstance(matrix, list):
-            normalised["pair_chains_iptm"] = _matrix_list_to_nested_dict(matrix)
-
-    if "chain_pair_pae_min" in normalised and "pair_chains_pae_min" not in normalised:
-        matrix = normalised["chain_pair_pae_min"]
-        if isinstance(matrix, list):
-            normalised["pair_chains_pae_min"] = _matrix_list_to_nested_dict(matrix)
-
-    return normalised
-
-
 def _matrix_list_to_nested_dict(matrix: list) -> dict[str, dict[str, float]]:
     return {
         str(i): {str(j): value for j, value in enumerate(row)}

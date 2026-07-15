@@ -33,7 +33,7 @@ class _FakeProvider(BaseProvider):
         return self.matches
 
     def scan(self, path: Path) -> PredictionFiles:
-        return PredictionFiles(path.name, path, provider=self.key)
+        return self.prediction_files(name=path.name, pred_dir=path)
 
 
 def test_builtin_registry_preserves_detection_precedence() -> None:

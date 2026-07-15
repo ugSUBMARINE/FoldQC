@@ -35,9 +35,9 @@ class DependencyController:
         self._dependency_progress_close_button = None
         self._dependency_log_chunks: list[str] = []
 
-    def _ensure_feature_dependencies(self, features, *, feature_label: str) -> bool:
-        """Return whether feature dependencies are present and usable now."""
-        required = dependencies.required_dependency_keys(features)
+    def _ensure_dependencies(self, dependency_keys, *, feature_label: str) -> bool:
+        """Return whether explicit dependencies are present and usable now."""
+        required = dependencies.required_dependency_keys(dependency_keys)
         if not required:
             return True
 

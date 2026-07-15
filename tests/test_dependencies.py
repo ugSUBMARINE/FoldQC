@@ -3,15 +3,19 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from FoldQC import dependencies
 
 
-def test_feature_requirements_are_deduplicated_in_registry_order() -> None:
+def test_dependency_keys_are_validated_deduplicated_and_ordered() -> None:
     assert dependencies.required_dependency_keys(
-        ["pae_domain_spectral", "plot", "pae_domain_complete"]
+        ["sklearn", "matplotlib", "scipy", "matplotlib"]
     ) == ("matplotlib", "scipy", "sklearn")
+    with pytest.raises(ValueError, match="Unknown dependency"):
+        dependencies.required_dependency_keys(["plot"])
 
 
 def test_missing_dependencies_check_import_names() -> None:

@@ -9,11 +9,11 @@ from pathlib import Path
 
 import numpy as np
 
+from ..confidence import COMMON_CONFIDENCE_SUMMARY
 from ..loader_models import ModelFiles, PredictionData, PredictionFiles
 from ..loader_utils import (
     _first,
     _load_json,
-    _normalise_confidence,
     _safe_object_name,
 )
 from .base import BaseProvider, has_ancestor_candidate
@@ -63,14 +63,9 @@ def _looks_like_af3_server(pred_dir: Path) -> bool:
     )
 
 
-def _scan_af3_dir(pred_dir: Path) -> PredictionFiles:
+def _scan_af3_dir(pred_dir: Path, provider: BaseProvider) -> PredictionFiles:
     name = pred_dir.name
-    files = PredictionFiles(
-        name=name,
-        pred_dir=pred_dir,
-        provider="alphafold3",
-        input_path=pred_dir,
-    )
+    files = provider.prediction_files(name=name, pred_dir=pred_dir)
 
     ranking_scores = _load_af3_ranking_scores(pred_dir)
     samples: list[_AF3Sample] = []
@@ -148,15 +143,10 @@ def _scan_af3_dir(pred_dir: Path) -> PredictionFiles:
     return files
 
 
-def _scan_af3_server_dir(pred_dir: Path) -> PredictionFiles:
+def _scan_af3_server_dir(pred_dir: Path, provider: BaseProvider) -> PredictionFiles:
     """Discover ranked AlphaFold 3 Server output files."""
     name = pred_dir.name
-    files = PredictionFiles(
-        name=name,
-        pred_dir=pred_dir,
-        provider="af3_server",
-        input_path=pred_dir,
-    )
+    files = provider.prediction_files(name=name, pred_dir=pred_dir)
 
     model_re = re.compile(r"(.+)_model_(\d+)$")
     ranked_models: list[tuple[int, str, Path]] = []
@@ -211,10 +201,10 @@ def _load_af3_model_data(
     load_contact_probs: bool,
     load_token_plddt: bool,
     structure_index,
-) -> None:
+) -> dict | None:
     needs_full = load_pae or load_contact_probs or load_token_plddt
     if not needs_full or model.confidence_path is None:
-        return
+        return None
 
     full = _load_json(model.confidence_path)
     full_summary = {
@@ -222,10 +212,6 @@ def _load_af3_model_data(
         for key, value in full.items()
         if key not in {"pae", "contact_probs", "atom_plddts"}
     }
-    data.confidence = _normalise_confidence(
-        {**(data.summary_confidence or {}), **full_summary}
-    )
-
     if load_pae and "pae" in full:
         data.pae = np.asarray(full["pae"], dtype=np.float32)
     if load_contact_probs and "contact_probs" in full:
@@ -239,6 +225,7 @@ def _load_af3_model_data(
             np.asarray(full["atom_plddts"], dtype=np.float32)
         )
         data.token_plddt_source = "provider_atom_mean"
+    return full_summary
 
 
 def _af3_model_path(path: Path) -> Path | None:
@@ -334,11 +321,14 @@ def _ranking_sort_key(summary: dict, ranking_score: float | None = None) -> floa
 
 class AlphaFold3Provider(BaseProvider):
     key, label = "alphafold3", "AlphaFold 3"
+    confidence_summary = COMMON_CONFIDENCE_SUMMARY
     detect = staticmethod(_looks_like_af3)
-    scan = staticmethod(_scan_af3_dir)
+
+    def scan(self, path: Path) -> PredictionFiles:
+        return _scan_af3_dir(path, self)
 
     def load_model_data(self, pred_files, model, data, options, *, structure_index):
-        _load_af3_model_data(
+        confidence_payload = _load_af3_model_data(
             model,
             data,
             load_pae=options.load_pae,
@@ -346,6 +336,14 @@ class AlphaFold3Provider(BaseProvider):
             load_token_plddt=options.load_token_plddt,
             structure_index=structure_index,
         )
+        if confidence_payload:
+            self.merge_confidence_payload(
+                data,
+                confidence_payload,
+                model=model,
+                structure_index=structure_index,
+                source=model.confidence_path,
+            )
 
     def is_internal_candidate(self, candidate, candidates):
         seed, sample = _parse_af3_seed_sample(candidate.path.name)
@@ -359,4 +357,6 @@ class AlphaFold3Provider(BaseProvider):
 class AF3ServerProvider(AlphaFold3Provider):
     key, label = "af3_server", "AlphaFold 3 Server"
     detect = staticmethod(_looks_like_af3_server)
-    scan = staticmethod(_scan_af3_server_dir)
+
+    def scan(self, path: Path) -> PredictionFiles:
+        return _scan_af3_server_dir(path, self)

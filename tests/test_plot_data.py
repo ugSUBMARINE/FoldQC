@@ -10,6 +10,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from FoldQC import palettes, plot_data
+from FoldQC.confidence import PredictionConfidence
 from FoldQC.token_map import ResidueId, TokenInfo, TokenMap
 
 
@@ -50,20 +51,6 @@ def test_has_multiple_token_chains_counts_hetatm_chains() -> None:
     assert not plot_data.has_multiple_token_chains(
         TokenMap((_token(0, chain_id="A"), _token(1, chain_id="A", is_hetatm=True)))
     )
-
-
-@pytest.mark.parametrize(
-    ("key", "expected"),
-    [
-        ("pae_to_sel", (True, False, False, False)),
-        ("pae_contact", (True, False, False, False)),
-        ("pde_contact", (False, True, False, False)),
-        ("contact_prob_to_sel", (False, False, True, False)),
-        ("plddt_class", (False, False, False, True)),
-    ],
-)
-def test_line_member_load_flags(key: str, expected: tuple[bool, ...]) -> None:
-    assert plot_data.line_member_load_flags(key) == expected
 
 
 def test_nan_mean_std_handles_vectors_matrices_and_missing_arrays() -> None:
@@ -309,12 +296,9 @@ def test_site_summary_values_use_finite_site_means() -> None:
 def test_chain_iptm_matrix_plot_data_single_and_ensemble() -> None:
     token_map = TokenMap((_token(0, chain_id="A"), _token(1, chain_id="B")))
     data = types.SimpleNamespace(
-        confidence={
-            "pair_chains_iptm": {
-                "0": {"0": 0.91234, "1": 0.81234},
-                "1": {"0": 0.71234, "1": 0.61234},
-            }
-        }
+        confidence=PredictionConfidence(
+            pair_chain_iptm=np.array([[0.91234, 0.81234], [0.71234, 0.61234]])
+        )
     )
 
     matrix, rows, cols, title, label, row_labels, col_labels, text = (
@@ -344,12 +328,9 @@ def test_chain_iptm_matrix_plot_data_single_and_ensemble() -> None:
             rank=1,
             token_map=token_map,
             data=types.SimpleNamespace(
-                confidence={
-                    "pair_chains_iptm": {
-                        "0": {"0": 1.0, "1": 0.8},
-                        "1": {"0": 0.6, "1": 0.4},
-                    }
-                }
+                confidence=PredictionConfidence(
+                    pair_chain_iptm=np.array([[1.0, 0.8], [0.6, 0.4]])
+                )
             ),
         ),
     ]
@@ -373,7 +354,7 @@ def test_chain_iptm_matrix_plot_data_single_and_ensemble() -> None:
     assert row_labels == ["A", "B"]
     assert text[0, 0].startswith("0.956 +/-")
 
-    with pytest.raises(ValueError, match="Confidence JSON"):
+    with pytest.raises(ValueError, match="Chain confidence data"):
         plot_data.chain_iptm_matrix_plot_data(
             target_kind="single",
             data=types.SimpleNamespace(confidence=None),
@@ -390,20 +371,20 @@ def test_chain_iptm_matrix_plot_data_uses_chain_ptm_diagonal_for_ensemble() -> N
             rank=0,
             token_map=token_map,
             data=types.SimpleNamespace(
-                confidence={
-                    "chain_ptm": [0.9, 0.8],
-                    "chain_pair_iptm": [[0.0, 0.7], [0.7, 0.0]],
-                }
+                confidence=PredictionConfidence(
+                    chain_ptm=np.array([0.9, 0.8]),
+                    pair_chain_iptm=np.array([[0.9, 0.7], [0.7, 0.8]]),
+                )
             ),
         ),
         types.SimpleNamespace(
             rank=1,
             token_map=token_map,
             data=types.SimpleNamespace(
-                confidence={
-                    "chain_ptm": [1.0, 0.6],
-                    "chain_pair_iptm": [[0.0, 0.5], [0.5, 0.0]],
-                }
+                confidence=PredictionConfidence(
+                    chain_ptm=np.array([1.0, 0.6]),
+                    pair_chain_iptm=np.array([[1.0, 0.5], [0.5, 0.6]]),
+                )
             ),
         ),
     ]

@@ -17,6 +17,9 @@ import sysconfig
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
+
+DependencyKey = Literal["matplotlib", "scipy", "sklearn"]
 
 
 @dataclass(frozen=True)
@@ -38,20 +41,13 @@ DEPENDENCY_BY_KEY: dict[str, DependencySpec] = {
     dependency.key: dependency for dependency in DEPENDENCIES
 }
 
-FEATURE_DEPENDENCIES: dict[str, tuple[str, ...]] = {
-    "plot": ("matplotlib",),
-    "pae_domain_complete": ("scipy",),
-    "pae_domain_spectral": ("scipy", "sklearn"),
-}
 
-
-def required_dependency_keys(features: Iterable[str]) -> tuple[str, ...]:
-    """Return the dependency keys for *features* in registry order."""
-    requested = {
-        dependency_key
-        for feature in features
-        for dependency_key in FEATURE_DEPENDENCIES.get(str(feature), ())
-    }
+def required_dependency_keys(dependency_keys: Iterable[str]) -> tuple[str, ...]:
+    """Validate and order explicit dependency keys in registry order."""
+    requested = {str(key) for key in dependency_keys}
+    unknown = requested - set(DEPENDENCY_BY_KEY)
+    if unknown:
+        raise ValueError(f"Unknown dependency keys: {sorted(unknown)!r}.")
     return tuple(
         dependency.key for dependency in DEPENDENCIES if dependency.key in requested
     )

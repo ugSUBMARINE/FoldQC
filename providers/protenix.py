@@ -9,6 +9,7 @@ from typing import Any
 
 import numpy as np
 
+from ..confidence import PROTENIX_CONFIDENCE_SUMMARY
 from ..loader_models import ModelFiles, PredictionData, PredictionFiles
 from ..loader_utils import (
     STRUCTURE_SUFFIXES,
@@ -50,7 +51,7 @@ def _looks_like_protenix(pred_dir: Path) -> bool:
     return False
 
 
-def _scan_protenix_dir(pred_dir: Path) -> PredictionFiles:
+def _scan_protenix_dir(pred_dir: Path, provider: BaseProvider) -> PredictionFiles:
     """Discover Protenix seed/predictions output files."""
     candidates = _protenix_prediction_candidates(pred_dir)
     if not candidates:
@@ -62,12 +63,7 @@ def _scan_protenix_dir(pred_dir: Path) -> PredictionFiles:
         )
 
     name = _protenix_prediction_name(candidates, pred_dir)
-    files = PredictionFiles(
-        name=name,
-        pred_dir=pred_dir,
-        provider="protenix",
-        input_path=pred_dir,
-    )
+    files = provider.prediction_files(name=name, pred_dir=pred_dir)
 
     candidates.sort(
         key=lambda item: (
@@ -234,8 +230,11 @@ def _protenix_prediction_name(
 
 class ProtenixProvider(BaseProvider):
     key, label = "protenix", "Protenix"
+    confidence_summary = PROTENIX_CONFIDENCE_SUMMARY
     detect = staticmethod(_looks_like_protenix)
-    scan = staticmethod(_scan_protenix_dir)
+
+    def scan(self, path: Path) -> PredictionFiles:
+        return _scan_protenix_dir(path, self)
 
     def load_model_data(self, pred_files, model, data, options, *, structure_index):
         _load_protenix_model_data(

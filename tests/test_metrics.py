@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import sys
+from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from FoldQC import metrics
+from FoldQC import compute, metrics
 
 
 def test_metric_keys_preserve_gui_order() -> None:
@@ -37,169 +38,113 @@ def test_metric_keys_preserve_gui_order() -> None:
     ]
 
 
-def test_property_dicts_match_metric_specs() -> None:
-    by_key = {prop["key"]: prop for prop in metrics.PROPERTIES}
-
-    assert by_key["plddt_class"]["group"] == "pLDDT"
-    assert by_key["plddt"]["needs_plddt"] is True
-    assert by_key["pae_row_mean"]["tier"] == "normal"
-    assert by_key["pae_contact"]["tier"] == "advanced"
-    assert by_key["pae_domain_complete"]["tier"] == "experimental"
-    assert by_key["pde_within_sel"]["tier"] == "advanced"
-    assert by_key["chain_iptm"]["group"] == "Chain/interface"
-    assert metrics.METRIC_BY_KEY["chain_iptm"].needs_confidence is True
+def test_metric_registry_owns_behavioral_metadata() -> None:
+    assert metrics.METRICS.require("plddt_class").group == "pLDDT"
+    assert metrics.METRICS.require("plddt").load_capabilities == {"plddt"}
+    assert metrics.METRICS.require("pae_contact").needs_contact_shell
+    assert metrics.METRICS.require("pae_contact").tier == "advanced"
+    assert metrics.METRICS.require("pae_domain_complete").dependency_keys == ("scipy",)
+    assert metrics.METRICS.require("pae_domain_spectral").dependency_keys == (
+        "scipy",
+        "sklearn",
+    )
+    assert metrics.METRICS.require("chain_iptm").needs_confidence
+    assert metrics.METRICS.find("missing") is None
+    with pytest.raises(KeyError, match="Unknown metric"):
+        metrics.METRICS.require("missing")
 
 
 @pytest.mark.parametrize(
     ("key", "label"),
     [
-        ("pae_row_mean", "  PAE \u2014 row mean"),
-        (
-            "pae_col_to_sel",
-            "  PAE \u2014 column mean to selection [Advanced]",
-        ),
-        ("pde_contact", "  PDE \u2014 contact-filtered to selection [Advanced]"),
+        ("pae_row_mean", "  PAE — row mean"),
+        ("pae_col_to_sel", "  PAE — column mean to selection [Advanced]"),
+        ("pde_contact", "  PDE — contact-filtered to selection [Advanced]"),
         (
             "pae_domain_spectral",
-            "  PAE \u2014 domain labels (spectral clustering) [Experimental]",
+            "  PAE — domain labels (spectral clustering) [Experimental]",
         ),
     ],
 )
 def test_property_combo_label_adds_tier_marker(key: str, label: str) -> None:
-    assert metrics.property_combo_label(metrics.METRIC_BY_KEY[key]) == label
-    assert metrics.property_combo_label(metrics.PROPERTY_BY_KEY[key]) == label
+    assert metrics.property_combo_label(metrics.METRICS.require(key)) == label
 
 
-@pytest.mark.parametrize(
-    ("key", "expected"),
-    [
-        (
-            "plddt",
-            {
-                "load_pae": False,
-                "load_pde": False,
-                "load_contact_probs": False,
-                "load_token_plddt": True,
-            },
-        ),
-        (
-            "pae_to_sel",
-            {
-                "load_pae": True,
-                "load_pde": False,
-                "load_contact_probs": False,
-                "load_token_plddt": False,
-            },
-        ),
-        (
-            "pae_contact",
-            {
-                "load_pae": True,
-                "load_pde": False,
-                "load_contact_probs": False,
-                "load_token_plddt": False,
-            },
-        ),
-        (
-            "pde_contact",
-            {
-                "load_pae": False,
-                "load_pde": True,
-                "load_contact_probs": False,
-                "load_token_plddt": False,
-            },
-        ),
-        (
-            "contact_prob_to_sel",
-            {
-                "load_pae": False,
-                "load_pde": False,
-                "load_contact_probs": True,
-                "load_token_plddt": False,
-            },
-        ),
-        (
-            "ensemble_plddt_mean",
-            {
-                "load_pae": False,
-                "load_pde": False,
-                "load_contact_probs": False,
-                "load_token_plddt": True,
-            },
-        ),
-    ],
-)
-def test_metric_load_flags(key: str, expected: dict[str, bool]) -> None:
-    assert metrics.metric_load_flags(metrics.METRIC_BY_KEY[key]) == expected
-    assert metrics.metric_load_flags(metrics.PROPERTY_BY_KEY[key]) == expected
-
-
-def test_metric_classification_and_plot_helpers() -> None:
-    assert metrics.is_domain_label_metric("pae_domain_complete") is True
-    assert metrics.is_domain_label_metric("pae_row_mean") is False
-    assert metrics.metric_label("plddt") == "pLDDT \u2014 continuous"
-    assert metrics.metric_label("unknown_metric") == "unknown_metric"
-    assert metrics.line_compute_key("plddt_class") == "plddt"
-    assert metrics.line_ylabel("pae_domain_spectral") == "Domain label"
-    assert metrics.line_ylabel("contact_prob_mean") == "Interaction probability"
-    assert metrics.line_ylabel("chain_iptm") == "ipTM"
-    assert metrics.plot_uses_reference_scope("pae_to_sel", "line") is False
-    assert metrics.plot_uses_reference_scope("pae_to_sel", "distribution") is False
-    assert metrics.plot_uses_reference_scope("pae_to_sel", "matrix") is True
-    assert metrics.plot_uses_reference_scope("pae_col_to_sel", "line") is False
-    assert metrics.plot_uses_reference_scope("pae_contact", "distribution") is False
-    assert metrics.plot_uses_reference_scope("pae_sym_within_sel", "line") is True
-    assert metrics.plot_uses_reference_scope("pde_within_sel", "line") is True
-    assert metrics.plot_uses_reference_scope("plddt", "distribution") is True
-    assert metrics.plot_uses_reference_scope("chain_iptm", "distribution") is False
-    assert metrics.plot_uses_reference_scope("chain_iptm", "matrix") is False
-    assert metrics.matrix_source_for_metric("pae_to_sel") == (
-        "pae",
-        "Predicted Aligned Error (\u00c5)",
-        "PAE (\u00c5)",
+def test_metric_plot_matrix_and_export_metadata() -> None:
+    pae = metrics.METRICS.require("pae_to_sel")
+    assert pae.load_capabilities == {"pae"}
+    assert pae.reference_scoped_plots == {"matrix"}
+    assert pae.matrix == metrics.MatrixSpec(
+        "pae", "Predicted Aligned Error (Å)", "PAE (Å)"
     )
-    assert metrics.matrix_source_for_metric("chain_iptm") == (
-        "chain_iptm",
-        "Pairwise chain ipTM",
-        "ipTM",
+    domain = metrics.METRICS.require("pae_domain_spectral")
+    assert domain.is_domain_label
+    assert domain.line_ylabel == "Domain label"
+    ensemble = metrics.METRICS.require("ensemble_plddt_std")
+    assert ensemble.aggregate_kind == "ensemble_std"
+    chain = metrics.METRICS.require("chain_iptm")
+    assert (chain.value_unit, chain.value_semantics) == (
+        "iptm",
+        "higher_is_better",
     )
-    assert metrics.matrix_source_for_metric("plddt") is None
 
 
-def test_ensemble_aggregate_kind() -> None:
-    assert metrics.ensemble_aggregate_kind("ensemble_rmsd") == "ensemble_rmsd"
-    assert metrics.ensemble_aggregate_kind("ensemble_plddt_mean") == "ensemble_mean"
-    assert metrics.ensemble_aggregate_kind("ensemble_plddt_std") == "ensemble_std"
-    assert metrics.ensemble_aggregate_kind("future_ensemble_metric") == "ensemble_mean"
+def test_plot_registry_is_ordered_and_strict() -> None:
+    assert [spec.key for spec in metrics.PLOTS] == [
+        "line",
+        "distribution",
+        "matrix",
+        "pae_summary",
+        "pde_summary",
+        "binding_site_fingerprint",
+        "ensemble_site_summary",
+    ]
+    assert metrics.PLOTS.require("matrix").dependency_keys == ("matplotlib",)
+    assert not metrics.PLOTS.require("pae_summary").requires_metric
+    assert metrics.PLOTS.find("missing") is None
 
 
-@pytest.mark.parametrize(
-    ("key", "expected"),
-    [
-        ("plddt_class", ("plddt", "higher_is_better")),
-        ("pae_domain_complete", ("label", "categorical_label")),
-        ("pae_contact", ("angstrom", "lower_is_better")),
-        ("pde_contact", ("angstrom", "lower_is_better")),
-        ("contact_prob_mean", ("probability", "higher_is_better")),
-        ("chain_iptm", ("iptm", "higher_is_better")),
-        ("ensemble_plddt_std", ("plddt", "lower_is_better")),
-        ("unknown_metric", ("", "")),
-    ],
-)
-def test_metric_units_and_semantics(key: str, expected: tuple[str, str]) -> None:
-    assert metrics.metric_units_and_semantics(key) == expected
+def test_registry_rejects_duplicates_and_invalid_combinations() -> None:
+    spec = metrics.METRICS.require("plddt")
+    with pytest.raises(ValueError, match="unique"):
+        metrics.MetricRegistry((spec, spec))
+    invalid = metrics.MetricSpec(
+        "invalid",
+        "Invalid",
+        "Test",
+        frozenset({"plddt"}),
+        "plddt",
+        "higher_is_better",
+        "pLDDT",
+        "{target_text}",
+        needs_contact_shell=True,
+    )
+    with pytest.raises(ValueError, match="contact shell"):
+        metrics.MetricRegistry((invalid,))
+    with pytest.raises(ValueError, match="unique"):
+        plot = metrics.PLOTS.require("line")
+        metrics.PlotRegistry((plot, plot))
 
 
-def test_all_metrics_have_non_empty_preview_template() -> None:
-    """Every MetricSpec must declare a preview_template so gui_rules has no gaps."""
-    missing = [spec.key for spec in metrics.METRICS if not spec.preview_template]
-    assert missing == [], f"Missing preview_template for: {missing}"
-
-
-def test_preview_templates_are_valid_format_strings() -> None:
-    """All templates must accept the three standard placeholders without error."""
-    for spec in metrics.METRICS:
-        rendered = spec.preview_template.format(
-            target_text="T", ref_sel="R", cutoff="5.0 \u00c5"
+def test_registry_values_are_immutable_and_validate_cross_field_contracts() -> None:
+    spec = metrics.METRICS.require("pae_to_sel")
+    with pytest.raises(FrozenInstanceError):
+        spec.label = "changed"
+    with pytest.raises(ValueError, match="missing required fields"):
+        metrics.MetricRegistry((replace(spec, preview_template="{target_text}"),))
+    with pytest.raises(ValueError, match="unknown preview fields"):
+        metrics.MetricRegistry(
+            (replace(spec, preview_template="{target_text} {ref_sel} {unknown}"),)
         )
-        assert rendered, f"Empty rendered preview for {spec.key}"
+    with pytest.raises(ValueError, match="not one of its data requirements"):
+        metrics.MetricRegistry((replace(spec, requirements=frozenset({"pde"})),))
+    with pytest.raises(ValueError, match="Unknown plot key"):
+        metrics.PlotRegistry((replace(metrics.PLOTS[0], key="unknown"),))
+
+
+def test_preview_templates_and_dispatch_are_complete() -> None:
+    for spec in metrics.METRICS:
+        assert spec.preview_template.format(
+            target_text="T", ref_sel="R", cutoff="5.0 Å"
+        )
+    compute.validate_dispatch_registry()

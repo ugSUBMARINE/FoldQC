@@ -6,11 +6,9 @@ from pathlib import Path
 
 import numpy as np
 
+from .confidence import PredictionConfidence, validate_prediction_confidence
 from .loader_models import PredictionData
-
-
-class ProviderContractError(ValueError):
-    """An advertised provider field was absent from its source file."""
+from .provider_errors import ProviderContractError
 
 
 def _numeric_array(value: object, field: str) -> np.ndarray:
@@ -67,6 +65,8 @@ def _validate_matrix(value: object, field: str, token_count: int) -> np.ndarray:
 def normalize_and_validate_prediction_data(
     data: PredictionData,
     token_count: int,
+    *,
+    chain_count: int | None = None,
 ) -> PredictionData:
     """Normalize all loaded fields and enforce the canonical token contract."""
     token_plddt = getattr(data, "token_plddt", None)
@@ -128,10 +128,12 @@ def normalize_and_validate_prediction_data(
         data.embeddings_s = _readonly_contiguous(s)
         data.embeddings_z = _readonly_contiguous(z)
 
-    for field in ("confidence", "summary_confidence", "affinity"):
-        value = getattr(data, field, None)
-        if value is not None and not isinstance(value, dict):
-            raise ValueError(f"{field} must be a dictionary or None.")
+    confidence = getattr(data, "confidence", None)
+    if confidence is not None and not isinstance(confidence, PredictionConfidence):
+        raise ValueError("confidence must be PredictionConfidence or None.")
+    if confidence is not None and chain_count is None:
+        raise ValueError("chain_count is required to validate confidence data.")
+    data.confidence = validate_prediction_confidence(confidence, chain_count or 0)
     return data
 
 

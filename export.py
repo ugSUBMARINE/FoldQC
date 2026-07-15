@@ -18,7 +18,7 @@ import numpy as np
 from . import metrics
 
 if TYPE_CHECKING:
-    from .loader import PredictionData
+    from .loader_models import PredictionData, PredictionFiles
     from .token_map import TokenMap
 
 SCHEMA_VERSION = "2"
@@ -102,7 +102,7 @@ def model_label_for_rank(pred_files, rank: int, *, fallback: str = "") -> str:
 
 def build_token_rows(
     *,
-    pred_files,
+    pred_files: PredictionFiles,
     data: PredictionData,
     token_map: TokenMap,
     values,
@@ -120,10 +120,9 @@ def build_token_rows(
     aggregate_kind: str = "single_model",
 ) -> list[dict[str, object]]:
     """Build token-level CSV rows from a computed metric array."""
-    unit, semantics = metrics.metric_units_and_semantics(metric_key)
-    label = (
-        metric_label if metric_label is not None else metrics.metric_label(metric_key)
-    )
+    metric_spec = metrics.METRICS.require(metric_key)
+    unit, semantics = metric_spec.value_unit, metric_spec.value_semantics
+    label = metric_label if metric_label is not None else metric_spec.label
     arr = np.asarray(values)
     ref_set = set(reference_indices or [])
     contact_set = set(contact_indices or [])
@@ -135,7 +134,7 @@ def build_token_rows(
 
     common = {
         "export_schema_version": SCHEMA_VERSION,
-        "provider": getattr(pred_files, "provider", getattr(data, "provider", "")),
+        "provider": pred_files.provider.key,
         "prediction_name": getattr(pred_files, "name", getattr(data, "name", "")),
         "input_path": str(getattr(pred_files, "input_path", "") or ""),
         "structure_path": structure_path,

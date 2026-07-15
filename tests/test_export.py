@@ -10,6 +10,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from FoldQC import export
+from FoldQC.providers.registry import BUILTIN_PROVIDERS
 from FoldQC.token_map import ResidueId, TokenInfo, TokenMap
 
 
@@ -33,7 +34,7 @@ def _token(
 class _PredictionFiles:
     def __init__(self, root: Path, ranks=(0, 1)) -> None:
         self.name = "target"
-        self.provider = "boltz"
+        self.provider = BUILTIN_PROVIDERS.get("boltz").info
         self.input_path = root
         self.pred_dir = root
         self.models = [

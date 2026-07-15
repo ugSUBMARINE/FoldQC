@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 
+from .confidence import merge_prediction_confidence
 from .data_contracts import normalize_and_validate_prediction_data
 from .loader_models import PredictionData
 from .structure_index import StructureIndex
@@ -17,7 +18,6 @@ _ARRAY_FIELDS = (
     "embeddings_s",
     "embeddings_z",
 )
-_METADATA_FIELDS = ("confidence", "summary_confidence", "affinity")
 _IDENTITY_FIELDS = ("name", "provider", "structure_path")
 _DATA_FIELDS = tuple(item.name for item in fields(PredictionData))
 
@@ -49,7 +49,9 @@ class ModelState:
                 f"{self.structure_index.path!s}."
             )
         normalize_and_validate_prediction_data(
-            self.data, len(self.structure_index.token_map)
+            self.data,
+            len(self.structure_index.token_map),
+            chain_count=len(self.structure_index.token_map.chain_order),
         )
 
     @property
@@ -86,7 +88,9 @@ class ModelState:
                 )
 
         normalize_and_validate_prediction_data(
-            incoming, len(self.structure_index.token_map)
+            incoming,
+            len(self.structure_index.token_map),
+            chain_count=len(self.structure_index.token_map.chain_order),
         )
 
     def validate_structure_index(self, structure_index: StructureIndex) -> None:
@@ -99,40 +103,36 @@ class ModelState:
     def merge_data(self, incoming: PredictionData) -> bool:
         """Monotonically merge a partial provider result in place.
 
-        Existing arrays remain authoritative. Metadata dictionaries are shallowly
-        enriched, with incoming values winning for matching keys.
+        Existing arrays and confidence values remain authoritative. Incoming
+        confidence may only fill fields that were previously missing.
         """
         self.validate_merge(incoming)
-        changed = False
-
+        additions: list[tuple[str, object]] = []
         for name in _ARRAY_FIELDS:
             if getattr(self.data, name, None) is not None:
                 continue
             value = getattr(incoming, name, None)
             if value is None:
                 continue
+            additions.append((name, value))
+
+        merged_confidence = merge_prediction_confidence(
+            self.data.confidence,
+            incoming.confidence,
+            context=f"model_{self.rank} confidence",
+        )
+        confidence_changed = merged_confidence is not self.data.confidence
+        if not additions and not confidence_changed:
+            return False
+
+        for name, value in additions:
             setattr(self.data, name, value)
-            changed = True
             if name == "token_plddt":
                 self.data.token_plddt_source = incoming.token_plddt_source
-
-        for name in _METADATA_FIELDS:
-            incoming_value = getattr(incoming, name, None)
-            if incoming_value is None:
-                continue
-            current_value = getattr(self.data, name, None)
-            merged = (
-                {**current_value, **incoming_value}
-                if isinstance(current_value, dict) and isinstance(incoming_value, dict)
-                else incoming_value
-            )
-            if current_value != merged:
-                setattr(self.data, name, merged)
-                changed = True
-
-        if changed:
-            self._version += 1
-        return changed
+        if confidence_changed:
+            self.data.confidence = merged_confidence
+        self._version += 1
+        return True
 
     def snapshot(self) -> ModelStateSnapshot:
         """Capture field references needed to restore this state in place."""

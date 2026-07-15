@@ -14,7 +14,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -22,6 +22,7 @@ from .compute import plddt_values_for
 from .model_state import ModelState
 
 if TYPE_CHECKING:
+    from .loader_models import PredictionData, PredictionFiles
     from .token_map import TokenMap
 
 
@@ -84,7 +85,7 @@ class PreparedEnsembleMember:
         return Path(self.model_state.data.structure_path)
 
     @property
-    def data(self):
+    def data(self) -> PredictionData:
         return self.model_state.data
 
     @property
@@ -96,7 +97,7 @@ class PreparedEnsembleMember:
 class PreparedEnsemble:
     """Atomically prepared ensemble data borrowed from one prediction."""
 
-    pred_files: Any
+    pred_files: PredictionFiles
     group_name: str
     members: tuple[PreparedEnsembleMember, ...]
     skip_alignment: bool
@@ -104,7 +105,6 @@ class PreparedEnsemble:
     core_indices: tuple[int, ...]
     plddt_mean: np.ndarray
     plddt_std: np.ndarray
-    _owns_prediction_files: bool = False
 
 
 @dataclass(frozen=True)
@@ -125,7 +125,7 @@ class AlignmentPlan:
     rmsd: np.ndarray
 
 
-def default_group_name(pred_files) -> str:
+def default_group_name(pred_files: PredictionFiles) -> str:
     """Return the default viewer group name for a prediction ensemble."""
     first_obj = pred_files.models[0].object_name
     obj_prefix = first_obj.rsplit("_", 1)[0]
@@ -173,7 +173,7 @@ def validate_prepared_members(
             )
 
 
-def _data_load_flags(_existing: Any | None) -> dict[str, bool]:
+def _data_load_flags(_existing: PredictionData | None) -> dict[str, bool]:
     """Return the minimal flags needed to add canonical pLDDT to a state."""
     return {
         "load_pae": False,
@@ -183,13 +183,13 @@ def _data_load_flags(_existing: Any | None) -> dict[str, bool]:
     }
 
 
-def _has_plddt(data: Any | None) -> bool:
+def _has_plddt(data: PredictionData | None) -> bool:
     values, _source = plddt_values_for(data)
     return values is not None
 
 
 def prepare_ensemble(
-    pred_files: Any,
+    pred_files: PredictionFiles,
     *,
     skip_alignment: bool,
     existing_states_by_rank: Mapping[int, ModelState] | None = None,
@@ -269,7 +269,7 @@ def prepare_ensemble(
     )
 
 
-def _member_plddt(member: Any) -> np.ndarray:
+def _member_plddt(member: PreparedEnsembleMember) -> np.ndarray:
     plddt, _source = plddt_values_for(member.data)
     if plddt is None:
         raise ValueError(f"pLDDT data are not available for model_{member.rank}.")

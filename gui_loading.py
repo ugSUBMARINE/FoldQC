@@ -10,6 +10,7 @@ import numpy as np
 
 from . import ensemble, gui_rules, metrics, plot_data, reports
 from .compat import ItemIsEnabled, QtCore, QtWidgets, WindowCloseButtonHint
+from .loader_models import DataCapability, PredictionData, PredictionFiles
 from .model_state import ModelState, ModelStateSnapshot
 from .mol_viewer import (
     add_objects_to_group,
@@ -34,11 +35,11 @@ logger = logging.getLogger(__name__)
 _ARCHIVE_SUFFIXES = (".zip", ".tar", ".tar.gz", ".tgz")
 
 
-@dataclass(frozen=True)
+@dataclass
 class InitialLoadResult:
     """Provider files and initial lazy data prepared by a background job."""
 
-    pred_files: object
+    _pred_files: PredictionFiles | None
     model_state: ModelState
     display_path: Path
 
@@ -46,14 +47,29 @@ class InitialLoadResult:
     def rank(self) -> int:
         return self.model_state.rank
 
+    @property
+    def pred_files(self) -> PredictionFiles:
+        if self._pred_files is None:
+            raise RuntimeError("InitialLoadResult ownership was already transferred.")
+        return self._pred_files
+
+    def take_prediction_files(self) -> PredictionFiles:
+        files = self.pred_files
+        self._pred_files = None
+        return files
+
+    def close(self) -> None:
+        if self._pred_files is not None:
+            self._pred_files.close()
+            self._pred_files = None
+
 
 @dataclass(frozen=True)
 class ModelSwitchResult:
     """One ranked model prepared without touching Qt widgets or PyMOL."""
 
-    pred_files: object
+    pred_files: PredictionFiles
     model_state: ModelState
-    _owns_prediction_files: bool = False
 
     @property
     def rank(self) -> int:
@@ -66,23 +82,27 @@ class DataLoadItem:
 
     rank: int
     model_label: str
-    flags: tuple[tuple[str, bool], ...]
+    capabilities: frozenset[DataCapability]
     model_state: ModelState
     expected_version: int
     expected_ensemble: ensemble.EnsembleState | None = None
     phase_arrays: tuple[str, ...] = ()
 
     def load_kwargs(self) -> dict[str, bool]:
-        return dict(self.flags)
+        return {
+            "load_pae": "pae" in self.capabilities,
+            "load_pde": "pde" in self.capabilities,
+            "load_contact_probs": "contact_probs" in self.capabilities,
+            "load_token_plddt": "plddt" in self.capabilities,
+        }
 
 
 @dataclass(frozen=True)
 class DataLoadBatchResult:
     """Atomically committable lazy data returned by one worker task."""
 
-    pred_files: object
-    loaded: tuple[tuple[DataLoadItem, object], ...]
-    _owns_prediction_files: bool = False
+    pred_files: PredictionFiles
+    loaded: tuple[tuple[DataLoadItem, PredictionData], ...]
 
 
 @dataclass(frozen=True)
@@ -97,7 +117,7 @@ class ModelStoreSnapshot:
 class InitialPredictionSnapshot:
     """GUI state restored if initial prediction activation fails."""
 
-    pred_files: object | None
+    pred_files: PredictionFiles | None
     model_store: ModelStoreSnapshot
     ensemble_state: ensemble.EnsembleState | None
     display_path: str
@@ -155,42 +175,48 @@ def _scan_and_load_initial_prediction(
     preferred_rank: int | None,
     report_phase,
 ) -> InitialLoadResult:
-    from .loader import load_prediction_data
+    from .loader import load_prediction_data, scan_prediction_candidate
     from .structure_index import StructureIndex
 
     display_path = _session_path_for_candidate(discovery, candidate)
     report_phase(f"Scanning {candidate.provider_label} output…")
-    pred_files = discovery.scan(candidate)
-    if not pred_files.models:
-        raise ValueError("No ranked model files were found.")
+    pred_files = scan_prediction_candidate(discovery, candidate)
+    try:
+        if not pred_files.models:
+            raise ValueError("No ranked model files were found.")
 
-    available_ranks = {model.rank for model in pred_files.models}
-    rank = (
-        preferred_rank
-        if preferred_rank is not None and preferred_rank in available_ranks
-        else pred_files.models[0].rank
-    )
-    model = pred_files.model(rank)
-    report_phase(f"Indexing {model.display_label} structure…")
-    structure_index = StructureIndex.from_path(pred_files.structure_path(model.rank))
-    report_phase(f"Loading {model.display_label} data…")
-    pred_data = load_prediction_data(
-        pred_files,
-        rank,
-        load_pae=False,
-        load_pde=False,
-        load_contact_probs=False,
-        structure_index=structure_index,
-    )
-    return InitialLoadResult(
-        pred_files,
-        ModelState(
-            rank=rank,
-            data=pred_data,
+        available_ranks = {model.rank for model in pred_files.models}
+        rank = (
+            preferred_rank
+            if preferred_rank is not None and preferred_rank in available_ranks
+            else pred_files.models[0].rank
+        )
+        model = pred_files.model(rank)
+        report_phase(f"Indexing {model.display_label} structure…")
+        structure_index = StructureIndex.from_path(
+            pred_files.structure_path(model.rank)
+        )
+        report_phase(f"Loading {model.display_label} data…")
+        pred_data = load_prediction_data(
+            pred_files,
+            rank,
+            load_pae=False,
+            load_pde=False,
+            load_contact_probs=False,
             structure_index=structure_index,
-        ),
-        display_path,
-    )
+        )
+        return InitialLoadResult(
+            pred_files,
+            ModelState(
+                rank=rank,
+                data=pred_data,
+                structure_index=structure_index,
+            ),
+            display_path,
+        )
+    except Exception:
+        pred_files.close()
+        raise
 
 
 def _load_rank_data(pred_files, rank: int, report_phase) -> ModelSwitchResult:
@@ -245,30 +271,6 @@ def _prepare_ensemble_job(
         skip_alignment=skip_alignment,
         existing_states_by_rank=existing_states_by_rank,
         report_phase=report_phase,
-    )
-
-
-def _score_table_has_values(value) -> bool:
-    return isinstance(value, (dict, list)) and bool(value)
-
-
-def _pair_score_table_has_values(value) -> bool:
-    if isinstance(value, dict):
-        return any(_score_table_has_values(row) for row in value.values())
-    if isinstance(value, list):
-        return any(_score_table_has_values(row) for row in value)
-    return False
-
-
-def _confidence_has_chain_iptm_metric_data(confidence) -> bool:
-    if not isinstance(confidence, dict):
-        return False
-    return any(
-        _score_table_has_values(confidence.get(key))
-        for key in ("chains_iptm", "chain_iptm", "chains_ptm")
-    ) or any(
-        _pair_score_table_has_values(confidence.get(key))
-        for key in ("pair_chains_iptm", "chain_pair_iptm")
     )
 
 
@@ -498,7 +500,8 @@ class GuiLoadingController:
 
         try:
             snapshot = self._capture_initial_prediction_context()
-            self._pred_files = result.pred_files
+            new_pred_files = result.take_prediction_files()
+            self._pred_files = new_pred_files
             self._ensemble = None
             self._dir_edit.setText(str(result.display_path))
 
@@ -526,6 +529,8 @@ class GuiLoadingController:
                     logger.exception(
                         "Could not fully restore the previous prediction state"
                     )
+            if "new_pred_files" in locals():
+                self._job_runner.dispose(new_pred_files)
             if did_load:
                 try:
                     delete_viewer_names([obj_name])
@@ -533,11 +538,15 @@ class GuiLoadingController:
                     logger.exception(
                         "Could not remove the newly loaded prediction object"
                     )
-            self._job_runner.dispose(result)
             self._finish_prediction_load(request_id)
             QtWidgets.QMessageBox.warning(self, APP_TITLE, str(exc))
             return
 
+        if (
+            snapshot.pred_files is not None
+            and snapshot.pred_files is not self._pred_files
+        ):
+            self._job_runner.dispose(snapshot.pred_files)
         self._finish_prediction_load(request_id, save_session=True)
 
     def _on_prediction_load_error(self, request_id: int, failure) -> None:
@@ -973,7 +982,7 @@ class GuiLoadingController:
     def _defer_action_for_data(
         self,
         target,
-        requested_flags: dict[str, bool],
+        requested_capabilities: frozenset[DataCapability],
         continuation,
         *,
         error_title: str,
@@ -984,7 +993,7 @@ class GuiLoadingController:
             return False
         try:
             items = self._data_load_items_for_target(
-                target, requested_flags, allow_partial=allow_partial
+                target, requested_capabilities, allow_partial=allow_partial
             )
         except ValueError as exc:
             QtWidgets.QMessageBox.warning(self, error_title, str(exc))
@@ -1022,7 +1031,7 @@ class GuiLoadingController:
     def _data_load_items_for_target(
         self,
         target,
-        requested_flags: dict[str, bool],
+        requested_capabilities: frozenset[DataCapability],
         *,
         allow_partial: bool = False,
     ) -> list[DataLoadItem]:
@@ -1042,19 +1051,19 @@ class GuiLoadingController:
                 )
             slots.append(state)
 
-        flag_capabilities = {
-            "load_pae": ("pae", "pae"),
-            "load_pde": ("pde", "pde"),
-            "load_contact_probs": ("contact_probs", "contact_probs"),
-            "load_token_plddt": ("plddt", "token_plddt"),
+        capability_attrs = {
+            "pae": "pae",
+            "pde": "pde",
+            "contact_probs": "contact_probs",
+            "plddt": "token_plddt",
         }
         unavailable: list[str] = []
         model_getter = getattr(self._pred_files, "model", None)
         for model_state in slots:
             requested_missing = [
                 capability
-                for flag, (capability, attr) in flag_capabilities.items()
-                if requested_flags.get(flag, False)
+                for capability, attr in capability_attrs.items()
+                if capability in requested_capabilities
                 and getattr(model_state.data, attr, None) is None
             ]
             if not requested_missing:
@@ -1086,7 +1095,7 @@ class GuiLoadingController:
             seen.add(key)
             item = self._data_load_item(
                 model_state,
-                requested_flags,
+                requested_capabilities,
                 expected_ensemble=expected_ensemble,
                 allow_partial=allow_partial,
             )
@@ -1097,46 +1106,44 @@ class GuiLoadingController:
     def _data_load_item(
         self,
         model_state: ModelState,
-        requested_flags: dict[str, bool],
+        requested_capabilities: frozenset[DataCapability],
         *,
         expected_ensemble: ensemble.EnsembleState | None,
         allow_partial: bool = False,
     ) -> DataLoadItem | None:
         data = model_state.data
-        flag_attrs = {
-            "load_pae": ("pae", "PAE"),
-            "load_pde": ("pde", "PDE"),
-            "load_contact_probs": ("contact_probs", "interaction probabilities"),
-            "load_token_plddt": ("token_plddt", "pLDDT"),
+        capability_attrs = {
+            "pae": ("pae", "PAE"),
+            "pde": ("pde", "PDE"),
+            "contact_probs": ("contact_probs", "interaction probabilities"),
+            "plddt": ("token_plddt", "pLDDT"),
         }
-        requested = {
-            name: bool(requested_flags.get(name, False)) for name in flag_attrs
-        }
+        requested = set(requested_capabilities)
         if allow_partial:
             model_getter = getattr(self._pred_files, "model", None)
             model = model_getter(model_state.rank) if callable(model_getter) else None
-            for name, (attr, _label) in flag_attrs.items():
-                capability = "plddt" if attr == "token_plddt" else attr
+            for capability, (attr, _label) in capability_attrs.items():
                 if getattr(data, attr, None) is None and (
                     model is None or not model.supports(capability)
                 ):
-                    requested[name] = False
+                    requested.discard(capability)
         missing = [
-            name
-            for name, (attr, _label) in flag_attrs.items()
-            if requested[name] and getattr(data, attr, None) is None
+            capability
+            for capability, (attr, _label) in capability_attrs.items()
+            if capability in requested and getattr(data, attr, None) is None
         ]
         if not missing:
             return None
 
-        flags = {name: name in missing for name in flag_attrs}
-        phase_arrays = tuple(dict.fromkeys(flag_attrs[name][1] for name in missing))
+        phase_arrays = tuple(
+            dict.fromkeys(capability_attrs[name][1] for name in missing)
+        )
         rank = model_state.rank
         model = self._pred_files.model(rank)
         return DataLoadItem(
             rank=rank,
             model_label=model.display_label,
-            flags=tuple(flags.items()),
+            capabilities=frozenset(missing),
             model_state=model_state,
             expected_version=model_state.version,
             expected_ensemble=expected_ensemble,
@@ -1204,17 +1211,16 @@ class GuiLoadingController:
         return True
 
     def _validate_lazy_loaded_item(self, item: DataLoadItem, data) -> None:
-        flags = item.load_kwargs()
         fields = (
-            ("load_pae", "pae", "PAE"),
-            ("load_pde", "pde", "PDE"),
-            ("load_contact_probs", "contact_probs", "interaction probabilities"),
-            ("load_token_plddt", "token_plddt", "pLDDT"),
+            ("pae", "pae", "PAE"),
+            ("pde", "pde", "PDE"),
+            ("contact_probs", "contact_probs", "interaction probabilities"),
+            ("plddt", "token_plddt", "pLDDT"),
         )
         missing = [
             label
-            for flag, attr, label in fields
-            if flags.get(flag, False) and getattr(data, attr, None) is None
+            for capability, attr, label in fields
+            if capability in item.capabilities and getattr(data, attr, None) is None
         ]
         if missing:
             raise ValueError(
@@ -1370,32 +1376,29 @@ class GuiLoadingController:
         has_plddt = self._target_all_supports_family("plddt")
         target_states = self._current_target_model_states()
         has_confidence = bool(target_states) and all(
-            getattr(target_state.data, "confidence", None) is not None
-            or getattr(target_state.data, "summary_confidence", None) is not None
-            for target_state in target_states
+            target_state.data.confidence is not None for target_state in target_states
         )
         has_chain_iptm = self._has_chain_iptm_metric_data()
         has_ensemble = self._ensemble is not None
 
         model = self._prop_combo.model()
-        for row, prop in enumerate(metrics.PROPERTIES):
-            combo_row = self._property_combo_row(prop["key"])
+        family_available = {
+            "pae": has_pae,
+            "pde": has_pde,
+            "plddt": has_plddt,
+            "contact_probs": has_contact_probs,
+            "confidence": has_confidence,
+        }
+        for spec in metrics.METRICS:
+            combo_row = self._property_combo_row(spec.key)
             if combo_row is None:
                 continue
             available = True
-            if prop["needs_pae"] and not has_pae:
+            if any(not family_available[item] for item in spec.requirements):
                 available = False
-            if prop["needs_pde"] and not has_pde:
+            if spec.key == "chain_iptm" and not has_chain_iptm:
                 available = False
-            if prop.get("needs_plddt", False) and not has_plddt:
-                available = False
-            if prop.get("needs_contact_probs", False) and not has_contact_probs:
-                available = False
-            if prop.get("needs_confidence", False) and not has_confidence:
-                available = False
-            if prop["key"] == "chain_iptm" and not has_chain_iptm:
-                available = False
-            if prop.get("ensemble_level", False) and not has_ensemble:
+            if spec.ensemble_level and not has_ensemble:
                 available = False
             item = model.item(combo_row)
             if item is not None:
@@ -1409,10 +1412,7 @@ class GuiLoadingController:
         """Return whether loaded confidence has data for the Chain ipTM metric."""
         states = self._current_target_model_states()
         return bool(states) and all(
-            any(
-                _confidence_has_chain_iptm_metric_data(getattr(state.data, attr, None))
-                for attr in ("confidence", "summary_confidence")
-            )
+            state.data.confidence is not None and state.data.confidence.has_chain_iptm
             for state in states
         )
 
@@ -1424,8 +1424,8 @@ class GuiLoadingController:
             item = model.item(current)
             if item is not None and item.flags() & ItemIsEnabled:
                 return
-        for prop in metrics.PROPERTIES:
-            row = self._property_combo_row(prop["key"])
+        for spec in metrics.METRICS:
+            row = self._property_combo_row(spec.key)
             if row is None:
                 continue
             item = model.item(row)
@@ -1575,12 +1575,12 @@ class GuiLoadingController:
         has_pae_data = self._has_matrix_data_family("pae")
         has_pde_data = self._has_matrix_data_family("pde")
         has_multiple_chains = self._current_target_has_multiple_chains()
-        for label, plot_type in metrics.PLOT_TYPES:
-            action = actions.get(plot_type)
+        for spec in metrics.PLOTS:
+            action = actions.get(spec.key)
             if action is None:
                 continue
             state = gui_rules.plot_action_state(
-                plot_type,
+                spec.key,
                 metric_key,
                 target_kind,
                 has_reference,
@@ -1591,7 +1591,7 @@ class GuiLoadingController:
                 has_multiple_chains=has_multiple_chains,
             )
             action.setEnabled(state.enabled)
-            tip = state.reason or f"Show {label.lower()}."
+            tip = state.reason or f"Show {spec.label.lower()}."
             if hasattr(action, "setToolTip"):
                 action.setToolTip(tip)
             if hasattr(action, "setStatusTip"):

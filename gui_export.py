@@ -47,12 +47,12 @@ class ExportController:
         """Build and write CSV rows, reporting GUI errors consistently."""
         if self._pred_files is not None:
             key = self._prop_combo.currentData()
-            prop = metrics.PROPERTY_BY_KEY.get(key, {})
-            target = self._resolve_plot_target() if prop else None
-            if target is not None and not prop.get("ensemble_level", False):
+            spec = metrics.METRICS.find(key)
+            target = self._resolve_plot_target() if spec is not None else None
+            if target is not None and not spec.ensemble_level:
                 if self._defer_action_for_data(
                     target,
-                    metrics.metric_load_flags(prop),
+                    spec.load_capabilities,
                     lambda: self._export_csv_to_path(path),
                     error_title=f"{APP_TITLE} - export error",
                 ):
@@ -87,8 +87,8 @@ class ExportController:
             )
             return None
         key = self._prop_combo.currentData()
-        prop = metrics.PROPERTY_BY_KEY.get(key, {})
-        if not key or not prop:
+        spec = metrics.METRICS.find(key)
+        if spec is None:
             QtWidgets.QMessageBox.warning(
                 self, APP_TITLE, "Select a Color by metric before exporting."
             )
@@ -98,13 +98,13 @@ class ExportController:
             return None
 
         if target.kind == "ensemble_group":
-            return self._csv_rows_for_ensemble_group(key, prop, target)
-        return self._csv_rows_for_single_target(key, prop, target)
+            return self._csv_rows_for_ensemble_group(key, spec, target)
+        return self._csv_rows_for_single_target(key, spec, target)
 
     def _csv_rows_for_single_target(
         self,
         key: str,
-        prop: dict,
+        spec: metrics.MetricSpec,
         target: _PlotTarget,
     ) -> list[dict[str, object]] | None:
         """Build CSV rows for a single model or one ensemble member."""
@@ -113,27 +113,26 @@ class ExportController:
         )
         include_ensemble = target.kind == "ensemble_member"
 
-        if prop.get("ensemble_level", False):
+        if spec.ensemble_level:
             values = self._compute_ensemble_property(key)
             data = (
                 target.data
                 if target.data is not None
                 else getattr(member, "data", None)
             )
-            aggregate_kind = metrics.ensemble_aggregate_kind(key)
+            aggregate_kind = spec.aggregate_kind
         else:
             if target.kind == "ensemble_member" and member is not None:
-                self._ensure_member_data_for_property(member, prop)
+                self._ensure_member_data_for_property(member, spec)
             else:
-                self._ensure_current_data_for_property(prop)
+                self._ensure_current_data_for_property(spec)
             context = self._csv_metric_context(
-                key, prop, target.token_map, target.obj_name
+                key, spec, target.token_map, target.obj_name
             )
             if context is None:
                 return None
-            compute_key = metrics.line_compute_key(key)
             values = self._compute_property_from_context(
-                compute_key,
+                key,
                 target.data,
                 target.token_map,
                 context,
@@ -143,9 +142,9 @@ class ExportController:
             aggregate_kind = "ensemble_member" if include_ensemble else "single_model"
 
         self._validate_token_count(values, target.token_map, target.label)
-        if prop.get("ensemble_level", False):
+        if spec.ensemble_level:
             context = self._csv_metric_context(
-                key, prop, target.token_map, target.obj_name
+                key, spec, target.token_map, target.obj_name
             )
             if context is None:
                 return None
@@ -163,7 +162,7 @@ class ExportController:
     def _csv_rows_for_ensemble_group(
         self,
         key: str,
-        prop: dict,
+        spec: metrics.MetricSpec,
         target: _PlotTarget,
     ) -> list[dict[str, object]] | None:
         """Build CSV rows for the active ensemble group target."""
@@ -176,9 +175,9 @@ class ExportController:
             )
             return None
 
-        if prop.get("ensemble_level", False):
+        if spec.ensemble_level:
             context = self._csv_metric_context(
-                key, prop, target.token_map, target.obj_name
+                key, spec, target.token_map, target.obj_name
             )
             if context is None:
                 return None
@@ -193,21 +192,20 @@ class ExportController:
                 context,
                 include_ensemble=True,
                 member=None,
-                aggregate_kind=metrics.ensemble_aggregate_kind(key),
+                aggregate_kind=spec.aggregate_kind,
             )
 
         rows: list[dict[str, object]] = []
-        compute_key = metrics.line_compute_key(key)
         for member in members:
-            self._ensure_member_data_for_property(member, prop)
+            self._ensure_member_data_for_property(member, spec)
             state = self._canonical_state_for_ensemble_member(member)
             context = self._csv_metric_context(
-                key, prop, state.token_map, member.obj_name
+                key, spec, state.token_map, member.obj_name
             )
             if context is None:
                 return None
             values = self._compute_property_from_context(
-                compute_key,
+                key,
                 state.data,
                 state.token_map,
                 context,
@@ -232,7 +230,7 @@ class ExportController:
     def _csv_metric_context(
         self,
         key: str,
-        prop: dict,
+        spec: metrics.MetricSpec,
         token_map: TokenMap,
         obj_name: str,
     ) -> MetricContext | None:
@@ -242,7 +240,7 @@ class ExportController:
         contact_indices: list[int] = []
         cutoff = None
 
-        if prop.get("needs_ref", False):
+        if spec.needs_reference:
             resolved = self._resolve_reference_indices(
                 token_map, obj_name, required=True
             )
@@ -251,7 +249,7 @@ class ExportController:
             reference_indices = list(resolved)
             reference_selection = self._ref_edit.text().strip()
 
-        if key in metrics.CONTACT_FILTERED_METRICS:
+        if spec.needs_contact_shell:
             cutoff = self._get_cutoff_threshold()
             if cutoff is None:
                 return None
@@ -270,7 +268,7 @@ class ExportController:
                     f"{cutoff:g} Å of the reference selection.",
                 )
                 return None
-        elif metrics.is_domain_label_metric(key):
+        elif spec.is_domain_label:
             cutoff = self._get_cutoff_threshold()
             if cutoff is None:
                 return None

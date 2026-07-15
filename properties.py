@@ -15,6 +15,7 @@ from collections.abc import Mapping
 
 import numpy as np
 
+from .confidence import PredictionConfidence
 from .token_map import TokenMap
 
 # ---------------------------------------------------------------------------
@@ -517,7 +518,7 @@ def contact_probability_to_selection(
 
 
 # ---------------------------------------------------------------------------
-# Chain-level metrics from confidence JSON
+# Chain-level metrics from typed confidence
 # ---------------------------------------------------------------------------
 
 
@@ -526,76 +527,30 @@ def _chain_order_from_token_map(token_map: TokenMap) -> list[str]:
     return [chain_id or "(blank)" for chain_id in token_map.chain_order]
 
 
-def pair_chains_iptm_matrix(
-    confidence: dict, token_map: TokenMap
+def pair_chain_iptm_matrix(
+    confidence: PredictionConfidence, token_map: TokenMap
 ) -> tuple[np.ndarray, list[str]]:
     """Return the pairwise chain ipTM matrix and chain labels.
 
-    Missing JSON cells are represented as ``np.nan``. Chain order follows the
+    Missing cells are represented as ``np.nan``. Chain order follows the
     token map, which mirrors the prediction output chain order used by the
-    confidence JSON's 0-based chain keys.  If per-chain pTM values are
-    available, they fill missing or zero-valued diagonal cells so providers
-    that store only interface scores in the pair matrix still show meaningful
-    self-chain values.
+    provider's 0-based chain keys. Typed confidence normalization has already
+    filled missing or zero-valued diagonal cells from per-chain pTM when
+    possible.
     """
-    scores = confidence.get("pair_chains_iptm", confidence.get("chain_pair_iptm"))
-    if isinstance(scores, list):
-        scores = {
-            str(i): {str(j): value for j, value in enumerate(row)}
-            for i, row in enumerate(scores)
-        }
-    if not isinstance(scores, dict) or not scores:
-        raise ValueError(
-            "Confidence JSON does not contain pair_chains_iptm / chain_pair_iptm data."
-        )
-
     labels = _chain_order_from_token_map(token_map)
     if not labels:
         raise ValueError("Token map contains no chains.")
-
-    matrix = np.full((len(labels), len(labels)), np.nan, dtype=np.float32)
-    for i in range(len(labels)):
-        row = scores.get(str(i), scores.get(i, {}))
-        if not isinstance(row, dict):
-            continue
-        for j in range(len(labels)):
-            value = row.get(str(j), row.get(j, np.nan))
-            try:
-                matrix[i, j] = float(value)  # type: ignore[arg-type]  # None caught below
-            except (TypeError, ValueError):
-                matrix[i, j] = np.nan
-    _fill_pair_iptm_diagonal_from_chain_ptm(matrix, confidence)
+    matrix = confidence.pair_chain_iptm
+    if matrix is None:
+        raise ValueError("Confidence data do not contain pairwise chain ipTM.")
+    if matrix.shape != (len(labels), len(labels)):
+        raise ValueError("Pairwise chain ipTM does not match the token-map chains.")
     return matrix, labels
 
 
-def _fill_pair_iptm_diagonal_from_chain_ptm(
-    matrix: np.ndarray, confidence: dict
-) -> None:
-    scores = confidence.get("chains_ptm", confidence.get("chain_ptm", {}))
-    chain_scores: dict  # keys may be int (from list branch) or str (from dict branch)
-    if isinstance(scores, list):
-        chain_scores = {idx: value for idx, value in enumerate(scores)}
-    elif isinstance(scores, dict):
-        chain_scores = scores
-    else:
-        return
-
-    for idx in range(matrix.shape[0]):
-        value = chain_scores.get(str(idx))
-        if value is None:
-            value = chain_scores.get(idx)
-        if value is None:
-            continue
-        try:
-            replacement = float(value)
-        except (TypeError, ValueError):
-            continue
-        if np.isnan(matrix[idx, idx]) or matrix[idx, idx] == 0.0:
-            matrix[idx, idx] = replacement
-
-
 def chain_iptm_values(
-    confidence: dict,
+    confidence: PredictionConfidence,
     token_map: TokenMap,
     ref_chain_key: str | None = None,
 ) -> np.ndarray:
@@ -604,7 +559,7 @@ def chain_iptm_values(
     Parameters
     ----------
     confidence:
-        Parsed ``confidence_<name>_model_<k>.json``.
+        Canonical typed confidence values in token-map chain order.
     token_map:
         Built by :meth:`structure_index.StructureIndex.from_path`.
     ref_chain_key:
@@ -615,28 +570,25 @@ def chain_iptm_values(
     out = np.full(n, np.nan, dtype=np.float32)
 
     if ref_chain_key is not None:
-        scores = confidence.get(
-            "pair_chains_iptm", confidence.get("chain_pair_iptm", {})
-        )
-        if isinstance(scores, list):
-            scores = {
-                str(i): {str(j): value for j, value in enumerate(row)}
-                for i, row in enumerate(scores)
-            }
-        chain_scores = {int(k): v.get(ref_chain_key, np.nan) for k, v in scores.items()}
+        if confidence.pair_chain_iptm is None:
+            return out
+        try:
+            ref_index = int(ref_chain_key)
+        except (TypeError, ValueError):
+            return out
+        if ref_index < 0 or ref_index >= confidence.pair_chain_iptm.shape[1]:
+            return out
+        chain_scores = confidence.pair_chain_iptm[:, ref_index]
     else:
-        scores = confidence.get(
-            "chains_iptm",
-            confidence.get("chain_iptm", confidence.get("chains_ptm", {})),
-        )
-        if isinstance(scores, list):
-            chain_scores = {idx: value for idx, value in enumerate(scores)}
-        else:
-            chain_scores = {int(k): v for k, v in scores.items()}
+        chain_scores = confidence.chain_iptm
+        if chain_scores is None:
+            chain_scores = confidence.chain_ptm
+        if chain_scores is None:
+            return out
 
     for tok in token_map:
         idx = token_map.chain_id_to_index.get(tok.chain_id)
-        if idx is not None and idx in chain_scores:
+        if idx is not None and idx < len(chain_scores):
             out[tok.token_idx] = float(chain_scores[idx])
 
     return out

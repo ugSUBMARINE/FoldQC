@@ -11,6 +11,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from FoldQC import properties as P  # noqa: E402
+from FoldQC.confidence import PredictionConfidence  # noqa: E402
 from FoldQC.token_map import TokenInfo, TokenMap  # noqa: E402
 
 
@@ -305,16 +306,13 @@ class PropertiesTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             P.contact_probability_to_selection(np.zeros((2, 2), dtype=np.float32), [])
 
-    def test_pair_chains_iptm_matrix_uses_token_map_chain_order(self) -> None:
+    def test_pair_chain_iptm_matrix_uses_token_map_chain_order(self) -> None:
         token_map = _token_map("A", "A", "L")
-        confidence = {
-            "pair_chains_iptm": {
-                "0": {"0": 0.9, "1": 0.7},
-                "1": {"0": 0.6},
-            }
-        }
+        confidence = PredictionConfidence(
+            pair_chain_iptm=np.array([[0.9, 0.7], [0.6, np.nan]])
+        )
 
-        matrix, labels = P.pair_chains_iptm_matrix(confidence, token_map)
+        matrix, labels = P.pair_chain_iptm_matrix(confidence, token_map)
 
         self.assertEqual(labels, ["A", "L"])
         np.testing.assert_allclose(
@@ -323,24 +321,24 @@ class PropertiesTests(unittest.TestCase):
             equal_nan=True,
         )
 
-    def test_pair_chains_iptm_matrix_fills_zero_diagonal_from_chain_ptm(self) -> None:
+    def test_pair_chain_iptm_matrix_fills_zero_diagonal_from_chain_ptm(self) -> None:
         token_map = _token_map("A", "B")
-        confidence = {
-            "chain_ptm": [0.91, 0.82],
-            "chain_pair_iptm": [[0.0, 0.7], [0.0, 0.0]],
-        }
+        confidence = PredictionConfidence(
+            chain_ptm=np.array([0.91, 0.82]),
+            pair_chain_iptm=np.array([[0.0, 0.7], [0.6, np.nan]]),
+        )
 
-        matrix, labels = P.pair_chains_iptm_matrix(confidence, token_map)
+        matrix, labels = P.pair_chain_iptm_matrix(confidence, token_map)
 
         self.assertEqual(labels, ["A", "B"])
         np.testing.assert_allclose(
             matrix,
-            np.array([[0.91, 0.7], [0.0, 0.82]], dtype=np.float32),
+            np.array([[0.91, 0.7], [0.6, 0.82]], dtype=np.float32),
         )
 
-    def test_pair_chains_iptm_matrix_rejects_missing_json_field(self) -> None:
-        with self.assertRaisesRegex(ValueError, "pair_chains_iptm"):
-            P.pair_chains_iptm_matrix({}, [types.SimpleNamespace(chain_id="A")])
+    def test_pair_chain_iptm_matrix_rejects_missing_typed_field(self) -> None:
+        with self.assertRaisesRegex(ValueError, "pairwise chain ipTM"):
+            P.pair_chain_iptm_matrix(PredictionConfidence(), _token_map("A"))
 
 
 if __name__ == "__main__":
