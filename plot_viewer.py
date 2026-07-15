@@ -303,15 +303,15 @@ class PlotDialog(QtWidgets.QDialog):
         """Return a toolbar label for one prediction token."""
         token_idx = int(token.token_idx)
         chain_id = str(token.chain_id)
-        res_num = token.res_num
+        residue_id = token.resi
         res_name = str(token.res_name)
         if bool(token.is_hetatm):
-            residue = f"{chain_id}:{res_name.upper()}{res_num}"
+            residue = f"{chain_id}:{res_name.upper()}{residue_id}"
             atom_name = getattr(token, "atom_name", None)
             if atom_name:
                 residue = f"{residue}/{atom_name}"
         else:
-            residue = f"{chain_id}:{res_name.title()}{res_num}"
+            residue = f"{chain_id}:{res_name.title()}{residue_id}"
         return f"token {token_idx} · {residue}"
 
     @staticmethod

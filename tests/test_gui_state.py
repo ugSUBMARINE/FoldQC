@@ -18,7 +18,7 @@ from FoldQC.gui_state import (  # noqa: E402
 from FoldQC.loader_models import PredictionData  # noqa: E402
 from FoldQC.model_state import ModelState  # noqa: E402
 from FoldQC.structure_index import StructureIndex  # noqa: E402
-from FoldQC.token_map import TokenMap  # noqa: E402
+from FoldQC.token_map import ResidueId, TokenInfo, TokenMap  # noqa: E402
 
 
 def _index(path: Path, token_map: TokenMap) -> StructureIndex:
@@ -58,7 +58,7 @@ def test_metric_context_keeps_immutable_selection_provenance() -> None:
 
 
 def test_resolved_target_distinguishes_ensemble_group() -> None:
-    token_map = TokenMap(())
+    token_map = TokenMap((TokenInfo(0, "A", ResidueId(1), "ALA", False, None),))
     states = tuple(
         ModelState(
             rank=rank,
@@ -86,7 +86,7 @@ def test_resolved_target_distinguishes_ensemble_group() -> None:
 
 
 def test_resolved_target_exposes_live_state_data_and_is_not_assignable() -> None:
-    token_map = TokenMap(())
+    token_map = TokenMap((TokenInfo(0, "A", ResidueId(1), "ALA", False, None),))
     data = PredictionData(
         name="model",
         rank=0,

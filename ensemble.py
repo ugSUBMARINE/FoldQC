@@ -136,7 +136,7 @@ def _ordered_token_identities(token_map: TokenMap) -> tuple[tuple, ...]:
     return tuple(
         (
             token.chain_id,
-            token.res_num,
+            token.residue_id,
             token.res_name,
             token.atom_name if token.is_hetatm else None,
         )

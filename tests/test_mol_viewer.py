@@ -7,7 +7,7 @@ from pathlib import Path
 
 import numpy as np
 from FoldQC import mol_viewer
-from FoldQC.token_map import TokenInfo, TokenMap
+from FoldQC.token_map import ResidueId, TokenInfo, TokenMap
 
 
 def _token(
@@ -20,7 +20,7 @@ def _token(
     return TokenInfo(
         token_idx=idx,
         chain_id=chain,
-        res_num=idx + 1,
+        residue_id=ResidueId(idx + 1),
         res_name="LIG" if hetatm else "ALA",
         is_hetatm=hetatm,
         atom_name=atom_name,
@@ -182,6 +182,55 @@ def test_object_paint_mapping_handles_polymer_ligand_order_and_sparse_indices(
     assert mol_viewer.object_paint_mapping_is_valid(mapping)
 
 
+def test_paint_mapping_uses_insertion_code_residue_name_and_filters_hydrogen(
+    monkeypatch,
+) -> None:
+    atoms = [
+        types.SimpleNamespace(
+            index=1,
+            chain="A",
+            resi="42A",
+            resn="GLY",
+            name="CA",
+            hetatm=False,
+        ),
+        types.SimpleNamespace(
+            index=2,
+            chain="L",
+            resi="42A",
+            resn="LIG",
+            name="C1",
+            symbol="C",
+            hetatm=True,
+        ),
+        types.SimpleNamespace(
+            index=3,
+            chain="L",
+            resi="42A",
+            resn="LIG",
+            name="H1",
+            symbol="H",
+            hetatm=True,
+        ),
+    ]
+    cmd = types.SimpleNamespace(
+        get_model=lambda _name: types.SimpleNamespace(atom=atoms),
+        index=lambda _name: [("obj", atom.index) for atom in atoms],
+    )
+    monkeypatch.setitem(sys.modules, "pymol", types.SimpleNamespace(cmd=cmd))
+    token_map = TokenMap(
+        (
+            TokenInfo(0, "A", ResidueId(42, "A"), "GLY", False, None),
+            TokenInfo(1, "L", ResidueId(42, "A"), "LIG", True, "C1"),
+        )
+    )
+
+    mapping = mol_viewer.prepare_object_paint_mapping("obj", token_map)
+
+    assert mapping.atom_token_indices.tolist() == [-1, 0, 1, -1]
+    assert mapping.overlap.matched_prediction_tokens == 2
+
+
 def test_ensure_object_paint_mapping_rebuilds_after_index_change(monkeypatch) -> None:
     models = [
         types.SimpleNamespace(
@@ -239,7 +288,11 @@ def test_ensure_object_paint_mapping_rebuilds_after_index_change(monkeypatch) ->
 def test_tokens_within_distance_builds_backend_expression(monkeypatch) -> None:
     captured = []
     model = types.SimpleNamespace(
-        atom=[types.SimpleNamespace(chain="A", resi="2", name="CA", hetatm=False)]
+        atom=[
+            types.SimpleNamespace(
+                chain="A", resi="2", resn="ALA", name="CA", hetatm=False
+            )
+        ]
     )
     cmd = types.SimpleNamespace(
         get_model=lambda expression: captured.append(expression) or model
@@ -258,8 +311,12 @@ def test_coordinates_transform_and_plot_selection_are_viewer_operations(
     monkeypatch,
 ) -> None:
     atoms = [
-        types.SimpleNamespace(chain="A", resi="1", name="CA", coord=(1, 2, 3)),
-        types.SimpleNamespace(chain="L", resi="2", name="C1", coord=(4, 5, 6)),
+        types.SimpleNamespace(
+            chain="A", resi="1", resn="ALA", name="CA", coord=(1, 2, 3)
+        ),
+        types.SimpleNamespace(
+            chain="L", resi="2", resn="LIG", name="C1", coord=(4, 5, 6)
+        ),
     ]
     cmd = types.SimpleNamespace(altered=[], selections=[], enabled=[], refreshes=0)
     cmd.get_model = lambda _name: types.SimpleNamespace(atom=atoms)

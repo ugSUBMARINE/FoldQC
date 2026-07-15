@@ -6,6 +6,10 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
 
+from ..data_contracts import (
+    normalize_and_validate_prediction_data,
+    require_advertised_fields,
+)
 from ..loader_models import (
     ModelFiles,
     PredictionCandidate,
@@ -72,7 +76,30 @@ class BaseProvider(ABC):
             data.token_plddt_source = "structure_b_factor"
         if data.confidence is None and data.summary_confidence is not None:
             data.confidence = _normalise_confidence(data.summary_confidence)
-        return data
+        require_advertised_fields(
+            data,
+            provider=pred_files.provider,
+            model_label=model.display_label,
+            requested=(
+                (
+                    "pae",
+                    options.load_pae and model.supports("pae"),
+                    model.pae_path or model.confidence_path,
+                ),
+                (
+                    "pde",
+                    options.load_pde and model.supports("pde"),
+                    model.pde_path or model.confidence_path,
+                ),
+                (
+                    "contact_probs",
+                    options.load_contact_probs and model.supports("contact_probs"),
+                    model.confidence_path,
+                ),
+            ),
+        )
+        token_count = len(structure_index.token_map) if structure_index else 0
+        return normalize_and_validate_prediction_data(data, token_count)
 
     def load_model_data(
         self,

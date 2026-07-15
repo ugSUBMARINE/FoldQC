@@ -95,6 +95,16 @@ class PlotController:
             )
         return state
 
+    def _member_supports_data(self, member, family: str) -> bool:
+        state = self._canonical_state_for_ensemble_member(member)
+        data_attr = "token_plddt" if family == "plddt" else family
+        if getattr(state.data, data_attr, None) is not None:
+            return True
+        model_getter = getattr(self._pred_files, "model", None)
+        return bool(
+            callable(model_getter) and model_getter(member.rank).supports(family)
+        )
+
     def _resolve_reference_indices(
         self,
         token_map: TokenMap,
@@ -396,13 +406,9 @@ class PlotController:
         """Compute local ligand-site summary values for one ensemble member."""
         self._ensure_member_data_for_plot(
             member,
-            load_pae=getattr(self._pred_files, "has_pae", False)
-            if self._pred_files
-            else False,
-            load_pde=getattr(self._pred_files, "has_pde", False)
-            if self._pred_files
-            else False,
-            load_token_plddt=True,
+            load_pae=self._member_supports_data(member, "pae"),
+            load_pde=self._member_supports_data(member, "pde"),
+            load_token_plddt=self._member_supports_data(member, "plddt"),
         )
         state = self._canonical_state_for_ensemble_member(member)
         ref_indices = selection_to_token_indices(
@@ -470,17 +476,11 @@ class PlotController:
             if target.kind == "ensemble_member" and target.members:
                 self._ensure_member_data_for_plot(
                     target.members[0],
-                    load_pae=getattr(self._pred_files, "has_pae", False)
-                    if self._pred_files
-                    else False,
-                    load_pde=getattr(self._pred_files, "has_pde", False)
-                    if self._pred_files
-                    else False,
-                    load_contact_probs=getattr(
-                        self._pred_files, "has_contact_probs", False
-                    )
-                    if self._pred_files
-                    else False,
+                    load_pae=self._member_supports_data(target.members[0], "pae"),
+                    load_pde=self._member_supports_data(target.members[0], "pde"),
+                    load_contact_probs=self._member_supports_data(
+                        target.members[0], "contact_probs"
+                    ),
                 )
             return plot_data.fingerprint_series_for_single(target.data, ref_indices)
 
@@ -488,15 +488,9 @@ class PlotController:
         for member in target.members or []:
             self._ensure_member_data_for_plot(
                 member,
-                load_pae=getattr(self._pred_files, "has_pae", False)
-                if self._pred_files
-                else False,
-                load_pde=getattr(self._pred_files, "has_pde", False)
-                if self._pred_files
-                else False,
-                load_contact_probs=getattr(self._pred_files, "has_contact_probs", False)
-                if self._pred_files
-                else False,
+                load_pae=self._member_supports_data(member, "pae"),
+                load_pde=self._member_supports_data(member, "pde"),
+                load_contact_probs=self._member_supports_data(member, "contact_probs"),
             )
             state = self._canonical_state_for_ensemble_member(member)
             data_items.append(state.data)
@@ -562,12 +556,12 @@ class PlotController:
     def _fingerprint_load_flags(
         self, *, include_contact_probs: bool
     ) -> dict[str, bool]:
-        pred_files = getattr(self, "_pred_files", None)
         return {
-            "load_pae": bool(pred_files and pred_files.has_pae),
-            "load_pde": bool(pred_files and pred_files.has_pde),
+            "load_pae": self._target_any_supports_family("pae"),
+            "load_pde": self._target_any_supports_family("pde"),
             "load_contact_probs": bool(
-                include_contact_probs and pred_files and pred_files.has_contact_probs
+                include_contact_probs
+                and self._target_any_supports_family("contact_probs")
             ),
             "load_token_plddt": True,
         }
@@ -900,6 +894,7 @@ class PlotController:
                 self._fingerprint_load_flags(include_contact_probs=False),
                 self._show_ensemble_site_summary,
                 error_title=f"{APP_TITLE} - error",
+                allow_partial=True,
             ):
                 return
 
@@ -1070,6 +1065,7 @@ class PlotController:
             self._fingerprint_load_flags(include_contact_probs=True),
             self._show_binding_site_fingerprint,
             error_title=f"{APP_TITLE} - error",
+            allow_partial=True,
         ):
             return
 

@@ -14,6 +14,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from FoldQC.data_contracts import ProviderContractError  # noqa: E402
 from FoldQC.loader import (  # noqa: E402
     discover_prediction_candidates,
     load_prediction_data,
@@ -150,7 +151,7 @@ class LoaderProviderTests(unittest.TestCase):
 
         self.assertEqual(files.provider, "boltz")
         self.assertEqual(files.models[0].rank, 0)
-        self.assertTrue(files.has_plddt)
+        self.assertTrue(files.model_supports(0, "plddt"))
         np.testing.assert_allclose(data.token_plddt, np.array([0.7, 0.6]))
         self.assertEqual(data.token_plddt_source, "provider_token")
 
@@ -178,15 +179,33 @@ class LoaderProviderTests(unittest.TestCase):
             )
 
             files = scan_prediction_path(pred_dir)
-            with self.assertRaisesRegex(ValueError, "does not match 2 tokens"):
+            with self.assertRaisesRegex(ValueError, r"shape \(2,\)"):
                 load_prediction_data(files)
+
+    def test_boltz_advertised_npz_field_uses_provider_contract_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            pred_dir = Path(tmp) / "target"
+            pred_dir.mkdir()
+            (pred_dir / "target_model_0.cif").write_text(CIF_TEXT)
+            source = pred_dir / "pae_target_model_0.npz"
+            np.savez(source, wrong_field=np.ones((2, 2), dtype=np.float32))
+
+            files = scan_prediction_path(pred_dir)
+            with self.assertRaises(ProviderContractError) as caught:
+                load_prediction_data(files, load_pae=True)
+
+        self.assertIn("pae", str(caught.exception))
+        self.assertIn(str(source), str(caught.exception))
 
     def test_boltz_lab_directory_scans_sample_layout(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             pred_dir = Path(tmp) / "lab_job"
             pred_dir.mkdir()
             (pred_dir / "sample_0_predicted_structure.cif").write_text(CIF_TEXT)
-            np.savez(pred_dir / "sample_0_pae.npz", pae=np.array([[0.0, 1.0]]))
+            np.savez(
+                pred_dir / "sample_0_pae.npz",
+                pae=np.array([[0.0, 1.0], [1.0, 0.0]]),
+            )
             _write_json(
                 pred_dir / "metrics.json",
                 {
@@ -207,13 +226,13 @@ class LoaderProviderTests(unittest.TestCase):
         self.assertEqual(files.provider_label, "Boltz Lab")
         self.assertEqual(files.name, "lab_job")
         self.assertEqual(files.n_models, 1)
-        self.assertTrue(files.has_pae)
+        self.assertTrue(files.model_supports(0, "pae"))
         self.assertEqual(files.models[0].display_label, "sample 0")
         self.assertEqual(files.models[0].metadata["sample_index"], 0)
         self.assertEqual(
             files.structure_path(0).name, "sample_0_predicted_structure.cif"
         )
-        np.testing.assert_allclose(data.pae, np.array([[0.0, 1.0]]))
+        np.testing.assert_allclose(data.pae, np.array([[0.0, 1.0], [1.0, 0.0]]))
         self.assertEqual(data.confidence["confidence_score"], 0.91)
         self.assertEqual(data.confidence["structure_confidence"], 0.91)
         np.testing.assert_allclose(
@@ -229,7 +248,10 @@ class LoaderProviderTests(unittest.TestCase):
             (root / ".boltz-run.json").write_text("{}")
             (prediction / "sample_0_predicted_structure.cif").write_text(CIF_TEXT)
             (prediction / "sample_1_predicted_structure.cif").write_text(CIF_TEXT)
-            np.savez(prediction / "sample_1_pae.npz", pae=np.array([[0.0, 2.0]]))
+            np.savez(
+                prediction / "sample_1_pae.npz",
+                pae=np.array([[0.0, 2.0], [2.0, 0.0]]),
+            )
             results = [
                 {"metrics": {"structure_confidence": 0.25, "ptm": 0.7}},
                 {"metrics": {"structure_confidence": 0.95, "ptm": 0.9}},
@@ -247,14 +269,17 @@ class LoaderProviderTests(unittest.TestCase):
         self.assertEqual(files.provider_label, "Boltz API")
         self.assertEqual(files.name, "api_job")
         self.assertEqual(files.n_models, 2)
-        self.assertTrue(files.has_pae)
+        self.assertTrue(files.model_supports(0, "pae"))
+        self.assertFalse(files.model_supports(1, "pae"))
+        self.assertTrue(files.any_model_supports("pae"))
+        self.assertFalse(files.all_models_support("pae"))
         self.assertEqual(files.models[0].display_label, "rank 0 - sample 1")
         self.assertEqual(files.models[0].metadata["sample_index"], 1)
         self.assertEqual(files.models[1].display_label, "rank 1 - sample 0")
         self.assertEqual(
             files.structure_path(0).name, "sample_1_predicted_structure.cif"
         )
-        np.testing.assert_allclose(data.pae, np.array([[0.0, 2.0]]))
+        np.testing.assert_allclose(data.pae, np.array([[0.0, 2.0], [2.0, 0.0]]))
         self.assertEqual(data.confidence["confidence_score"], 0.95)
         self.assertEqual(data.confidence["ptm"], 0.9)
         np.testing.assert_allclose(
@@ -366,8 +391,8 @@ class LoaderProviderTests(unittest.TestCase):
         self.assertEqual(files.provider, "chai1")
         self.assertEqual(files.provider_label, "Chai-1 Discovery")
         self.assertEqual(files.n_models, 1)
-        self.assertTrue(files.has_pae)
-        self.assertFalse(files.has_contact_probs)
+        self.assertTrue(files.model_supports(0, "pae"))
+        self.assertFalse(files.model_supports(0, "contact_probs"))
         self.assertEqual(files.models[0].display_label, "rank 0")
         np.testing.assert_allclose(data.pae, np.array([[0.0, 1.0], [2.0, 0.0]]))
         self.assertEqual(data.confidence["ranking_score"], 0.91)
@@ -401,7 +426,7 @@ class LoaderProviderTests(unittest.TestCase):
             data = load_prediction_data(files, rank=0, load_pde=True)
 
         self.assertEqual(files.provider, "chai1")
-        self.assertTrue(files.has_pde)
+        self.assertTrue(files.model_supports(0, "pde"))
         self.assertEqual(files.models[0].metadata["model_idx"], 3)
         self.assertIn("model 3", files.models[0].display_label)
         self.assertIsNone(lazy.pde)
@@ -470,9 +495,9 @@ class LoaderProviderTests(unittest.TestCase):
         self.assertTrue(files.supports_ensemble)
         self.assertEqual(files.models[0].metadata["sample_rank"], 1)
         self.assertEqual(files.models[0].metadata["seed"], 123)
-        self.assertFalse(files.has_pae)
-        self.assertFalse(files.has_pde)
-        self.assertFalse(files.has_contact_probs)
+        self.assertFalse(files.model_supports(0, "pae"))
+        self.assertFalse(files.model_supports(0, "pde"))
+        self.assertFalse(files.model_supports(0, "contact_probs"))
         self.assertEqual(data.confidence["ranking_score"], 0.9)
         self.assertEqual(data.confidence["chains_ptm"], {"0": 0.6, "1": 0.5})
         self.assertEqual(
@@ -524,10 +549,10 @@ class LoaderProviderTests(unittest.TestCase):
             )
 
         self.assertEqual(files.provider, "protenix")
-        self.assertTrue(files.has_pae)
-        self.assertTrue(files.has_pde)
-        self.assertTrue(files.has_contact_probs)
-        self.assertTrue(files.has_plddt)
+        self.assertTrue(files.model_supports(0, "pae"))
+        self.assertTrue(files.model_supports(0, "pde"))
+        self.assertTrue(files.model_supports(0, "contact_probs"))
+        self.assertTrue(files.model_supports(0, "plddt"))
         self.assertIsNone(lazy.pae)
         self.assertIsNone(lazy.pde)
         self.assertIsNone(lazy.contact_probs)
@@ -727,12 +752,31 @@ class LoaderProviderTests(unittest.TestCase):
             _write_json(root / "af3_summary_confidences.json", {"ptm": 0.5})
             _write_json(root / "af3_confidences.json", {})
 
-            data = load_prediction_data(scan_prediction_path(root))
+            data = load_prediction_data(scan_prediction_path(root), load_pae=False)
 
         np.testing.assert_allclose(
             data.token_plddt, np.array([0.8, 0.4], dtype=np.float32)
         )
         self.assertEqual(data.token_plddt_source, "structure_b_factor")
+
+    def test_provider_advertised_missing_field_names_model_and_source(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "af3"
+            root.mkdir()
+            (root / "af3_model.cif").write_text(CIF_TEXT)
+            _write_json(root / "af3_summary_confidences.json", {"ptm": 0.5})
+            source = root / "af3_confidences.json"
+            _write_json(source, {})
+
+            files = scan_prediction_path(root)
+            with self.assertRaises(ProviderContractError) as caught:
+                load_prediction_data(files, load_pae=True)
+
+        message = str(caught.exception)
+        self.assertIn("alphafold3", message)
+        self.assertIn("rank 0", message)
+        self.assertIn("pae", message)
+        self.assertIn(str(source), message)
 
     def test_af3_malformed_atom_plddts_are_an_error(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -793,7 +837,7 @@ class LoaderProviderTests(unittest.TestCase):
             _write_json(root / "full_data_0.json", {})
 
             files = scan_prediction_path(root)
-            data = load_prediction_data(files)
+            data = load_prediction_data(files, load_pae=False)
 
         self.assertEqual(files.provider, "af3_server")
         self.assertEqual(

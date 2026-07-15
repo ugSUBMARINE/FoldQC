@@ -58,7 +58,6 @@ def _scan_chai_dir(pred_dir: Path) -> PredictionFiles:
         pred_dir=pred_dir,
         provider="chai1",
         input_path=pred_dir,
-        capabilities={"plddt"},
     )
 
     candidates: list[_ChaiCandidate] = []
@@ -125,10 +124,6 @@ def _scan_chai_dir(pred_dir: Path) -> PredictionFiles:
         _append_chai_model(files, item, next_rank)
 
     files.models.sort(key=lambda model: model.rank)
-    if any(model.pae_path is not None for model in files.models):
-        files.capabilities.add("pae")
-    if any(model.pde_path is not None for model in files.models):
-        files.capabilities.add("pde")
     return files
 
 
@@ -154,6 +149,11 @@ def _append_chai_model(
             confidence_path=item.confidence_path,
             pae_path=item.pae_path,
             pde_path=item.pde_path,
+            capabilities=frozenset(
+                {"plddt"}
+                | ({"pae"} if item.pae_path is not None else set())
+                | ({"pde"} if item.pde_path is not None else set())
+            ),
             metadata=metadata,
         )
     )

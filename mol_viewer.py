@@ -23,7 +23,7 @@ from .palettes import (
     PLDDT_CLASS_COLORS,
     categorical_color,
 )
-from .token_map import TokenMap, TokenOverlapSummary
+from .token_map import ResidueId, TokenMap, TokenOverlapSummary, is_hydrogen
 
 T = TypeVar("T")
 
@@ -295,8 +295,8 @@ def _chain_selector(chain_id: str) -> str | None:
 
 def _exact_token_selection(object_name: str, token: Any) -> str:
     if bool(token.is_hetatm) and token.atom_name is not None:
-        return f"/{object_name}//{token.chain_id}/{token.res_num}/{token.atom_name}"
-    return f"/{object_name}//{token.chain_id}/{token.res_num}/"
+        return f"/{object_name}//{token.chain_id}/{token.resi}/{token.atom_name}"
+    return f"/{object_name}//{token.chain_id}/{token.resi}/"
 
 
 def compact_selection_expression(
@@ -321,9 +321,9 @@ def compact_selection_expression(
             token_idx for token_idx in indices if 0 <= token_idx < len(token_map)
         }
         all_polymer_indices: dict[str, set[int]] = {}
-        all_ligand_indices: dict[tuple[str, int, str], set[int]] = {}
-        polymer_residues: dict[str, set[int]] = {}
-        ligand_atoms: dict[tuple[str, int, str], list[str]] = {}
+        all_ligand_indices: dict[tuple[str, ResidueId, str], set[int]] = {}
+        polymer_residues: dict[str, set[ResidueId]] = {}
+        ligand_atoms: dict[tuple[str, ResidueId, str], list[str]] = {}
         fallback_selections: list[str] = []
         compact_object = (
             str(object_name) if _SAFE_OBJECT_NAME.fullmatch(str(object_name)) else None
@@ -336,13 +336,7 @@ def compact_selection_expression(
             if not bool(token.is_hetatm):
                 all_polymer_indices.setdefault(chain_id, set()).add(token_idx)
                 continue
-            if not hasattr(token, "res_num") or not hasattr(token, "res_name"):
-                continue
-            try:
-                residue_number = int(token.res_num)
-            except (TypeError, ValueError):
-                continue
-            key = (chain_id, residue_number, str(token.res_name or ""))
+            key = (chain_id, token.residue_id, str(token.res_name or ""))
             all_ligand_indices.setdefault(key, set()).add(token_idx)
 
         for token_idx in indices:
@@ -352,7 +346,7 @@ def compact_selection_expression(
             required_fields = (
                 "token_idx",
                 "chain_id",
-                "res_num",
+                "residue_id",
                 "res_name",
                 "is_hetatm",
                 "atom_name",
@@ -367,13 +361,7 @@ def compact_selection_expression(
                 )
             chain_id = str(token.chain_id)
             chain_selector = _chain_selector(chain_id)
-            try:
-                residue_number = int(token.res_num)
-            except (TypeError, ValueError):
-                raise ValueError(
-                    f"Token {token_idx} for object {object_name!r} has an invalid "
-                    f"res_num: {token.res_num!r}."
-                ) from None
+            residue_id = token.residue_id
 
             if compact_object is None or chain_selector is None:
                 fallback_selections.append(
@@ -381,7 +369,7 @@ def compact_selection_expression(
                 )
                 continue
             if not bool(token.is_hetatm):
-                polymer_residues.setdefault(chain_id, set()).add(residue_number)
+                polymer_residues.setdefault(chain_id, set()).add(residue_id)
                 continue
 
             residue_name = str(token.res_name or "")
@@ -394,12 +382,12 @@ def compact_selection_expression(
                     _exact_token_selection(str(object_name), token)
                 )
                 continue
-            ligand_atoms.setdefault(
-                (chain_id, residue_number, residue_name), []
-            ).append(atom_name)
+            ligand_atoms.setdefault((chain_id, residue_id, residue_name), []).append(
+                atom_name
+            )
 
         if compact_object is not None:
-            for chain_id, residue_numbers in polymer_residues.items():
+            for chain_id, residue_ids in polymer_residues.items():
                 all_chain_indices = all_polymer_indices.get(chain_id, set())
                 if all_chain_indices and all_chain_indices <= selected_indices:
                     add_clause(
@@ -407,18 +395,32 @@ def compact_selection_expression(
                         f"{_chain_selector(chain_id)}"
                     )
                     continue
-                add_clause(
-                    f"%{compact_object} and polymer and chain "
-                    f"{_chain_selector(chain_id)} and resi "
-                    f"{_compact_integer_ranges(residue_numbers)}"
-                )
+                plain_numbers = [
+                    residue.number
+                    for residue in residue_ids
+                    if not residue.insertion_code
+                ]
+                if plain_numbers:
+                    add_clause(
+                        f"%{compact_object} and polymer and chain "
+                        f"{_chain_selector(chain_id)} and resi "
+                        f"{_compact_integer_ranges(plain_numbers)}"
+                    )
+                for residue in sorted(
+                    (item for item in residue_ids if item.insertion_code),
+                    key=lambda item: (item.number, item.insertion_code),
+                ):
+                    add_clause(
+                        f"%{compact_object} and polymer and chain "
+                        f"{_chain_selector(chain_id)} and resi {residue.resi}"
+                    )
 
             for key, atom_names in ligand_atoms.items():
-                chain_id, residue_number, residue_name = key
+                chain_id, residue_id, residue_name = key
                 all_residue_indices = all_ligand_indices.get(key, set())
                 base = (
                     f"%{compact_object} and hetatm and chain "
-                    f"{_chain_selector(chain_id)} and resi {residue_number} "
+                    f"{_chain_selector(chain_id)} and resi {residue_id.resi} "
                     f"and resn {residue_name}"
                 )
                 if all_residue_indices and all_residue_indices <= selected_indices:
@@ -433,19 +435,23 @@ def compact_selection_expression(
     return " or ".join(clauses)
 
 
-def _model_token_identities(model: Any) -> set[tuple[str, int, str, str | None]]:
-    identities: set[tuple[str, int, str, str | None]] = set()
+def _model_token_identities(model: Any) -> set[tuple[str, ResidueId, str, str | None]]:
+    identities: set[tuple[str, ResidueId, str, str | None]] = set()
     for atom in getattr(model, "atom", []) or []:
         try:
-            resi = int(atom.resi)
+            residue_id = ResidueId.parse(atom.resi)
         except (TypeError, ValueError):
             continue
         chain = str(getattr(atom, "chain", ""))
         resn = str(getattr(atom, "resn", ""))
         if bool(getattr(atom, "hetatm", False)):
-            identities.add((chain, resi, resn, str(getattr(atom, "name", ""))))
+            atom_name = str(getattr(atom, "name", ""))
+            element = getattr(atom, "symbol", getattr(atom, "elem", ""))
+            if is_hydrogen(element, atom_name):
+                continue
+            identities.add((chain, residue_id, resn, atom_name))
         else:
-            identities.add((chain, resi, resn, None))
+            identities.add((chain, residue_id, resn, None))
     return identities
 
 
@@ -488,17 +494,22 @@ def _paint_mapping_from_model(
     atom_token_indices = np.full(max_index + 1, -1, dtype=np.int32)
     for atom, index in zip(getattr(model, "atom", []) or [], indices):
         try:
-            residue_number = int(atom.resi)
+            residue_id = ResidueId.parse(atom.resi)
         except (TypeError, ValueError):
             continue
         chain_id = str(getattr(atom, "chain", ""))
+        residue_name = str(getattr(atom, "resn", ""))
         if bool(getattr(atom, "hetatm", False)):
+            atom_name = str(getattr(atom, "name", ""))
+            element = getattr(atom, "symbol", getattr(atom, "elem", ""))
+            if is_hydrogen(element, atom_name):
+                continue
             token_idx = token_map.hetatm_token_by_atom.get(
-                (chain_id, residue_number, str(getattr(atom, "name", ""))), -1
+                (chain_id, residue_id, residue_name, atom_name), -1
             )
         else:
             token_idx = token_map.polymer_token_by_residue.get(
-                (chain_id, residue_number), -1
+                (chain_id, residue_id, residue_name), -1
             )
         atom_token_indices[index] = token_idx
     return ObjectPaintMapping(
@@ -569,20 +580,33 @@ def selection_to_token_indices(
     model = cmd.get_model(f"({selection}) and {obj_name}")
     if model is None:
         return []
-    polymer_residues: set[tuple[str, int]] = set()
-    hetatm_atoms: set[tuple[str, int, str]] = set()
+    polymer_residues: set[tuple[str, ResidueId, str]] = set()
+    hetatm_atoms: set[tuple[str, ResidueId, str, str]] = set()
     for atom in model.atom:
-        key = (atom.chain, int(atom.resi))
+        try:
+            residue_id = ResidueId.parse(atom.resi)
+        except ValueError:
+            continue
+        key = (str(atom.chain), residue_id, str(atom.resn))
         if atom.hetatm:
+            if is_hydrogen(
+                getattr(atom, "symbol", getattr(atom, "elem", "")), atom.name
+            ):
+                continue
             hetatm_atoms.add((*key, atom.name))
         else:
             polymer_residues.add(key)
     result = []
     for token in token_map:
         if token.is_hetatm:
-            if (token.chain_id, token.res_num, token.atom_name) in hetatm_atoms:
+            if (
+                token.chain_id,
+                token.residue_id,
+                token.res_name,
+                token.atom_name,
+            ) in hetatm_atoms:
                 result.append(token.token_idx)
-        elif (token.chain_id, token.res_num) in polymer_residues:
+        elif (token.chain_id, token.residue_id, token.res_name) in polymer_residues:
             result.append(token.token_idx)
     return sorted(result)
 
@@ -621,7 +645,7 @@ def token_bfactor_keys(token_map: TokenMap) -> list[tuple[str, str, str]]:
     return [
         (
             token.chain_id,
-            str(token.res_num),
+            token.resi,
             token.atom_name if token.is_hetatm and token.atom_name else "",
         )
         for token in token_map
@@ -1012,19 +1036,23 @@ def reset_bfactors(obj_name: str, value: float = 100.0) -> None:
 
 
 def _representative_coords_from_model(model: Any, token_map: TokenMap) -> np.ndarray:
-    coords = np.zeros((len(token_map), 3), dtype=np.float32)
-    atom_coords: dict[tuple[str, int, str], tuple[float, float, float]] = {}
-    first_atom: dict[tuple[str, int], tuple[float, float, float]] = {}
+    coords = np.empty((len(token_map), 3), dtype=np.float32)
+    atom_coords: dict[tuple[str, ResidueId, str, str], tuple[float, float, float]] = {}
+    first_atom: dict[tuple[str, ResidueId, str], tuple[float, float, float]] = {}
     for atom in model.atom:
-        key = (atom.chain, int(atom.resi), atom.name)
+        try:
+            residue_id = ResidueId.parse(atom.resi)
+        except ValueError:
+            continue
+        residue_key = (str(atom.chain), residue_id, str(atom.resn))
+        key = (*residue_key, str(atom.name))
         atom_coords[key] = tuple(atom.coord)
-        first_atom.setdefault((atom.chain, int(atom.resi)), tuple(atom.coord))
+        first_atom.setdefault(residue_key, tuple(atom.coord))
+    missing: list[str] = []
     for token in token_map:
-        residue_key = (token.chain_id, token.res_num)
+        residue_key = (token.chain_id, token.residue_id, token.res_name)
         if token.is_hetatm and token.atom_name is not None:
-            xyz = atom_coords.get(
-                (*residue_key, token.atom_name), first_atom.get(residue_key, (0, 0, 0))
-            )
+            xyz = atom_coords.get((*residue_key, token.atom_name))
         else:
             xyz = next(
                 (
@@ -1032,9 +1060,21 @@ def _representative_coords_from_model(model: Any, token_map: TokenMap) -> np.nda
                     for name in ("CA", "C1'", "C1*")
                     if (*residue_key, name) in atom_coords
                 ),
-                first_atom.get(residue_key, (0, 0, 0)),
+                first_atom.get(residue_key),
             )
+        if xyz is None:
+            atom_suffix = f"/{token.atom_name}" if token.atom_name else ""
+            missing.append(
+                f"{token.chain_id}:{token.res_name}{token.resi}{atom_suffix}"
+            )
+            continue
         coords[token.token_idx] = xyz
+    if missing:
+        preview = ", ".join(missing[:8])
+        suffix = "" if len(missing) <= 8 else f" (+{len(missing) - 8} more)"
+        raise ValueError(
+            f"Viewer object is missing canonical token coordinates: {preview}{suffix}."
+        )
     return coords
 
 

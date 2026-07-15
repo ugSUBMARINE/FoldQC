@@ -64,7 +64,7 @@ def _install_fake_pymol() -> None:
 _install_fake_pymol()
 
 from FoldQC.plot_viewer import PlotDialog  # noqa: E402
-from FoldQC.token_map import TokenInfo  # noqa: E402
+from FoldQC.token_map import ResidueId, TokenInfo  # noqa: E402
 
 
 class PlotViewerSelectionTests(unittest.TestCase):
@@ -78,7 +78,7 @@ class PlotViewerSelectionTests(unittest.TestCase):
         return TokenInfo(
             token_idx=token_idx,
             chain_id=chain_id,
-            res_num=token_idx + 1,
+            residue_id=ResidueId(token_idx + 1),
             res_name="ALA",
             is_hetatm=False,
             atom_name=None,
@@ -221,7 +221,7 @@ class PlotViewerSelectionTests(unittest.TestCase):
         polymer = TokenInfo(
             token_idx=44,
             chain_id="A",
-            res_num=45,
+            residue_id=ResidueId(45),
             res_name="PHE",
             is_hetatm=False,
             atom_name=None,
@@ -229,7 +229,7 @@ class PlotViewerSelectionTests(unittest.TestCase):
         ligand_atom = TokenInfo(
             token_idx=317,
             chain_id="L",
-            res_num=501,
+            residue_id=ResidueId(501),
             res_name="lig",
             is_hetatm=True,
             atom_name="C1",
@@ -612,7 +612,7 @@ class PlotViewerSelectionTests(unittest.TestCase):
                     TokenInfo(
                         token_idx=idx,
                         chain_id="A",
-                        res_num=idx + 1,
+                        residue_id=ResidueId(idx + 1),
                         res_name="ALA",
                         is_hetatm=False,
                         atom_name=None,
@@ -638,7 +638,7 @@ class PlotViewerSelectionTests(unittest.TestCase):
             TokenInfo(
                 token_idx=0,
                 chain_id="A",
-                res_num=1,
+                residue_id=ResidueId(1),
                 res_name="ALA",
                 is_hetatm=False,
                 atom_name=None,

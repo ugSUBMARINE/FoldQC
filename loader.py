@@ -58,7 +58,16 @@ def load_prediction_data(
             f"StructureIndex path {structure_index.path!s} does not match "
             f"model_{rank} structure path {model.structure_path!s}."
         )
-    if load_token_plddt and structure_index is None:
+    needs_structure_index = any(
+        (
+            load_pae,
+            load_pde,
+            load_embeddings,
+            load_token_plddt,
+            load_contact_probs,
+        )
+    )
+    if needs_structure_index and structure_index is None:
         structure_index = StructureIndex.from_path(model.structure_path)
     return BUILTIN_PROVIDERS.get(pred_files.provider).load(
         pred_files,

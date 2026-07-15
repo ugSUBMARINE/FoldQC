@@ -70,7 +70,6 @@ def _scan_af3_dir(pred_dir: Path) -> PredictionFiles:
         pred_dir=pred_dir,
         provider="alphafold3",
         input_path=pred_dir,
-        capabilities={"plddt"},
     )
 
     ranking_scores = _load_af3_ranking_scores(pred_dir)
@@ -117,6 +116,11 @@ def _scan_af3_dir(pred_dir: Path) -> PredictionFiles:
                     object_name=f"{_safe_object_name(name)}_model_{rank}",
                     confidence_path=item.confidence_path,
                     summary_path=item.summary_path,
+                    capabilities=frozenset(
+                        {"plddt", "pae", "contact_probs"}
+                        if item.confidence_path is not None
+                        else {"plddt"}
+                    ),
                     metadata={"seed": item.seed, "sample": item.sample},
                 )
             )
@@ -133,11 +137,14 @@ def _scan_af3_dir(pred_dir: Path) -> PredictionFiles:
                 object_name=f"{_safe_object_name(stem)}_model_0",
                 confidence_path=_first_confidence_json(pred_dir),
                 summary_path=_af3_summary_path(pred_dir),
+                capabilities=frozenset(
+                    {"plddt", "pae", "contact_probs"}
+                    if _first_confidence_json(pred_dir) is not None
+                    else {"plddt"}
+                ),
             )
         )
 
-    if any(model.confidence_path is not None for model in files.models):
-        files.capabilities.update({"pae", "contact_probs"})
     return files
 
 
@@ -149,7 +156,6 @@ def _scan_af3_server_dir(pred_dir: Path) -> PredictionFiles:
         pred_dir=pred_dir,
         provider="af3_server",
         input_path=pred_dir,
-        capabilities={"plddt"},
     )
 
     model_re = re.compile(r"(.+)_model_(\d+)$")
@@ -185,12 +191,15 @@ def _scan_af3_server_dir(pred_dir: Path) -> PredictionFiles:
                 object_name=f"{_safe_object_name(name)}_model_{rank}",
                 confidence_path=full_data_path,
                 summary_path=summary_path,
+                capabilities=frozenset(
+                    {"plddt", "pae", "contact_probs"}
+                    if full_data_path is not None
+                    else {"plddt"}
+                ),
                 metadata={"source_prefix": prefix},
             )
         )
 
-    if any(model.confidence_path is not None for model in files.models):
-        files.capabilities.update({"pae", "contact_probs"})
     return files
 
 

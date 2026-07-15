@@ -10,7 +10,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from FoldQC import export
-from FoldQC.token_map import TokenInfo, TokenMap
+from FoldQC.token_map import ResidueId, TokenInfo, TokenMap
 
 
 def _token(
@@ -23,7 +23,7 @@ def _token(
     return TokenInfo(
         token_idx=idx,
         chain_id=chain_id,
-        res_num=idx + 1 if res_num is None else res_num,
+        residue_id=ResidueId(idx + 1 if res_num is None else res_num),
         res_name="LIG" if is_hetatm else "ALA",
         is_hetatm=is_hetatm,
         atom_name=f"C{idx}" if is_hetatm else None,
@@ -124,7 +124,7 @@ def test_build_token_rows_formats_base_metadata_and_token_values(
 
     assert len(rows) == 2
     first = rows[0]
-    assert first["export_schema_version"] == "1"
+    assert first["export_schema_version"] == "2"
     assert first["provider"] == "boltz"
     assert first["prediction_name"] == "target"
     assert first["input_path"] == str(tmp_path)
@@ -142,6 +142,8 @@ def test_build_token_rows_formats_base_metadata_and_token_values(
     assert first["token_type"] == "polymer_residue"
     assert first["chain_id"] == "A"
     assert first["res_num"] == 1
+    assert first["residue_id"] == "1"
+    assert first["insertion_code"] == ""
     assert first["res_name"] == "ALA"
     assert first["atom_name"] == ""
     assert first["is_hetatm"] == "false"
@@ -186,7 +188,7 @@ def test_build_token_rows_adds_ensemble_metadata(tmp_path: Path) -> None:
 
     assert rows == [
         {
-            "export_schema_version": "1",
+            "export_schema_version": "2",
             "provider": "boltz",
             "prediction_name": "target",
             "input_path": str(tmp_path),
@@ -204,6 +206,8 @@ def test_build_token_rows_adds_ensemble_metadata(tmp_path: Path) -> None:
             "token_type": "polymer_residue",
             "chain_id": "A",
             "res_num": 1,
+            "residue_id": "1",
+            "insertion_code": "",
             "res_name": "ALA",
             "atom_name": "",
             "is_hetatm": "false",
@@ -222,7 +226,7 @@ def test_write_csv_uses_stable_header_and_row_values(tmp_path: Path) -> None:
     path = tmp_path / "tokens.csv"
     rows = [
         {
-            "export_schema_version": "1",
+            "export_schema_version": "2",
             "provider": "boltz",
             "prediction_name": "target",
             "input_path": str(tmp_path),

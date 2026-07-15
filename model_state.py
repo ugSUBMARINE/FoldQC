@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 
+from .data_contracts import normalize_and_validate_prediction_data
 from .loader_models import PredictionData
 from .structure_index import StructureIndex
 
@@ -47,6 +48,9 @@ class ModelState:
                 f"StructureIndex: {self.data.structure_path!s} != "
                 f"{self.structure_index.path!s}."
             )
+        normalize_and_validate_prediction_data(
+            self.data, len(self.structure_index.token_map)
+        )
 
     @property
     def version(self) -> int:
@@ -81,20 +85,9 @@ class ModelState:
                     f"{candidate!s} != {current!s}."
                 )
 
-        token_plddt = getattr(incoming, "token_plddt", None)
-        token_source = getattr(incoming, "token_plddt_source", None)
-        if (token_plddt is None) != (token_source is None):
-            raise ValueError(
-                f"Partial model_{self.rank} data must provide token pLDDT values "
-                "and provenance together."
-            )
-
-        embeddings_s = getattr(incoming, "embeddings_s", None)
-        embeddings_z = getattr(incoming, "embeddings_z", None)
-        if (embeddings_s is None) != (embeddings_z is None):
-            raise ValueError(
-                f"Partial model_{self.rank} data must provide both embedding arrays."
-            )
+        normalize_and_validate_prediction_data(
+            incoming, len(self.structure_index.token_map)
+        )
 
     def validate_structure_index(self, structure_index: StructureIndex) -> None:
         """Reject a staged state that did not reuse this canonical index."""

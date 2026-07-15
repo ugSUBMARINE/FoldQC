@@ -9,7 +9,7 @@ from typing import Literal, TextIO
 
 import numpy as np
 
-from .token_map import TokenInfo, TokenMap
+from .token_map import ResidueId, TokenInfo, TokenMap, is_hydrogen
 
 StructureFormat = Literal["cif", "pdb"]
 
@@ -19,9 +19,10 @@ class _AtomRecord:
     hetatm: bool
     name: str
     res_name: str
-    res_num: int
+    residue_id: ResidueId
     chain_id: str
     b_factor: float
+    element: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,12 +33,14 @@ class StructureIndex:
     format: StructureFormat
     token_map: TokenMap
     atom_count: int
-    atom_to_token: tuple[int, ...]
+    atom_to_token: tuple[int | None, ...]
     structure_plddt: np.ndarray
 
     def __post_init__(self) -> None:
         path = Path(self.path)
-        atom_to_token = tuple(int(index) for index in self.atom_to_token)
+        atom_to_token = tuple(
+            None if index is None else int(index) for index in self.atom_to_token
+        )
         values = np.array(self.structure_plddt, dtype=np.float32, copy=True)
         if self.format not in {"cif", "pdb"}:
             raise ValueError(f"Unsupported structure format: {self.format}")
@@ -49,7 +52,14 @@ class StructureIndex:
             raise ValueError(
                 "StructureIndex structure pLDDT must contain one value per token."
             )
-        if any(index < 0 or index >= len(self.token_map) for index in atom_to_token):
+        if np.isinf(values).any():
+            raise ValueError(
+                "StructureIndex structure pLDDT must not contain infinity."
+            )
+        if any(
+            index is not None and (index < 0 or index >= len(self.token_map))
+            for index in atom_to_token
+        ):
             raise ValueError("StructureIndex atom-to-token mapping is out of range.")
         values.setflags(write=False)
         object.__setattr__(self, "path", path)
@@ -70,12 +80,19 @@ class StructureIndex:
         else:
             raise ValueError(f"Unsupported structure format: {path.suffix}")
 
-        with path.open(encoding="utf-8") as handle:
-            atoms = parser(handle)
+        try:
+            with path.open(encoding="utf-8") as handle:
+                atoms = parser(handle)
+        except ValueError as exc:
+            raise ValueError(f"Failed to parse {path}: {exc}") from exc
         if not atoms:
             raise ValueError(f"No atom records found in {path}")
 
         token_map, atom_to_token, structure_plddt = _index_atoms(atoms)
+        if not token_map:
+            raise ValueError(
+                f"Structure {path} contains atom records but no supported tokens."
+            )
         return cls(
             path=path,
             format=structure_format,
@@ -98,13 +115,20 @@ class StructureIndex:
                 f"Atom pLDDT length {len(values)} does not match "
                 f"{self.atom_count} atoms in {self.path.name}."
             )
+        if np.isinf(values).any():
+            raise ValueError(
+                f"Atom pLDDT array for {self.path.name} must not contain infinity."
+            )
 
-        finite = values[np.isfinite(values)]
-        if finite.size and float(np.nanmax(finite)) > 1.5:
-            values = values / 100.0
+        percentage = np.isfinite(values) & (values > 1.5)
+        if percentage.any():
+            values = values.copy()
+            values[percentage] /= 100.0
 
         grouped: list[list[float]] = [[] for _ in self.token_map]
         for token_idx, value in zip(self.atom_to_token, values, strict=True):
+            if token_idx is None:
+                continue
             grouped[token_idx].append(float(value))
         collapsed = []
         for group in grouped:
@@ -157,14 +181,18 @@ def _parse_cif_atoms(handle: TextIO) -> list[_AtomRecord]:
             continue
         b_col = col.get("B_iso_or_equiv")
         b_factor = float(parts[b_col]) if b_col is not None else np.nan
+        insertion_col = col.get("pdbx_PDB_ins_code")
+        insertion_code = parts[insertion_col] if insertion_col is not None else ""
+        element_col = col.get("type_symbol")
         atoms.append(
             _AtomRecord(
                 hetatm=parts[col["group_PDB"]] == "HETATM",
                 name=parts[col["label_atom_id"]],
                 res_name=parts[res_name_col],
-                res_num=int(parts[col["auth_seq_id"]]),
+                residue_id=ResidueId(int(parts[col["auth_seq_id"]]), insertion_code),
                 chain_id=parts[col["auth_asym_id"]],
                 b_factor=b_factor,
+                element=parts[element_col] if element_col is not None else "",
             )
         )
     return atoms
@@ -191,9 +219,10 @@ def _parse_pdb_atoms(handle: TextIO) -> list[_AtomRecord]:
                 hetatm=record == "HETATM",
                 name=raw[12:16].strip(),
                 res_name=raw[17:20].strip(),
-                res_num=res_num,
+                residue_id=ResidueId(res_num, raw[26:27]),
                 chain_id=raw[21:22].strip(),
                 b_factor=b_factor,
+                element=raw[76:78].strip(),
             )
         )
     return atoms
@@ -201,20 +230,43 @@ def _parse_pdb_atoms(handle: TextIO) -> list[_AtomRecord]:
 
 def _index_atoms(
     atoms: list[_AtomRecord],
-) -> tuple[TokenMap, tuple[int, ...], np.ndarray]:
+) -> tuple[TokenMap, tuple[int | None, ...], np.ndarray]:
     tokens: list[TokenInfo] = []
-    atom_to_token: list[int] = []
+    atom_to_token: list[int | None] = []
     first_b_factors: list[float] = []
-    polymer_tokens: dict[tuple[str, int, str], int] = {}
+    polymer_tokens: dict[tuple[str, ResidueId], tuple[int, str]] = {}
+    hetatm_tokens: set[tuple[str, ResidueId, str, str]] = set()
+    residue_names: dict[tuple[str, ResidueId], str] = {}
 
     for atom in atoms:
+        residue_key = (atom.chain_id, atom.residue_id)
+        existing_name = residue_names.get(residue_key)
+        if existing_name is not None and existing_name != atom.res_name:
+            raise ValueError(
+                "Conflicting residue names for "
+                f"{atom.chain_id}/{atom.residue_id}: "
+                f"{existing_name!r} and {atom.res_name!r}."
+            )
+        residue_names[residue_key] = atom.res_name
         if atom.hetatm:
+            if is_hydrogen(atom.element, atom.name):
+                atom_to_token.append(None)
+                continue
+            identity = (
+                atom.chain_id,
+                atom.residue_id,
+                atom.res_name,
+                atom.name,
+            )
+            if identity in hetatm_tokens:
+                raise ValueError(f"Duplicate HETATM token identity: {identity!r}")
+            hetatm_tokens.add(identity)
             token_idx = len(tokens)
             tokens.append(
                 TokenInfo(
                     token_idx=token_idx,
                     chain_id=atom.chain_id,
-                    res_num=atom.res_num,
+                    residue_id=atom.residue_id,
                     res_name=atom.res_name,
                     is_hetatm=True,
                     atom_name=atom.name,
@@ -222,26 +274,31 @@ def _index_atoms(
             )
             first_b_factors.append(atom.b_factor)
         else:
-            key = (atom.chain_id, atom.res_num, atom.res_name)
-            token_idx = polymer_tokens.get(key, -1)
-            if token_idx < 0:
+            key = residue_key
+            existing = polymer_tokens.get(key)
+            if existing is None:
                 token_idx = len(tokens)
-                polymer_tokens[key] = token_idx
+                polymer_tokens[key] = (token_idx, atom.res_name)
                 tokens.append(
                     TokenInfo(
                         token_idx=token_idx,
                         chain_id=atom.chain_id,
-                        res_num=atom.res_num,
+                        residue_id=atom.residue_id,
                         res_name=atom.res_name,
                         is_hetatm=False,
                         atom_name=None,
                     )
                 )
                 first_b_factors.append(atom.b_factor)
+            else:
+                token_idx = existing[0]
         atom_to_token.append(token_idx)
 
+    structure_plddt = np.asarray(first_b_factors, dtype=np.float32)
+    percentage = np.isfinite(structure_plddt) & (structure_plddt > 1.5)
+    structure_plddt[percentage] /= 100.0
     return (
         TokenMap(tuple(tokens)),
         tuple(atom_to_token),
-        np.asarray(first_b_factors, dtype=np.float32) / 100.0,
+        structure_plddt,
     )

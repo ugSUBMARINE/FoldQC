@@ -24,7 +24,7 @@ from FoldQC.ensemble import (  # noqa: E402
 )
 from FoldQC.model_state import ModelState  # noqa: E402
 from FoldQC.structure_index import StructureIndex  # noqa: E402
-from FoldQC.token_map import TokenInfo, TokenMap  # noqa: E402
+from FoldQC.token_map import ResidueId, TokenInfo, TokenMap  # noqa: E402
 
 
 def _token(idx: int, is_hetatm: bool = False) -> TokenInfo:
@@ -32,7 +32,7 @@ def _token(idx: int, is_hetatm: bool = False) -> TokenInfo:
     return TokenInfo(
         token_idx=idx,
         chain_id="L" if is_hetatm else "A",
-        res_num=idx + 1,
+        residue_id=ResidueId(idx + 1),
         res_name="LIG" if is_hetatm else "ALA",
         is_hetatm=is_hetatm,
         atom_name=atom_name,

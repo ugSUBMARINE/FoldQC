@@ -17,7 +17,7 @@ from FoldQC.mol_viewer import (  # noqa: E402
     compare_token_map_to_object,
 )
 from FoldQC.structure_index import StructureIndex  # noqa: E402
-from FoldQC.token_map import TokenInfo, TokenMap  # noqa: E402
+from FoldQC.token_map import ResidueId, TokenInfo, TokenMap  # noqa: E402
 
 QUOTED_ATOM_CIF = """data_test
 loop_
@@ -48,6 +48,7 @@ class TokenMapTests(unittest.TestCase):
         *,
         chain_id: str = "A",
         res_num: int = 1,
+        insertion_code: str = "",
         res_name: str = "ALA",
         is_hetatm: bool = False,
         atom_name: str | None = None,
@@ -57,7 +58,7 @@ class TokenMapTests(unittest.TestCase):
         return TokenInfo(
             token_idx=token_idx,
             chain_id=chain_id,
-            res_num=res_num,
+            residue_id=ResidueId(res_num, insertion_code),
             res_name=res_name,
             is_hetatm=is_hetatm,
             atom_name=atom_name,
@@ -68,6 +69,14 @@ class TokenMapTests(unittest.TestCase):
 
         with self.assertRaises(FrozenInstanceError):
             token.res_num = 2  # type: ignore[misc]
+
+    def test_residue_id_normalizes_and_parses_canonical_labels(self) -> None:
+        self.assertEqual(ResidueId(42, "."), ResidueId(42))
+        self.assertEqual(ResidueId(42, "?"), ResidueId(42))
+        self.assertEqual(ResidueId.parse("-3A"), ResidueId(-3, "A"))
+        self.assertEqual(str(ResidueId(42, "A")), "42A")
+        with self.assertRaisesRegex(ValueError, "single alphanumeric"):
+            ResidueId(42, "AB")
 
     def test_token_map_sequence_hash_and_metadata(self) -> None:
         tokens = (
@@ -94,15 +103,21 @@ class TokenMapTests(unittest.TestCase):
         self.assertEqual(token_map.chain_to_indices, {"A": (0, 1), "L": (2,)})
         self.assertEqual(token_map.chain_id_to_index, {"A": 0, "L": 1})
         self.assertEqual(token_map.polymer_indices, (0, 1))
-        self.assertEqual(token_map.polymer_token_by_residue, {("A", 1): 0, ("A", 2): 1})
-        self.assertEqual(token_map.hetatm_token_by_atom, {("L", 3, "C1"): 2})
+        self.assertEqual(
+            token_map.polymer_token_by_residue,
+            {("A", ResidueId(1), "ALA"): 0, ("A", ResidueId(2), "ALA"): 1},
+        )
+        self.assertEqual(
+            token_map.hetatm_token_by_atom,
+            {("L", ResidueId(3), "LIG", "C1"): 2},
+        )
         self.assertEqual(
             token_map.token_identities,
             frozenset(
                 {
-                    ("A", 1, "ALA", None),
-                    ("A", 2, "ALA", None),
-                    ("L", 3, "LIG", "C1"),
+                    ("A", ResidueId(1), "ALA", None),
+                    ("A", ResidueId(2), "ALA", None),
+                    ("L", ResidueId(3), "LIG", "C1"),
                 }
             ),
         )
@@ -112,6 +127,98 @@ class TokenMapTests(unittest.TestCase):
     def test_token_map_rejects_non_dense_indices(self) -> None:
         with self.assertRaisesRegex(ValueError, "dense token indices"):
             TokenMap((self._token(1),))
+
+    def test_chain_order_is_unique_by_first_appearance(self) -> None:
+        token_map = TokenMap(
+            (
+                self._token(0, chain_id="A", res_num=1),
+                self._token(1, chain_id="B", res_num=1),
+                self._token(2, chain_id="A", res_num=2),
+            )
+        )
+        self.assertEqual(token_map.chain_order, ("A", "B"))
+
+    def test_cif_insertion_codes_and_ligand_hydrogens_are_lossless(self) -> None:
+        cif = """data_test
+loop_
+_atom_site.group_PDB
+_atom_site.type_symbol
+_atom_site.label_atom_id
+_atom_site.auth_comp_id
+_atom_site.auth_seq_id
+_atom_site.auth_asym_id
+_atom_site.pdbx_PDB_ins_code
+_atom_site.B_iso_or_equiv
+ATOM C CA ALA 42 A A 90
+HETATM C C1 LIG 42 L . 70
+HETATM H H1 LIG 42 L . 60
+HETATM D D1 LIG 42 L . 50
+HETATM T T1 LIG 42 L . 40
+HETATM O O1 LIG 42 L A 30
+#
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "insertions.cif"
+            path.write_text(cif)
+            index = StructureIndex.from_path(path)
+
+        self.assertEqual(index.atom_count, 6)
+        self.assertEqual(index.atom_to_token, (0, 1, None, None, None, 2))
+        self.assertEqual(
+            [token.residue_id for token in index.token_map],
+            [ResidueId(42, "A"), ResidueId(42), ResidueId(42, "A")],
+        )
+        np.testing.assert_allclose(
+            index.collapse_atom_plddt(np.array([90, 70, 1, 2, 3, 30])),
+            [0.9, 0.7, 0.3],
+        )
+
+    def test_pdb_insertion_code_and_element_columns_are_parsed(self) -> None:
+        pdb = (
+            "ATOM      1  CA  GLY A  42A     0.000   0.000   0.000  1.00 80.00           C  \n"
+            "HETATM    2  H1  LIG L  42A     1.000   0.000   0.000  1.00 70.00           H  \n"
+            "HETATM    3  C1  LIG L  42A     2.000   0.000   0.000  1.00 60.00           C  \n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "insertions.pdb"
+            path.write_text(pdb)
+            index = StructureIndex.from_path(path)
+
+        self.assertEqual(index.atom_to_token, (0, None, 1))
+        self.assertEqual(index.token_map[0].resi, "42A")
+        self.assertEqual(index.token_map[1].resi, "42A")
+
+    def test_structure_rejects_conflicts_duplicates_and_only_hydrogens(self) -> None:
+        cases = {
+            "conflict.pdb": (
+                "ATOM      1  CA  ALA A   1      0.000   0.000   0.000  1.00 80.00           C  \n"
+                "ATOM      2  CA  GLY A   1      1.000   0.000   0.000  1.00 70.00           C  \n",
+                "Conflicting residue names",
+            ),
+            "duplicate.pdb": (
+                "HETATM    1  C1  LIG L   1      0.000   0.000   0.000  1.00 80.00           C  \n"
+                "HETATM    2  C1  LIG L   1      1.000   0.000   0.000  1.00 70.00           C  \n",
+                "Duplicate HETATM",
+            ),
+            "ligand_conflict.pdb": (
+                "HETATM    1  C1  LIG L   1      0.000   0.000   0.000  1.00 80.00           C  \n"
+                "HETATM    2  C2  DRG L   1      1.000   0.000   0.000  1.00 70.00           C  \n",
+                "Conflicting residue names",
+            ),
+            "hydrogen.pdb": (
+                "HETATM    1  H1  LIG L   1      0.000   0.000   0.000  1.00 80.00           H  \n",
+                "no supported tokens",
+            ),
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            for name, (text, message) in cases.items():
+                path = Path(tmp) / name
+                path.write_text(text)
+                with (
+                    self.subTest(name=name),
+                    self.assertRaisesRegex(ValueError, message),
+                ):
+                    StructureIndex.from_path(path)
 
     def test_cif_parser_unquotes_atom_names_with_apostrophes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -162,6 +269,8 @@ HETATM    3  C1  LIG L   2      2.000   0.000   0.000  1.00 70.00           C
         )
         with self.assertRaisesRegex(ValueError, "does not match 3 atoms"):
             index.collapse_atom_plddt(np.ones(2, dtype=np.float32))
+        with self.assertRaisesRegex(ValueError, "must not contain infinity"):
+            index.collapse_atom_plddt(np.array([0.8, np.inf, 0.6]))
 
     def _compare_overlap(self, token_map, atoms):
         old_pymol = sys.modules.get("pymol")
@@ -300,6 +409,20 @@ HETATM    3  C1  LIG L   2      2.000   0.000   0.000  1.00 70.00           C
             expression,
             "(%model and polymer and chain A)",
         )
+
+    def test_compact_selection_emits_exact_insertion_code_clauses(self) -> None:
+        token_map = TokenMap(
+            (
+                self._token(0, res_num=41),
+                self._token(1, res_num=42, insertion_code="A"),
+                self._token(2, res_num=43),
+            )
+        )
+
+        expression = compact_selection_expression([0, 1], [("model", token_map)])
+
+        self.assertIn("resi 41", expression)
+        self.assertIn("resi 42A", expression)
 
     def test_compact_selection_groups_objects_chains_and_ligand_residues(
         self,
@@ -473,17 +596,8 @@ HETATM    3  C1  LIG L   2      2.000   0.000   0.000  1.00 70.00           C
             )
 
     def test_compact_selection_rejects_invalid_structured_values(self) -> None:
-        token = TokenInfo(
-            token_idx=0,
-            chain_id="A",
-            res_num="not-a-residue-number",  # type: ignore[arg-type]
-            res_name="ALA",
-            is_hetatm=False,
-            atom_name=None,
-        )
-
-        with self.assertRaisesRegex(ValueError, "invalid res_num"):
-            compact_selection_expression([0], [("model", TokenMap((token,)))])
+        with self.assertRaisesRegex(ValueError, "Invalid residue identifier"):
+            ResidueId.parse("not-a-residue-number")
 
 
 if __name__ == "__main__":

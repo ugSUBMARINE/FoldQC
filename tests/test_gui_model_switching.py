@@ -502,7 +502,7 @@ from FoldQC.gui import (  # noqa: E402
 from FoldQC.gui_state import GuiState  # noqa: E402
 from FoldQC.model_state import ModelState  # noqa: E402
 from FoldQC.structure_index import StructureIndex  # noqa: E402
-from FoldQC.token_map import TokenInfo, TokenMap  # noqa: E402
+from FoldQC.token_map import ResidueId, TokenInfo, TokenMap  # noqa: E402
 
 
 def _structure_index(data, token_map: TokenMap | None = None) -> StructureIndex:
@@ -526,6 +526,36 @@ def _structure_index(data, token_map: TokenMap | None = None) -> StructureIndex:
 def _model_state(rank: int, data, token_map: TokenMap | None = None) -> ModelState:
     if not hasattr(data, "rank"):
         data.rank = rank
+    for field, default in (
+        ("name", "target"),
+        ("provider", "boltz"),
+        ("display_label", f"model_{rank}"),
+        ("token_plddt", None),
+        ("token_plddt_source", None),
+        ("pae", None),
+        ("pde", None),
+        ("contact_probs", None),
+        ("confidence", None),
+        ("summary_confidence", None),
+        ("affinity", None),
+        ("embeddings_s", None),
+        ("embeddings_z", None),
+    ):
+        if not hasattr(data, field):
+            setattr(data, field, default)
+    if data.token_plddt is not None and data.token_plddt_source is None:
+        data.token_plddt_source = "provider_token"
+    token_count = 0
+    if data.token_plddt is not None:
+        token_count = len(data.token_plddt)
+    else:
+        for field in ("pae", "pde", "contact_probs"):
+            value = getattr(data, field)
+            if value is not None:
+                token_count = np.asarray(value).shape[0]
+                break
+    if token_map is None or (not token_map and token_count):
+        token_map = TokenMap(tuple(_token(index) for index in range(token_count)))
     return ModelState(rank, data, _structure_index(data, token_map))
 
 
@@ -672,6 +702,9 @@ class _PredictionFiles:
         ),
     ]
 
+    for _model in models:
+        _model.supports = lambda _capability: True
+
     def structure_path(self, rank: int) -> Path:
         return Path(f"/tmp/target_model_{rank}.cif")
 
@@ -693,6 +726,10 @@ class _SessionPredictionFiles:
         self.has_contact_probs = False
         self.has_plddt = True
         self.supports_ensemble = len(ranks) > 1
+        for model in self.models:
+            model.supports = lambda capability, owner=self: bool(
+                getattr(owner, f"has_{capability}", False)
+            )
 
     def structure_path(self, rank: int) -> Path:
         return self._root / f"target_model_{rank}.cif"
@@ -823,7 +860,11 @@ class _CsvPredictionFiles:
         self.input_path = root
         self.pred_dir = root
         self.models = [
-            types.SimpleNamespace(rank=rank, display_label=f"rank {rank}")
+            types.SimpleNamespace(
+                rank=rank,
+                display_label=f"rank {rank}",
+                supports=lambda _capability: True,
+            )
             for rank in ranks
         ]
 
@@ -1059,7 +1100,7 @@ def _token(
     return TokenInfo(
         token_idx=idx,
         chain_id=chain_id,
-        res_num=idx + 1 if res_num is None else res_num,
+        residue_id=ResidueId(idx + 1 if res_num is None else res_num),
         res_name="LIG" if is_hetatm else "ALA",
         is_hetatm=is_hetatm,
         atom_name=f"C{idx}" if is_hetatm else None,
@@ -2790,6 +2831,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
 
     def test_lazy_single_model_load_preserves_arrays_and_resumes_once(self) -> None:
         files = _SessionPredictionFiles(Path("/tmp"), ranks=(0,))
+        files.has_pae = True
         old_pde = np.array([[1.0]], dtype=np.float32)
         old_data = types.SimpleNamespace(
             rank=0,
@@ -2839,7 +2881,9 @@ class GuiModelSwitchingTests(unittest.TestCase):
         self.assertIs(dialog._model_states[0], state)
         self.assertIs(state.data, old_data)
         self.assertIs(old_data.pae, new_data.pae)
-        self.assertIs(old_data.pde, old_pde)
+        self.assertIsNot(old_data.pde, old_pde)
+        np.testing.assert_array_equal(old_data.pde, old_pde)
+        self.assertFalse(old_data.pde.flags.writeable)
         self.assertIs(state.token_map, token_map)
         self.assertEqual(resumed, [old_data])
         self.assertTrue(calls[0][2]["load_pae"])
@@ -2878,6 +2922,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
 
     def test_lazy_ensemble_failure_commits_no_members(self) -> None:
         files = _SessionPredictionFiles(Path("/tmp"), ranks=(0, 1))
+        files.has_pae = True
         old_data = [
             types.SimpleNamespace(
                 rank=rank,
@@ -2938,6 +2983,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
 
     def test_lazy_ensemble_missing_array_rejects_whole_batch_atomically(self) -> None:
         files = _SessionPredictionFiles(Path("/tmp"), ranks=(0, 1))
+        files.has_pae = True
         states = [
             _model_state(
                 rank,
@@ -2995,6 +3041,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
 
     def test_lazy_result_is_rejected_after_state_version_changes(self) -> None:
         files = _SessionPredictionFiles(Path("/tmp"), ranks=(0,))
+        files.has_pae = True
         data = types.SimpleNamespace(
             rank=0,
             pae=None,
@@ -3004,7 +3051,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         )
         dialog = self._session_dialog()
         dialog._pred_files = files
-        _set_active_state(dialog, data)
+        _set_active_state(dialog, data, _token_map(_token(0)))
         state = dialog._active_model_state
         dialog._job_runner = _ManualJobRunner()
         target = _PlotTarget(
@@ -3047,6 +3094,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
 
     def test_close_abandons_lazy_result_without_resuming_action(self) -> None:
         files = _SessionPredictionFiles(Path("/tmp"), ranks=(0,))
+        files.has_pae = True
         old_data = types.SimpleNamespace(
             rank=0,
             pae=None,
@@ -3895,13 +3943,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
     def test_chain_iptm_is_enabled_with_confidence_data(self) -> None:
         enabled = _PYMOL.Qt.QtCore.Qt.ItemFlag.ItemIsEnabled
         dialog = _new_dialog()
-        dialog._pred_files = types.SimpleNamespace(
-            has_pae=False,
-            has_pde=False,
-            has_contact_probs=False,
-            has_plddt=False,
-            supports_ensemble=False,
-        )
+        dialog._pred_files = _SessionPredictionFiles(Path("/tmp"), ranks=(0,))
         data = types.SimpleNamespace(
             token_plddt=None,
             confidence={"chains_iptm": {"0": 0.8}},
@@ -4024,13 +4066,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
 
         enabled = _PYMOL.Qt.QtCore.Qt.ItemFlag.ItemIsEnabled
         dialog = _new_dialog()
-        dialog._pred_files = types.SimpleNamespace(
-            has_pae=False,
-            has_pde=False,
-            has_contact_probs=False,
-            has_plddt=False,
-            supports_ensemble=False,
-        )
+        dialog._pred_files = _SessionPredictionFiles(Path("/tmp"), ranks=(0,))
         data = types.SimpleNamespace(
             token_plddt=None,
             confidence=None,
@@ -5586,6 +5622,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
                 types.SimpleNamespace(
                     chain="L",
                     resi="1",
+                    resn="LIG",
                     hetatm=True,
                     name="C0",
                 )
@@ -6488,6 +6525,87 @@ class GuiModelSwitchingTests(unittest.TestCase):
             np.array([np.nan, 0.4, np.nan]),
             equal_nan=True,
         )
+
+    def test_metric_availability_follows_selected_rank_capability(self) -> None:
+        enabled = _PYMOL.Qt.QtCore.Qt.ItemFlag.ItemIsEnabled
+        models = [
+            types.SimpleNamespace(
+                rank=rank,
+                display_label=f"model_{rank}",
+                supports=lambda capability, rank=rank: (
+                    capability == "plddt" or (capability == "pae" and rank == 0)
+                ),
+            )
+            for rank in (0, 1)
+        ]
+        files = types.SimpleNamespace(
+            model=lambda rank: models[rank], supports_ensemble=True
+        )
+        token_map = _token_map(_token(0))
+        states = {
+            rank: _model_state(rank, types.SimpleNamespace(rank=rank), token_map)
+            for rank in (0, 1)
+        }
+        dialog = _new_dialog()
+        dialog._pred_files = files
+        dialog._model_states = states
+        dialog._active_model_rank = 0
+        dialog._get_obj_name = lambda: "target_model_0"
+        _set_metric_combo(dialog, enabled)
+        pae_row = next(
+            row
+            for row, prop in enumerate(metrics.PROPERTIES)
+            if prop["key"] == "pae_row_mean"
+        )
+
+        dialog._update_property_availability()
+        self.assertTrue(dialog._prop_combo.model().item(pae_row).flags() & enabled)
+
+        dialog._active_model_rank = 1
+        dialog._get_obj_name = lambda: "target_model_1"
+        _set_metric_combo(dialog, enabled)
+        dialog._update_property_availability()
+        self.assertFalse(dialog._prop_combo.model().item(pae_row).flags() & enabled)
+
+    def test_group_preflight_is_strict_but_partial_summaries_skip_members(self) -> None:
+        models = [
+            types.SimpleNamespace(
+                rank=rank,
+                display_label=f"model_{rank}",
+                supports=lambda capability, rank=rank: (
+                    capability == "plddt" or (capability == "pae" and rank == 0)
+                ),
+            )
+            for rank in (0, 1)
+        ]
+        files = types.SimpleNamespace(model=lambda rank: models[rank])
+        token_map = _token_map(_token(0))
+        states = tuple(
+            _model_state(rank, types.SimpleNamespace(rank=rank), token_map)
+            for rank in (0, 1)
+        )
+        members = tuple(
+            ensemble.EnsembleMember(rank, f"target_model_{rank}") for rank in (0, 1)
+        )
+        dialog = _new_dialog()
+        dialog._pred_files = files
+        dialog._model_states = {state.rank: state for state in states}
+        dialog._ensemble = _ensemble_state(members)
+        target = _PlotTarget(
+            kind="ensemble_group",
+            label="target_ensemble",
+            obj_name="target_model_0",
+            model_states=states,
+            members=members,
+        )
+
+        with self.assertRaisesRegex(ValueError, r"model_1 \(pae\)"):
+            dialog._data_load_items_for_target(target, {"load_pae": True})
+
+        items = dialog._data_load_items_for_target(
+            target, {"load_pae": True}, allow_partial=True
+        )
+        self.assertEqual([item.rank for item in items], [0])
 
 
 if __name__ == "__main__":

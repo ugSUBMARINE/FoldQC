@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from FoldQC.loader_models import PredictionData
 from FoldQC.model_state import ModelState
 from FoldQC.structure_index import StructureIndex
-from FoldQC.token_map import TokenMap
+from FoldQC.token_map import ResidueId, TokenInfo, TokenMap
 
 
 def _data(rank: int, **values) -> PredictionData:
@@ -25,7 +25,19 @@ def _data(rank: int, **values) -> PredictionData:
 
 
 def _index(data: PredictionData, token_map: TokenMap | None = None) -> StructureIndex:
-    token_map = TokenMap(()) if token_map is None else token_map
+    if token_map is None:
+        token_count = 0
+        for field in ("token_plddt", "pae", "pde", "contact_probs"):
+            value = getattr(data, field)
+            if value is not None:
+                token_count = np.asarray(value).shape[0]
+                break
+        token_map = TokenMap(
+            tuple(
+                TokenInfo(index, "A", ResidueId(index + 1), "ALA", False, None)
+                for index in range(token_count)
+            )
+        )
     plddt = np.zeros(len(token_map), dtype=np.float32)
     plddt.setflags(write=False)
     return StructureIndex(
@@ -65,7 +77,8 @@ def test_merge_is_in_place_monotonic_and_enriches_metadata() -> None:
 
     assert changed is True
     assert state.data is data
-    assert state.data.pde is original_pde
+    assert state.data.pde is not original_pde
+    np.testing.assert_array_equal(state.data.pde, original_pde)
     assert state.data.pae is incoming.pae
     assert state.data.token_plddt is incoming.token_plddt
     assert state.data.token_plddt_source == "provider_token"
@@ -101,9 +114,9 @@ def test_merge_rejects_uncoupled_plddt_and_embedding_fields() -> None:
     data = _data(2)
     state = ModelState(rank=2, data=data, structure_index=_index(data))
 
-    with pytest.raises(ValueError, match="pLDDT values and provenance together"):
+    with pytest.raises(ValueError, match="token_plddt_source"):
         state.merge_data(_data(2, token_plddt=np.array([0.8])))
-    with pytest.raises(ValueError, match="both embedding arrays"):
+    with pytest.raises(ValueError, match="must be provided together"):
         state.merge_data(_data(2, embeddings_s=np.ones((1, 1))))
 
     assert state.version == 0
@@ -111,7 +124,7 @@ def test_merge_rejects_uncoupled_plddt_and_embedding_fields() -> None:
 
 def test_snapshot_restores_fields_version_and_preserves_index_in_place() -> None:
     data = _data(2)
-    token_map = TokenMap(())
+    token_map = TokenMap((TokenInfo(0, "A", ResidueId(1), "ALA", False, None),))
     structure_index = _index(data, token_map)
     state = ModelState(rank=2, data=data, structure_index=structure_index)
     snapshot = state.snapshot()

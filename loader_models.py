@@ -8,6 +8,8 @@ from typing import Any, Literal
 
 import numpy as np
 
+DataCapability = Literal["plddt", "pae", "pde", "contact_probs"]
+_DATA_CAPABILITIES = frozenset({"plddt", "pae", "pde", "contact_probs"})
 PlddtSource = Literal[
     "structure_b_factor",
     "provider_token",
@@ -26,7 +28,17 @@ class ModelFiles:
     plddt_path: Path | None = None
     pae_path: Path | None = None
     pde_path: Path | None = None
+    capabilities: frozenset[DataCapability] = field(default_factory=frozenset)
     metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        self.capabilities = frozenset(self.capabilities)
+        unknown = self.capabilities - _DATA_CAPABILITIES
+        if unknown:
+            raise ValueError(f"Unknown model data capabilities: {sorted(unknown)!r}")
+
+    def supports(self, capability: DataCapability) -> bool:
+        return capability in self.capabilities
 
 
 @dataclass
@@ -38,7 +50,6 @@ class PredictionFiles:
     models: list[ModelFiles] = field(default_factory=list)
     affinity_file: Path | None = None
     embeddings_file: Path | None = None
-    capabilities: set[str] = field(default_factory=set)
     _temporary_directory: Any | None = field(default=None, repr=False, compare=False)
 
     @property
@@ -61,22 +72,6 @@ class PredictionFiles:
         )
 
     @property
-    def has_pae(self) -> bool:
-        return "pae" in self.capabilities
-
-    @property
-    def has_pde(self) -> bool:
-        return "pde" in self.capabilities
-
-    @property
-    def has_contact_probs(self) -> bool:
-        return "contact_probs" in self.capabilities
-
-    @property
-    def has_plddt(self) -> bool:
-        return "plddt" in self.capabilities
-
-    @property
     def has_affinity(self) -> bool:
         return self.affinity_file is not None
 
@@ -89,6 +84,17 @@ class PredictionFiles:
         if rank not in models:
             raise KeyError(rank)
         return models[rank]
+
+    def model_supports(self, rank: int, capability: DataCapability) -> bool:
+        return self.model(rank).supports(capability)
+
+    def any_model_supports(self, capability: DataCapability) -> bool:
+        return any(model.supports(capability) for model in self.models)
+
+    def all_models_support(self, capability: DataCapability) -> bool:
+        return bool(self.models) and all(
+            model.supports(capability) for model in self.models
+        )
 
     def structure_path(self, rank: int) -> Path:
         return self.model(rank).structure_path

@@ -101,7 +101,7 @@ Base columns:
 
 | Column | Meaning |
 | --- | --- |
-| `export_schema_version` | CSV schema version. Currently `1`. |
+| `export_schema_version` | CSV schema version. Currently `2`. |
 | `provider` | Prediction provider, such as `boltz`, `boltz_lab`, `boltz_api`, `alphafold3`, `af3_server`, `chai1`, `protenix`, or `structure_only`. |
 | `prediction_name` | Provider-scanned prediction name. |
 | `input_path` | Original selected folder, zip, CIF, or PDB path. |
@@ -118,7 +118,9 @@ Base columns:
 | `token_index` | Zero-based token index in original prediction token order. |
 | `token_type` | `polymer_residue` or `ligand_atom`. |
 | `chain_id` | Chain ID from the structure file token map. |
-| `res_num` | Residue number from the structure file token map. |
+| `res_num` | Numeric residue number from the structure file token map. |
+| `residue_id` | Complete residue label, including an insertion code when present (for example `42A`). |
+| `insertion_code` | PDB/mmCIF insertion code; blank for ordinary residue identifiers. |
 | `res_name` | Residue or ligand name. |
 | `atom_name` | Atom name for ligand-atom tokens; blank for polymer residues. |
 | `is_hetatm` | `true` for ligand/HETATM tokens, otherwise `false`. |
@@ -155,6 +157,12 @@ colored with the selected palette; undefined values are colored grey. Selection
 metrics use the PyMOL expression in the Reference field, mapped back to FoldQC
 tokens.
 
+Residue identity is lossless across CIF/PDB parsing, PyMOL selections, plots,
+ensembles, and CSV export: chain, numeric residue number, insertion code, and
+residue name all participate in matching. Ligand H, D, and T atoms are excluded
+from tokenization, while their source atom positions remain represented in
+provider atom-array alignment.
+
 PAE and PDE are error metrics, so lower values usually mean higher confidence.
 pLDDT, interaction probability, and ipTM are confidence metrics, so higher
 values usually mean higher confidence.
@@ -178,6 +186,14 @@ provider arrays fall back to structure B-factors; malformed explicit arrays are
 reported as errors. Coloring, plots, exports, alignment, and ensemble consensus
 all consume this same canonical array. This follows AlphaFold 3's documented
 [`atom_plddts` per-atom semantics](https://github.com/google-deepmind/alphafold3/blob/main/docs/output.md#metrics-in-confidences-json).
+
+PAE, PDE, and interaction-probability availability is tracked per ranked model,
+not as a prediction-wide union. Strict ensemble coloring and ordinary metric
+plots require every targeted member to provide the selected family. Binding-site
+fingerprints and ensemble-site summaries instead aggregate the members that
+provide each family and leave unavailable member values missing. Loaded arrays
+are centrally validated against the model's canonical token count, normalized,
+and made read-only before entering model state.
 
 | Color by option | How it is calculated | How to interpret it |
 | --- | --- | --- |

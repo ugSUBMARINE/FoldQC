@@ -24,10 +24,55 @@ and ligand tokens retain atom names for stable viewer-side lookup.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import overload
+
+
+@dataclass(frozen=True, slots=True)
+class ResidueId:
+    """Lossless structure residue identifier."""
+
+    number: int
+    insertion_code: str = ""
+
+    def __post_init__(self) -> None:
+        code = str(self.insertion_code).strip()
+        if code in {".", "?"}:
+            code = ""
+        if code and (len(code) != 1 or not code.isalnum()):
+            raise ValueError(
+                "Insertion codes must be a single alphanumeric character; "
+                f"got {self.insertion_code!r}."
+            )
+        object.__setattr__(self, "number", int(self.number))
+        object.__setattr__(self, "insertion_code", code)
+
+    @classmethod
+    def parse(cls, value: str) -> ResidueId:
+        """Parse PyMOL/PDB-style residue text such as ``42A``."""
+        match = re.fullmatch(r"\s*(-?\d+)([A-Za-z0-9]?)\s*", str(value))
+        if match is None:
+            raise ValueError(f"Invalid residue identifier: {value!r}")
+        return cls(int(match.group(1)), match.group(2))
+
+    @property
+    def resi(self) -> str:
+        return f"{self.number}{self.insertion_code}"
+
+    def __str__(self) -> str:
+        return self.resi
+
+
+def is_hydrogen(element: str | None, atom_name: str = "") -> bool:
+    """Return whether an atom is H/D/T, preferring explicit element data."""
+    normalized_element = str(element or "").strip().upper()
+    if normalized_element:
+        return normalized_element in {"H", "D", "T"}
+    normalized_name = str(atom_name).strip().lstrip("0123456789").upper()
+    return normalized_name.startswith(("H", "D", "T"))
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,7 +81,7 @@ class TokenInfo:
 
     token_idx: int  # 0-based prediction token index
     chain_id: str  # structure-file chain ID, e.g. "A"
-    res_num: int  # residue sequence number from the structure file
+    residue_id: ResidueId
     res_name: str  # residue or ligand name, e.g. "ALA", "SAH", "LIG"
     is_hetatm: bool  # True for ligand atoms, False for polymer residues
 
@@ -44,10 +89,26 @@ class TokenInfo:
     # None for polymer tokens (all atoms of the residue share the token).
     atom_name: str | None
 
+    def __post_init__(self) -> None:
+        if not isinstance(self.residue_id, ResidueId):
+            object.__setattr__(self, "residue_id", ResidueId(int(self.residue_id)))
 
-TokenIdentity = tuple[str, int, str, str | None]
-PolymerTokenKey = tuple[str, int]
-HetatmTokenKey = tuple[str, int, str]
+    @property
+    def res_num(self) -> int:
+        return self.residue_id.number
+
+    @property
+    def insertion_code(self) -> str:
+        return self.residue_id.insertion_code
+
+    @property
+    def resi(self) -> str:
+        return self.residue_id.resi
+
+
+TokenIdentity = tuple[str, ResidueId, str, str | None]
+PolymerTokenKey = tuple[str, ResidueId, str]
+HetatmTokenKey = tuple[str, ResidueId, str, str]
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,7 +153,7 @@ class TokenMap(Sequence[TokenInfo]):
         polymer_tokens: dict[PolymerTokenKey, int] = {}
         hetatm_tokens: dict[HetatmTokenKey, int] = {}
         identities: set[TokenIdentity] = set()
-        last_chain: str | None = None
+        seen_chains: set[str] = set()
 
         for position, token in enumerate(tokens):
             if token.token_idx != position:
@@ -102,24 +163,33 @@ class TokenMap(Sequence[TokenInfo]):
                 )
 
             chain_id = str(token.chain_id)
-            residue_number = token.res_num
+            residue_id = token.residue_id
             residue_name = str(token.res_name)
             token_idx = int(token.token_idx)
 
-            if chain_id != last_chain:
+            if chain_id not in seen_chains:
                 chain_order.append(chain_id)
-                last_chain = chain_id
+                seen_chains.add(chain_id)
             chain_to_indices.setdefault(chain_id, []).append(token_idx)
 
             if token.is_hetatm:
                 atom_name = str(token.atom_name or "")
-                hetatm_tokens[(chain_id, residue_number, atom_name)] = token_idx
+                key = (chain_id, residue_id, residue_name, atom_name)
+                if key in hetatm_tokens:
+                    raise ValueError(f"Duplicate HETATM token identity: {key!r}")
+                hetatm_tokens[key] = token_idx
                 identity_atom_name: str | None = atom_name
             else:
                 polymer_indices.append(token_idx)
-                polymer_tokens[(chain_id, residue_number)] = token_idx
+                key = (chain_id, residue_id, residue_name)
+                if key in polymer_tokens:
+                    raise ValueError(f"Duplicate polymer token identity: {key!r}")
+                polymer_tokens[key] = token_idx
                 identity_atom_name = None
-            identities.add((chain_id, residue_number, residue_name, identity_atom_name))
+            identity = (chain_id, residue_id, residue_name, identity_atom_name)
+            if identity in identities:
+                raise ValueError(f"Duplicate token identity: {identity!r}")
+            identities.add(identity)
 
         chain_indices = {
             chain_id: tuple(indices) for chain_id, indices in chain_to_indices.items()

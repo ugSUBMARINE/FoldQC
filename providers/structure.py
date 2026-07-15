@@ -29,7 +29,7 @@ class StructureProvider(BaseProvider):
                     structure_path=path,
                     display_label=path.name,
                     object_name=_safe_object_name(name),
+                    capabilities=frozenset({"plddt"}),
                 )
             ],
-            capabilities={"plddt"},
         )

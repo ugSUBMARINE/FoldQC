@@ -67,7 +67,6 @@ def _scan_protenix_dir(pred_dir: Path) -> PredictionFiles:
         pred_dir=pred_dir,
         provider="protenix",
         input_path=pred_dir,
-        capabilities={"plddt"},
     )
 
     candidates.sort(
@@ -101,12 +100,15 @@ def _scan_protenix_dir(pred_dir: Path) -> PredictionFiles:
                 object_name=f"{_safe_object_name(name)}_model_{rank}",
                 confidence_path=item.full_data_path,
                 summary_path=item.summary_path,
+                capabilities=frozenset(
+                    {"plddt", "pae", "pde", "contact_probs"}
+                    if item.full_data_path is not None
+                    else {"plddt"}
+                ),
                 metadata=metadata,
             )
         )
 
-    if any(model.confidence_path is not None for model in files.models):
-        files.capabilities.update({"pae", "pde", "contact_probs"})
     return files
 
 

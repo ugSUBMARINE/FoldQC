@@ -977,11 +977,18 @@ class GuiLoadingController:
         continuation,
         *,
         error_title: str,
+        allow_partial: bool = False,
     ) -> bool:
         """Submit missing lazy arrays and resume *continuation* after commit."""
         if self._pred_files is None:
             return False
-        items = self._data_load_items_for_target(target, requested_flags)
+        try:
+            items = self._data_load_items_for_target(
+                target, requested_flags, allow_partial=allow_partial
+            )
+        except ValueError as exc:
+            QtWidgets.QMessageBox.warning(self, error_title, str(exc))
+            return True
         if not items:
             return False
         if self._gui_job_is_busy():
@@ -1016,6 +1023,8 @@ class GuiLoadingController:
         self,
         target,
         requested_flags: dict[str, bool],
+        *,
+        allow_partial: bool = False,
     ) -> list[DataLoadItem]:
         if target is None:
             return []
@@ -1033,6 +1042,41 @@ class GuiLoadingController:
                 )
             slots.append(state)
 
+        flag_capabilities = {
+            "load_pae": ("pae", "pae"),
+            "load_pde": ("pde", "pde"),
+            "load_contact_probs": ("contact_probs", "contact_probs"),
+            "load_token_plddt": ("plddt", "token_plddt"),
+        }
+        unavailable: list[str] = []
+        model_getter = getattr(self._pred_files, "model", None)
+        for model_state in slots:
+            requested_missing = [
+                capability
+                for flag, (capability, attr) in flag_capabilities.items()
+                if requested_flags.get(flag, False)
+                and getattr(model_state.data, attr, None) is None
+            ]
+            if not requested_missing:
+                continue
+            model = model_getter(model_state.rank) if callable(model_getter) else None
+            missing = [
+                capability
+                for capability in requested_missing
+                if model is None or not model.supports(capability)
+            ]
+            if missing and not allow_partial:
+                label = (
+                    f"model_{model_state.rank}"
+                    if model is None
+                    else model.display_label
+                )
+                unavailable.append(f"{label} ({', '.join(missing)})")
+        if unavailable:
+            raise ValueError(
+                "The requested data are unavailable for: " + "; ".join(unavailable)
+            )
+
         items = []
         seen = set()
         for model_state in slots:
@@ -1044,6 +1088,7 @@ class GuiLoadingController:
                 model_state,
                 requested_flags,
                 expected_ensemble=expected_ensemble,
+                allow_partial=allow_partial,
             )
             if item is not None:
                 items.append(item)
@@ -1055,6 +1100,7 @@ class GuiLoadingController:
         requested_flags: dict[str, bool],
         *,
         expected_ensemble: ensemble.EnsembleState | None,
+        allow_partial: bool = False,
     ) -> DataLoadItem | None:
         data = model_state.data
         flag_attrs = {
@@ -1066,6 +1112,15 @@ class GuiLoadingController:
         requested = {
             name: bool(requested_flags.get(name, False)) for name in flag_attrs
         }
+        if allow_partial:
+            model_getter = getattr(self._pred_files, "model", None)
+            model = model_getter(model_state.rank) if callable(model_getter) else None
+            for name, (attr, _label) in flag_attrs.items():
+                capability = "plddt" if attr == "token_plddt" else attr
+                if getattr(data, attr, None) is None and (
+                    model is None or not model.supports(capability)
+                ):
+                    requested[name] = False
         missing = [
             name
             for name, (attr, _label) in flag_attrs.items()
@@ -1309,17 +1364,15 @@ class GuiLoadingController:
         state = self._active_model_state
         if state is None or self._pred_files is None:
             return
-        data = state.data
-        has_pae = getattr(self._pred_files, "has_pae", False)
-        has_pde = getattr(self._pred_files, "has_pde", False)
-        has_contact_probs = getattr(self._pred_files, "has_contact_probs", False)
-        has_plddt = (
-            getattr(self._pred_files, "has_plddt", False)
-            or getattr(data, "token_plddt", None) is not None
-        )
-        has_confidence = (
-            getattr(data, "confidence", None) is not None
-            or getattr(data, "summary_confidence", None) is not None
+        has_pae = self._target_all_supports_family("pae")
+        has_pde = self._target_all_supports_family("pde")
+        has_contact_probs = self._target_all_supports_family("contact_probs")
+        has_plddt = self._target_all_supports_family("plddt")
+        target_states = self._current_target_model_states()
+        has_confidence = bool(target_states) and all(
+            getattr(target_state.data, "confidence", None) is not None
+            or getattr(target_state.data, "summary_confidence", None) is not None
+            for target_state in target_states
         )
         has_chain_iptm = self._has_chain_iptm_metric_data()
         has_ensemble = self._ensemble is not None
@@ -1354,14 +1407,14 @@ class GuiLoadingController:
 
     def _has_chain_iptm_metric_data(self) -> bool:
         """Return whether loaded confidence has data for the Chain ipTM metric."""
-        state = self._active_model_state
-        if state is None:
-            return False
-        for attr in ("confidence", "summary_confidence"):
-            confidence = getattr(state.data, attr, None)
-            if _confidence_has_chain_iptm_metric_data(confidence):
-                return True
-        return False
+        states = self._current_target_model_states()
+        return bool(states) and all(
+            any(
+                _confidence_has_chain_iptm_metric_data(getattr(state.data, attr, None))
+                for attr in ("confidence", "summary_confidence")
+            )
+            for state in states
+        )
 
     def _select_first_available_property(self) -> None:
         """Move the property combo away from a disabled item after loading."""
@@ -1420,57 +1473,59 @@ class GuiLoadingController:
             return "ensemble_member"
         return "single"
 
+    def _current_target_model_states(self) -> tuple[ModelState, ...]:
+        """Return canonical model states addressed by the viewer target."""
+        ensemble_state = getattr(self, "_ensemble", None)
+        kind = self._current_target_kind()
+        if kind == "ensemble_group" and ensemble_state is not None:
+            return tuple(
+                state
+                for member in sorted(ensemble_state.members, key=lambda item: item.rank)
+                if (state := self._model_states.get(member.rank)) is not None
+            )
+        if kind == "ensemble_member":
+            member = self._selected_ensemble_member(self._get_obj_name())
+            state = None if member is None else self._model_states.get(member.rank)
+            return () if state is None else (state,)
+        state = self._active_model_state
+        return () if state is None else (state,)
+
+    def _state_supports_family(self, state: ModelState, family: str) -> bool:
+        data_attr = "token_plddt" if family == "plddt" else family
+        if getattr(state.data, data_attr, None) is not None:
+            return True
+        if self._pred_files is None:
+            return False
+        model_getter = getattr(self._pred_files, "model", None)
+        if not callable(model_getter):
+            return False
+        return model_getter(state.rank).supports(family)
+
+    def _target_all_supports_family(self, family: str) -> bool:
+        states = self._current_target_model_states()
+        return bool(states) and all(
+            self._state_supports_family(state, family) for state in states
+        )
+
+    def _target_any_supports_family(self, family: str) -> bool:
+        return any(
+            self._state_supports_family(state, family)
+            for state in self._current_target_model_states()
+        )
+
     def _has_fingerprint_data(self) -> bool:
         """Return whether fingerprint plotting has any source family available."""
-        pred_files = getattr(self, "_pred_files", None)
-        state = getattr(self, "_active_model_state", None)
-        pred_data = None if state is None else state.data
-        if pred_files is not None:
-            if (
-                getattr(pred_files, "has_pae", False)
-                or getattr(pred_files, "has_pde", False)
-                or getattr(pred_files, "has_contact_probs", False)
-                or getattr(pred_files, "has_plddt", False)
-            ):
-                return True
-        if pred_data is not None:
-            if (
-                getattr(pred_data, "pae", None) is not None
-                or getattr(pred_data, "pde", None) is not None
-                or getattr(pred_data, "contact_probs", None) is not None
-                or getattr(pred_data, "token_plddt", None) is not None
-            ):
-                return True
-        ensemble_state = getattr(self, "_ensemble", None)
-        for member in () if ensemble_state is None else ensemble_state.members:
-            member_state = self._model_states.get(member.rank)
-            if member_state is None:
-                continue
-            data = member_state.data
-            if (
-                getattr(data, "pae", None) is not None
-                or getattr(data, "pde", None) is not None
-                or getattr(data, "contact_probs", None) is not None
-                or getattr(data, "token_plddt", None) is not None
-            ):
-                return True
-        return False
+        return any(
+            self._target_any_supports_family(family)
+            for family in ("pae", "pde", "contact_probs", "plddt")
+        )
 
     def _has_matrix_data_family(self, family: str) -> bool:
         """Return whether a matrix family is available from files or loaded data."""
-        pred_files = getattr(self, "_pred_files", None)
-        state = getattr(self, "_active_model_state", None)
-        pred_data = None if state is None else state.data
         if family == "pae":
-            return bool(
-                getattr(pred_files, "has_pae", False)
-                or getattr(pred_data, "pae", None) is not None
-            )
+            return self._target_all_supports_family("pae")
         if family == "pde":
-            return bool(
-                getattr(pred_files, "has_pde", False)
-                or getattr(pred_data, "pde", None) is not None
-            )
+            return self._target_all_supports_family("pde")
         return False
 
     def _current_target_has_multiple_chains(self) -> bool:
@@ -1545,6 +1600,7 @@ class GuiLoadingController:
     def _refresh_contextual_ui(self) -> None:
         """Refresh plot actions, contextual fields, and preview text together."""
         self._update_ensemble_button_state()
+        self._update_property_availability()
         self._update_plot_actions()
         self._update_context_controls()
         self._update_metric_preview()

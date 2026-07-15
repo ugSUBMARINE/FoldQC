@@ -83,7 +83,7 @@ def _finite_range(values: np.ndarray) -> tuple[float, float]:
 
 def _token_label(tok) -> str:
     """Return a compact residue/atom label for one token."""
-    prefix = f"{tok.chain_id}{tok.res_num}"
+    prefix = f"{tok.chain_id}{tok.resi}"
     if getattr(tok, "is_hetatm", False) and getattr(tok, "atom_name", None):
         return f"{prefix}:{tok.atom_name}"
     return prefix
@@ -739,7 +739,7 @@ def make_binding_site_fingerprint(
     """
     indices = binding_site_indices[:max_residues]
     labels = [
-        f"{token_map[i].res_name.title()}-{token_map[i].chain_id}{token_map[i].res_num}"
+        f"{token_map[i].res_name.title()}-{token_map[i].chain_id}{token_map[i].resi}"
         for i in indices
     ]
 

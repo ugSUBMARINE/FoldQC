@@ -66,7 +66,6 @@ def _scan_boltz_dir(pred_dir: Path) -> PredictionFiles:
         pred_dir=pred_dir,
         provider="boltz",
         input_path=pred_dir,
-        capabilities={"plddt"},
     )
 
     rank_re = re.compile(rf"{re.escape(name)}_model_(\d+)")
@@ -118,11 +117,11 @@ def _scan_boltz_dir(pred_dir: Path) -> PredictionFiles:
         model.plddt_path = plddt.get(model.rank)
         model.pae_path = pae.get(model.rank)
         model.pde_path = pde.get(model.rank)
-
-    if pae:
-        files.capabilities.add("pae")
-    if pde:
-        files.capabilities.add("pde")
+        model.capabilities = frozenset(
+            {"plddt"}
+            | ({"pae"} if model.pae_path is not None else set())
+            | ({"pde"} if model.pde_path is not None else set())
+        )
 
     affinity_path = pred_dir / f"affinity_{name}.json"
     if affinity_path.exists():
@@ -157,7 +156,6 @@ def _scan_boltz_lab_dir(pred_dir: Path) -> PredictionFiles:
         pred_dir=pred_dir,
         provider="boltz_lab",
         input_path=pred_dir,
-        capabilities={"plddt"},
     )
 
     for rank, item in enumerate(sorted(candidates, key=lambda item: item.sample_index)):
@@ -170,6 +168,9 @@ def _scan_boltz_lab_dir(pred_dir: Path) -> PredictionFiles:
                 display_label=f"sample {sample_index}",
                 object_name=f"{_safe_object_name(name)}_model_{rank}",
                 pae_path=item.pae_path,
+                capabilities=frozenset(
+                    {"plddt", "pae"} if item.pae_path is not None else {"plddt"}
+                ),
                 metadata={
                     "sample_index": sample_index,
                     "confidence": confidence if isinstance(confidence, dict) else None,
@@ -177,8 +178,6 @@ def _scan_boltz_lab_dir(pred_dir: Path) -> PredictionFiles:
             )
         )
 
-    if any(model.pae_path is not None for model in files.models):
-        files.capabilities.add("pae")
     return files
 
 
@@ -220,7 +219,6 @@ def _scan_boltz_api_dir(pred_dir: Path) -> PredictionFiles:
         pred_dir=pred_dir,
         provider="boltz_api",
         input_path=pred_dir,
-        capabilities={"plddt"},
     )
 
     for rank, item in enumerate(candidates):
@@ -237,12 +235,13 @@ def _scan_boltz_api_dir(pred_dir: Path) -> PredictionFiles:
                 display_label=f"rank {rank} - sample {item.sample_index}",
                 object_name=f"{_safe_object_name(name)}_model_{rank}",
                 pae_path=item.pae_path,
+                capabilities=frozenset(
+                    {"plddt", "pae"} if item.pae_path is not None else {"plddt"}
+                ),
                 metadata=metadata,
             )
         )
 
-    if any(model.pae_path is not None for model in files.models):
-        files.capabilities.add("pae")
     return files
 
 
@@ -258,30 +257,20 @@ def _load_boltz_model_data(
     structure_index,
 ) -> None:
     if load_token_plddt and model.plddt_path is not None:
-        token_plddt = np.asarray(np.load(model.plddt_path)["plddt"], dtype=np.float32)
-        if token_plddt.ndim != 1:
-            raise ValueError(
-                f"Boltz token pLDDT array for {model.structure_path.name} must be "
-                f"one-dimensional; got shape {token_plddt.shape}."
-            )
-        if structure_index is None:
-            raise ValueError(
-                f"No StructureIndex available for {model.structure_path.name}."
-            )
-        expected = len(structure_index.token_map)
-        if len(token_plddt) != expected:
-            raise ValueError(
-                f"Boltz token pLDDT length {len(token_plddt)} does not match "
-                f"{expected} tokens in {model.structure_path.name}."
-            )
-        data.token_plddt = token_plddt
-        data.token_plddt_source = "provider_token"
+        with np.load(model.plddt_path) as payload:
+            if "plddt" in payload:
+                data.token_plddt = np.asarray(payload["plddt"], dtype=np.float32)
+                data.token_plddt_source = "provider_token"
 
     if load_pae and model.pae_path is not None:
-        data.pae = np.load(model.pae_path)["pae"]
+        with np.load(model.pae_path) as payload:
+            if "pae" in payload:
+                data.pae = payload["pae"]
 
     if load_pde and model.pde_path is not None:
-        data.pde = np.load(model.pde_path)["pde"]
+        with np.load(model.pde_path) as payload:
+            if "pde" in payload:
+                data.pde = payload["pde"]
 
     if model.confidence_path is not None:
         confidence = _load_json(model.confidence_path)
@@ -293,9 +282,11 @@ def _load_boltz_model_data(
         data.affinity = _load_json(pred_files.affinity_file)
 
     if load_embeddings and pred_files.embeddings_file is not None:
-        emb = np.load(pred_files.embeddings_file)
-        data.embeddings_s = emb["s"]
-        data.embeddings_z = emb["z"]
+        with np.load(pred_files.embeddings_file) as payload:
+            if "s" in payload:
+                data.embeddings_s = payload["s"]
+            if "z" in payload:
+                data.embeddings_z = payload["z"]
 
 
 def _boltz_api_prediction_dir(pred_dir: Path) -> Path | None:

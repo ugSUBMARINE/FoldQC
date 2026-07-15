@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     from .loader import PredictionData
     from .token_map import TokenMap
 
-SCHEMA_VERSION = "1"
+SCHEMA_VERSION = "2"
 
 BASE_COLUMNS = [
     "export_schema_version",
@@ -42,6 +42,8 @@ BASE_COLUMNS = [
     "token_type",
     "chain_id",
     "res_num",
+    "residue_id",
+    "insertion_code",
     "res_name",
     "atom_name",
     "is_hetatm",
@@ -160,6 +162,8 @@ def build_token_rows(
             ),
             "chain_id": getattr(tok, "chain_id", ""),
             "res_num": getattr(tok, "res_num", ""),
+            "residue_id": getattr(tok, "resi", ""),
+            "insertion_code": getattr(tok, "insertion_code", ""),
             "res_name": getattr(tok, "res_name", ""),
             "atom_name": getattr(tok, "atom_name", "") or "",
             "is_hetatm": _bool_text(getattr(tok, "is_hetatm", False)),

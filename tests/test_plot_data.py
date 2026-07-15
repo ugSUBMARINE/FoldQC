@@ -10,14 +10,14 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from FoldQC import palettes, plot_data
-from FoldQC.token_map import TokenInfo, TokenMap
+from FoldQC.token_map import ResidueId, TokenInfo, TokenMap
 
 
 def _token(idx: int, *, chain_id: str = "A", is_hetatm: bool = False) -> TokenInfo:
     return TokenInfo(
         token_idx=idx,
         chain_id=chain_id,
-        res_num=idx + 1,
+        residue_id=ResidueId(idx + 1),
         res_name="LIG" if is_hetatm else "ALA",
         is_hetatm=is_hetatm,
         atom_name=f"C{idx}" if is_hetatm else None,
