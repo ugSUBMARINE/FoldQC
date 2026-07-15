@@ -1,409 +1,257 @@
-"""Lazy data loading and metric-computation GUI coordination."""
+"""Viewer-context resolution and immutable metric computation."""
 
 from __future__ import annotations
 
 import numpy as np
 
-from . import compute, metrics
-from .gui_state import MetricContext
-from .loader_models import DataCapability
-from .mol_viewer import (
-    ObjectPaintMapping,
-    ensure_object_paint_mapping,
-    get_viewer_name,
-    selection_to_token_indices,
-    tokens_within_distance,
+from . import compute
+from .analysis import (
+    AnalysisPreflightError,
+    ComputedMetric,
+    ResolvedAnalysis,
 )
+from .gui_services import ObjectPaintMapping, ViewerPort
+from .gui_state import MetricContext, PluginState
+from .presentation import ChoiceOption, ChoiceRequest, Notice, PresentationPort
 from .token_map import TokenMap
-from .workflow_presentation import confirm, present_information, present_warning
 
 APP_TITLE = "FoldQC"
-VIEWER_NAME = get_viewer_name()
 
 
-class MetricWorkflow:
-    def _require_active_model_state(self):
-        """Return the active canonical model state or raise a user-facing error."""
-        state = self._active_model_state
-        if state is None:
-            raise ValueError("No prediction data loaded; cannot resolve token map.")
-        return state
+class MetricComputationService:
+    """Resolve viewer inputs once and compute each targeted model once."""
 
-    def _compute_property_for(
+    def __init__(
         self,
-        key: str,
-        ref_sel: str | None,
-        data,
-        tm: TokenMap,
-        obj_name: str,
-    ):
-        """Resolve GUI/viewer context and dispatch one per-model metric."""
+        state: PluginState,
+        viewer: ViewerPort,
+        presenter: PresentationPort,
+        accepted_overlap_warnings: set[tuple[str, str]],
+    ) -> None:
+        self._state = state
+        self._viewer = viewer
+        self._presenter = presenter
+        self._accepted_overlap_warnings = accepted_overlap_warnings
 
-        def _need_ref():
-            if not ref_sel:
-                present_warning(
-                    self,
-                    APP_TITLE,
-                    "This property requires a reference selection.\n"
-                    "Enter a viewer selection in the Reference field.",
-                )
-                return None
-            indices = self._viewer_operation(
-                "selection_token_indices",
-                selection_to_token_indices,
-                tm,
-                ref_sel,
-                obj_name=obj_name,
-            )
-            if not indices:
-                present_warning(
-                    self,
-                    APP_TITLE,
-                    f"Reference selection '{ref_sel}' matched no tokens in {obj_name}.",
-                )
-                return None
-            return indices
-
-        ref_indices = None
-        contact_indices = None
-        cutoff = None
-        spec = metrics.METRICS.require(key)
-
-        if key == "ensemble_rmsd":
-            present_information(
-                self,
-                APP_TITLE,
-                "Ensemble RMSD requires all models to be loaded.\n"
-                "Use the Ensemble… button.",
-            )
-            return None
-
+    def resolve_contexts(self, resolved: ResolvedAnalysis) -> ResolvedAnalysis:
+        metric = resolved.metric_spec
+        request = resolved.request
+        requires_plot_reference = request.action in {
+            "binding_site_fingerprint",
+            "ensemble_site_summary",
+        }
+        optional_plot_reference = request.action in {
+            "line",
+            "distribution",
+            "matrix",
+            "pae_summary",
+            "pde_summary",
+        }
         if (
-            key == "contact_prob_to_sel"
-            and getattr(data, "contact_probs", None) is None
+            metric is None
+            and not requires_plot_reference
+            and not optional_plot_reference
         ):
-            return self._compute_metric_with_messages(key, data, tm)
-
-        if spec.needs_reference:
-            ref_indices = _need_ref()
-            if ref_indices is None:
-                return None
-
-        if spec.needs_cutoff and not spec.needs_contact_shell:
-            cutoff = self._get_cutoff_threshold()
-            if cutoff is None:
-                return None
-            if not self._metric_dependencies_available(spec):
-                return None
-
-        if spec.needs_contact_shell:
-            cutoff = self._get_cutoff_threshold()
-            if cutoff is None:
-                return None
-            contact_indices = self._binding_site_token_indices(
-                tm, obj_name, ref_sel, ref_indices, cutoff
+            return resolved
+        contexts: list[MetricContext] = []
+        for member in resolved.members:
+            token_map = member.model_state.token_map
+            reference_indices: tuple[int, ...] = ()
+            contact_indices: tuple[int, ...] = ()
+            needs_reference = requires_plot_reference or bool(
+                metric is not None and metric.needs_reference
             )
-            if not contact_indices:
-                present_warning(
-                    self,
-                    APP_TITLE,
-                    "No polymer binding-site residues were found within "
-                    f"{cutoff:g} Å of the reference selection.",
-                )
-                return None
-
-        return self._compute_metric_with_messages(
-            key,
-            data,
-            tm,
-            ref_indices=ref_indices,
-            contact_indices=contact_indices,
-            cutoff=cutoff,
-        )
-
-    def _compute_property_from_context(
-        self,
-        key: str,
-        data,
-        tm: TokenMap,
-        context: MetricContext,
-    ):
-        """Dispatch a metric using already-resolved export context."""
-        cutoff = context.cutoff_angstrom
-        spec = metrics.METRICS.require(key)
-        if spec.dependency_keys and not self._metric_dependencies_available(spec):
-            return None
-        return self._compute_metric_with_messages(
-            key,
-            data,
-            tm,
-            ref_indices=list(context.reference_indices),
-            contact_indices=list(context.contact_indices),
-            cutoff=cutoff,
-        )
-
-    def _compute_metric_with_messages(
-        self,
-        key: str,
-        data,
-        tm: TokenMap,
-        *,
-        ref_indices: list[int] | None = None,
-        contact_indices: list[int] | None = None,
-        cutoff: float | None = None,
-    ):
-        """Call pure compute dispatch and translate expected errors to GUI text."""
-        try:
-            return compute.compute_metric(
-                key,
-                data,
-                tm,
-                ref_indices=ref_indices,
-                contact_indices=contact_indices,
-                cutoff=cutoff,
+            resolve_reference = needs_reference or (
+                optional_plot_reference and bool(request.reference_selection)
             )
-        except compute.MissingMetricDataError:
-            if key == "plddt":
-                present_warning(
-                    self, APP_TITLE, "pLDDT data are not available for this model."
+            if resolve_reference:
+                if needs_reference and not request.reference_selection:
+                    raise AnalysisPreflightError(
+                        Notice(
+                            "reference_required",
+                            "This property requires a reference selection.",
+                        )
+                    )
+                reference_indices = tuple(
+                    self._viewer.selection_token_indices(
+                        token_map,
+                        request.reference_selection,
+                        obj_name=member.obj_name,
+                    )
                 )
-            elif key.startswith("contact_prob"):
-                present_warning(
-                    self, APP_TITLE, "Interaction probability data are not available."
-                )
-            elif key == "chain_iptm":
-                present_warning(
-                    self, APP_TITLE, "Chain confidence data are not available."
-                )
-            else:
-                present_warning(
-                    self, APP_TITLE, "Required metric data are not available."
-                )
-            return None
-        except compute.MissingReferenceError:
-            present_warning(
-                self,
-                APP_TITLE,
-                "This property requires a reference selection.\n"
-                f"Enter a {VIEWER_NAME} selection in the Reference field.",
+                if not reference_indices:
+                    raise AnalysisPreflightError(
+                        Notice(
+                            "empty_reference",
+                            f"Reference selection '{request.reference_selection}' "
+                            f"matched no tokens in {member.obj_name}.",
+                        )
+                    )
+            needs_contact = requires_plot_reference or bool(
+                metric is not None and metric.needs_contact_shell
             )
-            return None
-        except compute.MissingContactError:
-            present_warning(
-                self,
-                APP_TITLE,
-                "No polymer binding-site residues were found within "
-                "the cutoff of the reference selection.",
-            )
-            return None
-        except compute.UnsupportedMetricError:
-            if key == "ensemble_rmsd":
-                present_information(
-                    self,
-                    APP_TITLE,
-                    "Ensemble RMSD requires all models to be loaded.\n"
-                    "Use the Ensemble… button.",
+            if needs_contact:
+                cutoff = request.cutoff_angstrom
+                if cutoff is None:
+                    raise AnalysisPreflightError(
+                        Notice("cutoff_required", "This property requires a cutoff.")
+                    )
+                raw = self._viewer.tokens_within_distance(
+                    token_map,
+                    member.obj_name,
+                    request.reference_selection,
+                    cutoff,
                 )
-            else:
-                present_warning(self, APP_TITLE, f"Unknown property key: {key}")
-            return None
-        except compute.MetricComputationError as exc:
-            present_warning(self, APP_TITLE, str(exc))
-            return None
+                reference = set(reference_indices)
+                contact_indices = tuple(
+                    index
+                    for index in raw
+                    if index not in reference and not token_map[index].is_hetatm
+                )
+                if not contact_indices:
+                    raise AnalysisPreflightError(
+                        Notice(
+                            "empty_contact_shell",
+                            "No polymer binding-site residues were found within "
+                            f"{cutoff:g} Å of the reference selection.",
+                        )
+                    )
+            contexts.append(
+                MetricContext(
+                    reference_selection=request.reference_selection,
+                    reference_indices=reference_indices,
+                    contact_indices=contact_indices,
+                    cutoff_angstrom=request.cutoff_angstrom,
+                )
+            )
+        return resolved.with_member_contexts(tuple(contexts))
 
-    def _metric_dependencies_available(self, spec: metrics.MetricSpec) -> bool:
-        """Offer to install optional dependencies declared by a metric."""
-        if not spec.dependency_keys:
-            return True
-        return self._ensure_dependencies(
-            spec.dependency_keys,
-            feature_label=spec.label,
-        )
+    def compute(self, resolved: ResolvedAnalysis) -> tuple[ComputedMetric, ...]:
+        metric = resolved.metric_spec
+        if metric is None:
+            return ()
+        if metric.ensemble_level:
+            values = self._compute_ensemble_metric(metric.key)
+            member = resolved.members[0]
+            return (
+                ComputedMetric(
+                    member.rank,
+                    resolved.target.label,
+                    resolved.target.obj_name,
+                    member.model_state,
+                    member.metric_context,
+                    values,
+                ),
+            )
+        computed: list[ComputedMetric] = []
+        for member in resolved.members:
+            context = member.metric_context
+            try:
+                values = compute.compute_metric(
+                    metric.key,
+                    member.model_state.data,
+                    member.model_state.token_map,
+                    ref_indices=list(context.reference_indices),
+                    contact_indices=list(context.contact_indices),
+                    cutoff=context.cutoff_angstrom,
+                )
+            except compute.MetricComputationError as exc:
+                raise AnalysisPreflightError(
+                    Notice(
+                        "metric_computation_failed",
+                        str(exc),
+                        affected_models=(member.label,),
+                    )
+                ) from exc
+            if len(values) != len(member.model_state.token_map):
+                raise AnalysisPreflightError(
+                    Notice(
+                        "metric_token_count",
+                        f"Token count mismatch for {member.obj_name}: metric has "
+                        f"{len(values)} values but the structure has "
+                        f"{len(member.model_state.token_map)} tokens.",
+                        severity="error",
+                        affected_models=(member.label,),
+                    )
+                )
+            computed.append(
+                ComputedMetric(
+                    member.rank,
+                    member.label,
+                    member.obj_name,
+                    member.model_state,
+                    context,
+                    values,
+                )
+            )
+        return tuple(computed)
 
-    def _compute_ensemble_property(self, key: str) -> np.ndarray:
-        """Return an ensemble-level per-token array."""
-        ensemble_state = getattr(self, "_ensemble", None)
+    def _compute_ensemble_metric(self, key: str) -> np.ndarray:
+        ensemble_state = self._state.ensemble
         if ensemble_state is None:
-            raise ValueError("No active ensemble.")
-
+            raise AnalysisPreflightError(
+                Notice("ensemble_required", "No active ensemble.")
+            )
         if key == "ensemble_rmsd":
             return ensemble_state.rmsd
-
-        if key in ("ensemble_plddt_mean", "ensemble_plddt_std"):
-            return (
-                ensemble_state.plddt_mean
-                if key == "ensemble_plddt_mean"
-                else ensemble_state.plddt_std
-            )
-
-        raise ValueError(f"Unknown ensemble property: {key}")
-
-    def _validate_token_count(self, values, token_map: TokenMap, obj_name: str) -> None:
-        """Raise a helpful error if a property array does not match a token map."""
-        if values is None or token_map is None:
-            raise ValueError("No values or token map available for coloring.")
-        if len(values) != len(token_map):
-            raise ValueError(
-                f"Token count mismatch for {obj_name}: property has {len(values)} "
-                f"values, but the loaded structure maps to {len(token_map)} tokens. "
-                f"Check that the {VIEWER_NAME} object belongs to the selected prediction model."
-            )
-
-    def _confirm_token_overlap_for_coloring(
-        self,
-        token_map: TokenMap,
-        obj_name: str,
-        data=None,
-        *,
-        threshold: float = 0.50,
-        mapping: ObjectPaintMapping | None = None,
-    ) -> bool:
-        """Warn when the selected viewer object barely overlaps the token map."""
-        if token_map is None:
-            return True
-
-        cache_key = self._paint_mapping_cache_key(data, obj_name)
-        try:
-            if mapping is None:
-                mapping = self._prepare_paint_mapping(token_map, obj_name, data)
-            overlap = mapping.overlap
-        except Exception:
-            return True
-        accepted = getattr(self, "_accepted_token_overlap_warnings", set())
-        if cache_key in accepted:
-            return True
-
-        if overlap.target_tokens <= 0 or overlap.target_coverage >= threshold:
-            return True
-
-        pct = overlap.target_coverage * 100.0
-        pred_pct = overlap.prediction_coverage * 100.0
-        message = (
-            f"The selected viewer target '{obj_name}' has low overlap with the "
-            "loaded prediction token map.\n\n"
-            f"Matched target tokens: {overlap.matched_target_tokens} / "
-            f"{overlap.target_tokens} ({pct:.1f}%).\n"
-            f"Matched prediction tokens: {overlap.matched_prediction_tokens} / "
-            f"{overlap.prediction_tokens} ({pred_pct:.1f}%).\n\n"
-            "Coloring this target may be meaningless if it is unrelated to the "
-            "prediction, but it can be useful for deliberate copies or partial "
-            "models. Apply the coloring anyway?"
+        if key == "ensemble_plddt_mean":
+            return ensemble_state.plddt_mean
+        if key == "ensemble_plddt_std":
+            return ensemble_state.plddt_std
+        raise AnalysisPreflightError(
+            Notice("unknown_ensemble_metric", f"Unknown ensemble property: {key}")
         )
-        if not confirm(self, APP_TITLE, message):
-            return False
 
-        accepted.add(cache_key)
-        self._accepted_token_overlap_warnings = accepted
-        return True
+    @staticmethod
+    def paint_mapping_cache_key(data: object, obj_name: str) -> tuple[str, str]:
+        return str(getattr(data, "structure_path", "")), str(obj_name)
 
-    def _paint_mapping_cache_key(self, data, obj_name: str) -> tuple[str, str]:
-        structure_path = getattr(data, "structure_path", None)
-        if structure_path is None:
-            state = getattr(self, "_active_model_state", None)
-            structure_path = getattr(
-                None if state is None else state.data, "structure_path", ""
-            )
-        return str(structure_path), str(obj_name)
-
-    def _prepare_paint_mapping(
+    def prepare_paint_mapping(
         self,
         token_map: TokenMap,
         obj_name: str,
-        data=None,
+        data: object,
     ) -> ObjectPaintMapping:
-        """Return a valid cached atom-index mapping for one viewer object."""
-        cache_key = self._paint_mapping_cache_key(data, obj_name)
-        existing = getattr(self, "_paint_mappings", {}).get(cache_key)
-        mapping, rebuilt = self._viewer_operation(
-            "ensure_paint_mapping",
-            ensure_object_paint_mapping,
-            obj_name,
-            token_map,
-            existing,
+        key = self.paint_mapping_cache_key(data, obj_name)
+        mappings = self._viewer.capture_paint_mappings()
+        mapping, rebuilt = self._viewer.ensure_paint_mapping(
+            obj_name, token_map, mappings.get(key)
         )
-        if getattr(self, "_viewer", None) is None:
-            mappings = dict(getattr(self, "_paint_mappings", {}))
-            mappings[cache_key] = mapping
-            self._paint_mappings = mappings
-        else:
-            staged = dict(getattr(self, "_staged_paint_mappings", {}))
-            staged[cache_key] = mapping
-            self._staged_paint_mappings = staged
+        mappings[key] = mapping
+        self._viewer.restore_paint_mappings(mappings)
         if rebuilt:
-            accepted = set(getattr(self, "_accepted_token_overlap_warnings", set()))
-            accepted.discard(cache_key)
-            self._accepted_token_overlap_warnings = accepted
+            self._accepted_overlap_warnings.discard(key)
         return mapping
 
-    def _binding_site_token_indices(
+    def confirm_token_overlap(
         self,
         token_map: TokenMap,
         obj_name: str,
-        ref_sel: str,
-        ref_indices: list[int],
-        cutoff: float,
-    ) -> list[int]:
-        """Return polymer tokens with any atom within *cutoff* Å of reference."""
-        raw_binding_indices = self._viewer_operation(
-            "tokens_within_distance",
-            tokens_within_distance,
-            token_map,
-            obj_name,
-            ref_sel,
-            cutoff,
-        )
-        ref_set = set(ref_indices)
-        return [
-            idx
-            for idx in raw_binding_indices
-            if idx not in ref_set and not token_map[idx].is_hetatm
-        ]
-
-    def _ensure_current_data_for_property(self, spec: metrics.MetricSpec) -> None:
-        """Assert that asynchronous preflight supplied the property's arrays."""
-        if self._pred_files is None:
-            raise ValueError("No prediction output loaded.")
-        state = self._require_active_model_state()
-        self._require_loaded_data(state.data, spec.load_capabilities)
-
-    def _ensure_member_data_for_property(
-        self, member, spec: metrics.MetricSpec
-    ) -> None:
-        """Assert that asynchronous preflight supplied a member's arrays."""
-        if self._pred_files is None:
-            raise ValueError("No prediction output loaded.")
-        state = self._canonical_state_for_ensemble_member(member)
-        self._require_loaded_data(state.data, spec.load_capabilities)
-
-    def _ensure_member_data_for_plot(
-        self,
-        member,
-        capabilities: frozenset[DataCapability],
-    ) -> None:
-        """Assert that asynchronous preflight supplied plot arrays."""
-        if self._pred_files is None:
-            raise ValueError("No prediction output loaded.")
-        state = self._canonical_state_for_ensemble_member(member)
-        self._require_loaded_data(state.data, capabilities)
-
-    def _require_loaded_data(
-        self,
-        data,
-        capabilities: frozenset[DataCapability],
-    ) -> None:
-        """Raise if a ready-data continuation is missing required arrays."""
-        fields = (
-            ("pae", "pae", "PAE"),
-            ("pde", "pde", "PDE"),
-            ("contact_probs", "contact_probs", "interaction probabilities"),
-            ("plddt", "token_plddt", "pLDDT"),
-        )
-        missing = [
-            label
-            for capability, attr, label in fields
-            if capability in capabilities and getattr(data, attr, None) is None
-        ]
-        if missing:
-            raise ValueError(
-                "Required prediction data are not available: " + ", ".join(missing)
+        data: object,
+        mapping: ObjectPaintMapping,
+        *,
+        threshold: float = 0.50,
+    ) -> bool:
+        key = self.paint_mapping_cache_key(data, obj_name)
+        if key in self._accepted_overlap_warnings:
+            return True
+        overlap = mapping.overlap
+        if overlap.target_tokens <= 0 or overlap.target_coverage >= threshold:
+            return True
+        choice = self._presenter.choose(
+            ChoiceRequest(
+                "low_token_overlap",
+                APP_TITLE,
+                f"The selected viewer target '{obj_name}' has low overlap with "
+                "the prediction token map. Apply the coloring anyway?",
+                (
+                    ChoiceOption("yes", "Apply", "accept"),
+                    ChoiceOption("cancel", "Cancel", "reject"),
+                ),
+                default_key="cancel",
             )
+        )
+        if choice != "yes":
+            return False
+        self._accepted_overlap_warnings.add(key)
+        return True

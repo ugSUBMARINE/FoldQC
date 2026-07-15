@@ -218,16 +218,16 @@ class ComputedMetric:
 
 def _loaded_capabilities(state: ModelState) -> frozenset[DataCapability]:
     data = state.data
-    return frozenset(
-        capability
-        for capability, attribute in (
-            ("plddt", "token_plddt"),
-            ("pae", "pae"),
-            ("pde", "pde"),
-            ("contact_probs", "contact_probs"),
-        )
-        if getattr(data, attribute) is not None
-    )
+    loaded: set[DataCapability] = set()
+    if data.token_plddt is not None:
+        loaded.add("plddt")
+    if data.pae is not None:
+        loaded.add("pae")
+    if data.pde is not None:
+        loaded.add("pde")
+    if data.contact_probs is not None:
+        loaded.add("contact_probs")
+    return frozenset(loaded)
 
 
 class AnalysisResolver:
@@ -273,7 +273,21 @@ class AnalysisResolver:
         coverage: CoveragePolicy = (
             "available" if request.action in _PARTIAL_ACTIONS else "strict"
         )
-        capabilities = frozenset() if metric is None else metric.load_capabilities
+        capabilities: set[DataCapability] = set(
+            () if metric is None else metric.load_capabilities
+        )
+        if request.action == "pae_summary":
+            capabilities.add("pae")
+        elif request.action == "pde_summary":
+            capabilities.add("pde")
+        elif request.action == "binding_site_fingerprint":
+            capabilities.update(("plddt", "pae", "pde", "contact_probs"))
+        elif request.action == "ensemble_site_summary":
+            capabilities.update(("plddt", "pae", "pde"))
+        elif request.action == "matrix" and metric is not None and metric.matrix:
+            source = metric.matrix.source
+            if source in {"pae", "pde", "contact_probs"}:
+                capabilities.add(source)
         dependencies = tuple(
             dict.fromkeys(
                 (plot.dependency_keys if plot is not None else ())
@@ -301,7 +315,7 @@ class AnalysisResolver:
             members=contexts,
             metric_spec=metric,
             plot_spec=plot,
-            required_capabilities=capabilities,
+            required_capabilities=frozenset(capabilities),
             dependency_keys=dependencies,
             coverage_policy=coverage,
             prediction_files=files,

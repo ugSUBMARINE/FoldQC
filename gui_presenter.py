@@ -188,6 +188,16 @@ class QtPresenter:
                     )
                 )
 
+    def close(self) -> None:
+        for operation_id in tuple(self._progress):
+            self.finish_progress(operation_id)
+        for window in tuple(self._plot_windows):
+            try:
+                window.close()
+            except Exception:
+                pass
+        self._plot_windows.clear()
+
 
 class QtGuiScheduler:
     """Schedule small GUI-thread continuations without leaking Qt into services."""

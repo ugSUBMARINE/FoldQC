@@ -8,15 +8,59 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Any, Protocol, TypeVar, runtime_checkable
+from pathlib import Path
+from typing import TYPE_CHECKING, Literal, Protocol, TypeVar, runtime_checkable
 
 import numpy as np
 
 from .dependencies import DependencyKey
-from .mol_viewer import ObjectPaintMapping, PaintBatchResult, PaintTarget
-from .token_map import TokenMap
+from .token_map import TokenMap, TokenOverlapSummary
+
+if TYPE_CHECKING:
+    from .analysis import DeferredAnalysisAction
+    from .presentation import Notice
+    from .session import SessionState
 
 T = TypeVar("T")
+
+
+@dataclass(frozen=True)
+class ObjectPaintMapping:
+    """Stable mapping from one viewer object's atoms to prediction tokens."""
+
+    obj_name: str
+    atom_index_fingerprint: tuple[int, ...]
+    atom_token_indices: np.ndarray
+    atom_count: int
+    max_atom_index: int
+    overlap: TokenOverlapSummary
+
+
+@dataclass(frozen=True)
+class ObjectTokenInspection:
+    """Paint metadata and representative coordinates from one object snapshot."""
+
+    paint_mapping: ObjectPaintMapping
+    representative_coords: np.ndarray
+
+
+@dataclass(frozen=True)
+class PaintTarget:
+    """One viewer object and per-token array participating in a paint."""
+
+    obj_name: str
+    token_map: TokenMap
+    values: np.ndarray
+    mapping: ObjectPaintMapping | None = None
+
+
+@dataclass(frozen=True)
+class PaintBatchResult:
+    """Resolved range and mappings from a viewer paint operation."""
+
+    vmin: float
+    vmax: float
+    mappings: tuple[ObjectPaintMapping, ...]
 
 
 @dataclass(frozen=True)
@@ -57,10 +101,12 @@ class ViewerPort(Protocol):
     def object_names(self, additional_names: Sequence[str] = ()) -> list[str]: ...
 
     def ensure_structure_object(
-        self, path: object, obj_name: str, *, zoom: bool = True
+        self, path: str | Path, obj_name: str, *, zoom: bool = True
     ) -> bool: ...
 
-    def load_structure_object_if_missing(self, path: object, obj_name: str) -> bool: ...
+    def load_structure_object_if_missing(
+        self, path: str | Path, obj_name: str
+    ) -> bool: ...
 
     def delete_names(self, names: Sequence[str]) -> None: ...
 
@@ -72,7 +118,9 @@ class ViewerPort(Protocol):
 
     def remove_from_group(self, group_name: str, names: Sequence[str]) -> None: ...
 
-    def inspect_tokens(self, obj_name: str, token_map: TokenMap) -> object: ...
+    def inspect_tokens(
+        self, obj_name: str, token_map: TokenMap
+    ) -> ObjectTokenInspection: ...
 
     def transform(
         self, obj_name: str, rotation: np.ndarray, translation: np.ndarray
@@ -128,17 +176,32 @@ class ViewerPort(Protocol):
         existing: ObjectPaintMapping | None,
     ) -> tuple[ObjectPaintMapping, bool]: ...
 
+    def capture_paint_mappings(
+        self,
+    ) -> dict[tuple[str, str], ObjectPaintMapping]: ...
+
+    def restore_paint_mappings(
+        self, mappings: dict[tuple[str, str], ObjectPaintMapping]
+    ) -> None: ...
+
+    def clear_paint_mappings(self) -> None: ...
+
+
+@runtime_checkable
+class JobHandlePort(Protocol):
+    def abandon(self) -> None: ...
+
 
 @runtime_checkable
 class JobRunner(Protocol):
     def submit(
         self,
         request_id: int,
-        task: Callable[[Callable[[str], None]], Any],
+        task: Callable[[Callable[[str], None]], object],
         on_progress: Callable[[int, str], None],
         on_result: Callable[[int, object], None],
         on_error: Callable[[int, object], None],
-    ) -> object: ...
+    ) -> JobHandlePort: ...
 
     def dispose(self, value: object) -> None: ...
 
@@ -148,6 +211,8 @@ class DependencyService(Protocol):
     def ensure(
         self, keys: tuple[DependencyKey, ...], *, feature_label: str
     ) -> bool: ...
+
+    def close(self) -> None: ...
 
 
 @runtime_checkable
@@ -163,36 +228,114 @@ class GuiScheduler(Protocol):
 class DialogViewPort(Protocol):
     """Deterministic widget renderer, separate from transient presentation."""
 
-    @property
-    def widgets(self) -> object: ...
-
-    def select_combo_data(self, combo: object, value: object) -> bool: ...
-
-    def combo_contains_text(self, combo: object, text: str) -> bool: ...
-
-    def select_object(self, name: str) -> None: ...
-
-    def select_model_rank(self, rank: int) -> bool: ...
-
-    def select_property(self, key: str) -> None: ...
-
-    def select_property_if_available(self, key: str) -> bool: ...
-
-    def set_metric_available(self, row: int, available: bool) -> None: ...
-
-    def metric_is_available(self, row: int) -> bool: ...
-
-    def set_plot_availability(
-        self, availability: tuple[tuple[str, bool, str], ...]
-    ) -> None: ...
-
-    def set_confidence_text(self, text: str) -> None: ...
-
-    def set_preview_text(self, text: str) -> None: ...
-
-    def apply_field_context(self, state: ContextViewState) -> None: ...
-
     def apply_context(self, state: ContextViewState) -> None: ...
+
+    def apply_lifecycle(self, update: LifecycleUiUpdate) -> None: ...
+
+    def set_busy(self, state: BusyViewState) -> None: ...
+
+    def close(self) -> None: ...
+
+
+@runtime_checkable
+class SessionPort(Protocol):
+    @property
+    def restoring(self) -> bool: ...
+
+    def restore(self) -> SessionState: ...
+
+    def save(self) -> None: ...
+
+
+@dataclass(frozen=True)
+class ContextSelection:
+    target_name: str = ""
+    metric_key: str | None = None
+    reference_selection: str = ""
+    cutoff_text: str = ""
+
+
+@dataclass(frozen=True)
+class ModelChoice:
+    rank: int
+    label: str
+
+
+@dataclass(frozen=True)
+class TargetChoice:
+    name: str
+    kind: Literal["single", "ensemble_member", "ensemble_group", "viewer"]
+
+
+@dataclass(frozen=True)
+class BusyViewState:
+    busy: bool
+    prediction_controls_enabled: bool
+
+
+OperationKind = Literal["prediction", "data", "ensemble", "model_switch"]
+
+
+@dataclass(frozen=True)
+class OperationLease:
+    request_id: int
+    kind: OperationKind
+
+
+@runtime_checkable
+class OperationCoordinatorPort(Protocol):
+    @property
+    def is_busy(self) -> bool: ...
+
+    @property
+    def active(self) -> OperationLease | None: ...
+
+    def begin(
+        self,
+        kind: OperationKind,
+        *,
+        title: str,
+        label: str,
+        delay_ms: int = 300,
+        cancellable: bool = False,
+        on_cancel: Callable[[], None] | None = None,
+    ) -> OperationLease | None: ...
+
+    def attach(self, lease: OperationLease, handle: JobHandlePort) -> bool: ...
+
+    def is_current(self, lease: OperationLease) -> bool: ...
+
+    def update(self, lease: OperationLease, label: str) -> None: ...
+
+    def finish(self, lease: OperationLease) -> bool: ...
+
+    def abandon(self) -> None: ...
+
+
+DataAcquisitionStatus = Literal["ready", "stale", "cancelled", "failed"]
+
+
+@dataclass(frozen=True)
+class DataAcquisitionOutcome:
+    lease: OperationLease
+    action: DeferredAnalysisAction
+    status: DataAcquisitionStatus
+    notice: Notice | None = None
+
+
+@runtime_checkable
+class DataLoadObserver(Protocol):
+    def data_acquisition_finished(self, outcome: DataAcquisitionOutcome) -> None: ...
+
+
+@runtime_checkable
+class AnalysisSubmissionPort(Protocol):
+    """Narrow action-submission boundary used by committed lifecycle work."""
+
+    @property
+    def ui_revision(self) -> int: ...
+
+    def submit(self, action: DeferredAnalysisAction) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -201,8 +344,11 @@ class LifecycleUiUpdate:
 
     selected_rank: int | None = None
     selected_target: str | None = None
+    display_path: str | None = None
     refresh_context: bool = True
     save_session: bool = False
+    model_choices: tuple[ModelChoice, ...] = ()
+    target_choices: tuple[TargetChoice, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -220,3 +366,9 @@ class ContextViewState:
     confidence_text: str = ""
     preview_text: str = ""
     statistics_text: str | None = None
+    ensemble_enabled: bool = False
+    ensemble_tooltip: str = "Load a prediction with at least two models first."
+    model_choices: tuple[ModelChoice, ...] = ()
+    target_choices: tuple[TargetChoice, ...] = ()
+    selected_rank: int | None = None
+    selected_target: str | None = None

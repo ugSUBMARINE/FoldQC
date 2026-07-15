@@ -92,7 +92,7 @@ class BaseProvider(ABC):
                     f"No StructureIndex available for {model.structure_path.name}."
                 )
             data.confidence = parse_prediction_confidence(
-                _load_json(model.summary_path),
+                self.normalize_confidence_payload(_load_json(model.summary_path)),
                 chain_count=chain_count,
                 provider=pred_files.provider.key,
                 model_label=model.display_label,
@@ -155,7 +155,7 @@ class BaseProvider(ABC):
                 f"No StructureIndex available for {model.structure_path.name}."
             )
         incoming = parse_prediction_confidence(
-            payload,
+            self.normalize_confidence_payload(payload),
             chain_count=len(structure_index.token_map.chain_order),
             provider=self.key,
             model_label=model.display_label,
@@ -167,6 +167,10 @@ class BaseProvider(ABC):
             incoming,
             context=f"{self.key} {model.display_label} confidence",
         )
+
+    def normalize_confidence_payload(self, payload: dict | None) -> dict | None:
+        """Normalize provider-specific JSON encodings before typed parsing."""
+        return payload
 
     def load_model_data(
         self,

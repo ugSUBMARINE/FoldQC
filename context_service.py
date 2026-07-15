@@ -1,334 +1,300 @@
-"""Context application workflow."""
+"""Typed target, metric, plot, and preview context derivation."""
 
 from __future__ import annotations
 
-from .gui_services import ContextViewState
-from .lifecycle_support import (
-    ModelState,
-    get_object_list,
-    gui_rules,
-    metrics,
-    np,
-    plot_data,
-    reports,
+from dataclasses import replace
+from typing import Literal
+
+import numpy as np
+
+from . import gui_rules, metrics, plot_data, reports
+from .ensemble import EnsembleMember
+from .gui_services import (
+    ContextSelection,
+    ContextViewState,
+    DialogViewPort,
+    ModelChoice,
+    TargetChoice,
+    ViewerPort,
 )
+from .gui_state import PluginState
+from .loader_models import DataCapability
+from .model_state import ModelState
+from .presentation import PresentationPort
+from .token_map import TokenMap
+
+TargetKind = Literal["none", "single", "ensemble_member", "ensemble_group"]
 
 
-class ContextWorkflow:
-    def _refresh_objects(self) -> None:
-        """Re-populate the molecular-viewer target dropdown."""
+class ContextService:
+    """Derive deterministic view state without reading or mutating widgets."""
+
+    def __init__(
+        self,
+        state: PluginState,
+        viewer: ViewerPort,
+        presenter: PresentationPort,
+        view: DialogViewPort,
+        metric_rows: dict[str, int],
+    ) -> None:
+        self._state = state
+        self._viewer = viewer
+        self._presenter = presenter
+        self._view = view
+        self._metric_rows = dict(metric_rows)
+        self._selection = ContextSelection()
+
+    @property
+    def selection(self) -> ContextSelection:
+        return self._selection
+
+    def set_selection(self, selection: ContextSelection) -> None:
+        self._selection = selection
+
+    def refresh(self, selection: ContextSelection | None = None) -> ContextViewState:
+        if selection is not None:
+            self._selection = selection
+        state = self.derive_view_state()
+        self._view.apply_context(state)
+        return state
+
+    def refresh_objects(self, preferred_target: str | None = None) -> ContextViewState:
+        ensemble_state = self._state.ensemble
+        additional = () if ensemble_state is None else (ensemble_state.group_name,)
         try:
-            ensemble_state = self._ensemble
-            additional = [] if ensemble_state is None else [ensemble_state.group_name]
-            names = self._viewer_operation(
-                "object_names",
-                get_object_list,
-                additional_names=additional,
+            names = self._ordered_target_names(
+                self._viewer.object_names(additional_names=additional)
             )
-            names = self._ordered_target_names(names)
         except Exception:
             names = []
-
-        self._obj_combo.blockSignals(True)
-        self._obj_combo.clear()
-        for n in names:
-            self._obj_combo.addItem(n)
-            self._style_target_combo_item(self._obj_combo.count() - 1, n)
-        pending_target = getattr(self._pending_session_restore, "target_name", None)
-        if pending_target and self._combo_contains_text(
-            self._obj_combo, pending_target
-        ):
-            self._select_object(pending_target)
-            if not getattr(self, "_loading_prediction", False):
-                self._pending_session_restore.target_name = None
-        self._obj_combo.blockSignals(False)
-        self._refresh_contextual_ui()
+        selected = preferred_target or self._selection.target_name
+        if selected not in names:
+            selected = names[0] if names else ""
+        self._selection = replace(self._selection, target_name=selected)
+        state = self.derive_view_state(target_names=names)
+        self._view.apply_context(state)
+        return state
 
     def _ordered_target_names(self, names: list[str]) -> list[str]:
-        """Return target names in stable display order."""
-        ensemble_state = self._ensemble
+        ensemble_state = self._state.ensemble
         group_name = None if ensemble_state is None else ensemble_state.group_name
         members = sorted(
             () if ensemble_state is None else ensemble_state.members,
             key=lambda member: member.rank,
         )
         member_names = [member.obj_name for member in members]
-
-        name_set = set(names)
-        ordered = []
-        if group_name in name_set:
+        available = set(names)
+        ordered: list[str] = []
+        if group_name in available:
             ordered.append(group_name)
-        ordered.extend(name for name in member_names if name in name_set)
-
+        ordered.extend(name for name in member_names if name in available)
         handled = set(ordered)
         ordered.extend(
             sorted((name for name in names if name not in handled), key=str.casefold)
         )
         return ordered
 
-    def _style_target_combo_item(self, row: int, name: str) -> None:
-        """Visually distinguish the ensemble group in the target dropdown."""
-        ensemble_state = self._ensemble
-        if ensemble_state is None or name != ensemble_state.group_name:
-            return
-        item = self._obj_combo.model().item(row)
-        if item is None:
-            return
-        font = item.font()
-        font.setBold(True)
-        font.setItalic(True)
-        item.setFont(font)
-
-    def _on_property_changed(self) -> None:
-        """Refresh controls whose meaning depends on the selected property."""
-        self._ref_label.setVisible(True)
-        self._ref_edit.setVisible(True)
-        self._refresh_contextual_ui()
-
-    def _update_confidence_summary(self) -> None:
-        """Fill the confidence text browser from loaded data."""
-        state = self._active_model_state
-        self.application.view.set_confidence_text(
-            reports.format_confidence_summary(None if state is None else state.data)
-        )
-
-    def _update_property_availability(self) -> None:
-        """Grey out combo items whose required data is not available."""
-        for row, available in self._metric_availability():
-            self.application.view.set_metric_available(row, available)
-
-    def _metric_availability(self) -> tuple[tuple[int, bool], ...]:
-        state = self._active_model_state
-        if state is None or self._pred_files is None:
-            return ()
-        has_pae = self._target_all_supports_family("pae")
-        has_pde = self._target_all_supports_family("pde")
-        has_contact_probs = self._target_all_supports_family("contact_probs")
-        has_plddt = self._target_all_supports_family("plddt")
-        target_states = self._current_target_model_states()
-        has_confidence = bool(target_states) and all(
-            target_state.data.confidence is not None for target_state in target_states
-        )
-        has_chain_iptm = self._has_chain_iptm_metric_data()
-        has_ensemble = self._ensemble is not None
-
-        family_available = {
-            "pae": has_pae,
-            "pde": has_pde,
-            "plddt": has_plddt,
-            "contact_probs": has_contact_probs,
-            "confidence": has_confidence,
-        }
-        availability = []
-        for spec in metrics.METRICS:
-            combo_row = self._property_combo_row(spec.key)
-            if combo_row is None:
-                continue
-            available = True
-            if any(not family_available[item] for item in spec.requirements):
-                available = False
-            if spec.key == "chain_iptm" and not has_chain_iptm:
-                available = False
-            if spec.ensemble_level and not has_ensemble:
-                available = False
-            availability.append((combo_row, available))
-        return tuple(availability)
-
-    def _has_chain_iptm_metric_data(self) -> bool:
-        """Return whether loaded confidence has data for the Chain ipTM metric."""
-        states = self._current_target_model_states()
-        return bool(states) and all(
-            state.data.confidence is not None and state.data.confidence.has_chain_iptm
-            for state in states
-        )
-
-    def _select_first_available_property(self) -> None:
-        """Move the property combo away from a disabled item after loading."""
-        current = self._prop_combo.currentIndex()
-        if current >= 0 and self.application.view.metric_is_available(current):
-            return
-        for spec in metrics.METRICS:
-            row = self._property_combo_row(spec.key)
-            if row is None:
-                continue
-            if self.application.view.metric_is_available(row):
-                self._prop_combo.setCurrentIndex(row)
-                return
-
-    def _clear_viewer_mapping_cache(self) -> None:
-        """Drop object-specific mapping state after changing prediction context."""
-        self._paint_mappings = {}
-        self._accepted_token_overlap_warnings = set()
-
-    def _capture_viewer_mapping_context(self) -> tuple:
-        """Snapshot object mappings for transactional model switching."""
-        return (
-            dict(self._paint_mappings),
-            set(self._accepted_token_overlap_warnings),
-        )
-
-    def _restore_viewer_mapping_context(self, context: tuple) -> None:
-        """Restore object mappings after a failed model switch."""
-        (
-            paint_mappings,
-            accepted_warnings,
-        ) = context
-        self._paint_mappings = paint_mappings
-        self._accepted_token_overlap_warnings = accepted_warnings
-
-    def _property_combo_row(self, key: str) -> int | None:
-        """Return the combo row registered for a metric key."""
-        return self._prop_combo_rows.get(key)
-
-    def _current_target_kind(self) -> str:
-        """Return a lightweight target kind without resolving token maps or loading data."""
-        try:
-            obj_name = self._get_obj_name()
-        except Exception:
-            obj_name = None
-        if not obj_name:
+    def target_kind(self) -> TargetKind:
+        target_name = self._selection.target_name
+        if not target_name:
             return "none"
-        ensemble_state = getattr(self, "_ensemble", None)
-        if ensemble_state is not None and obj_name == ensemble_state.group_name:
+        ensemble_state = self._state.ensemble
+        if ensemble_state is not None and target_name == ensemble_state.group_name:
             return "ensemble_group"
-        if self._selected_ensemble_member(obj_name) is not None:
+        if self.selected_ensemble_member(target_name) is not None:
             return "ensemble_member"
         return "single"
 
-    def _current_target_model_states(self) -> tuple[ModelState, ...]:
-        """Return canonical model states addressed by the viewer target."""
-        ensemble_state = getattr(self, "_ensemble", None)
-        kind = self._current_target_kind()
+    def selected_ensemble_member(self, target_name: str) -> EnsembleMember | None:
+        ensemble_state = self._state.ensemble
+        if ensemble_state is None:
+            return None
+        return next(
+            (
+                member
+                for member in ensemble_state.members
+                if member.obj_name == target_name
+            ),
+            None,
+        )
+
+    def target_model_states(self) -> tuple[ModelState, ...]:
+        ensemble_state = self._state.ensemble
+        kind = self.target_kind()
         if kind == "ensemble_group" and ensemble_state is not None:
             return tuple(
-                state
+                model_state
                 for member in sorted(ensemble_state.members, key=lambda item: item.rank)
-                if (state := self._model_states.get(member.rank)) is not None
+                if (model_state := self._state.model_states.get(member.rank))
+                is not None
             )
         if kind == "ensemble_member":
-            member = self._selected_ensemble_member(self._get_obj_name())
-            state = None if member is None else self._model_states.get(member.rank)
-            return () if state is None else (state,)
-        state = self._active_model_state
-        return () if state is None else (state,)
+            member = self.selected_ensemble_member(self._selection.target_name)
+            model_state = (
+                None if member is None else self._state.model_states.get(member.rank)
+            )
+            return () if model_state is None else (model_state,)
+        active = self._state.active_model_state
+        return () if active is None else (active,)
 
-    def _state_supports_family(self, state: ModelState, family: str) -> bool:
+    def state_supports_family(self, state: ModelState, family: DataCapability) -> bool:
         data_attr = "token_plddt" if family == "plddt" else family
         if getattr(state.data, data_attr, None) is not None:
             return True
-        if self._pred_files is None:
-            return False
-        model_getter = getattr(self._pred_files, "model", None)
-        if not callable(model_getter):
-            return False
-        return model_getter(state.rank).supports(family)
+        files = self._state.pred_files
+        return bool(files is not None and files.model(state.rank).supports(family))
 
-    def _target_all_supports_family(self, family: str) -> bool:
-        states = self._current_target_model_states()
+    def target_all_supports_family(self, family: DataCapability) -> bool:
+        states = self.target_model_states()
         return bool(states) and all(
-            self._state_supports_family(state, family) for state in states
+            self.state_supports_family(state, family) for state in states
         )
 
-    def _target_any_supports_family(self, family: str) -> bool:
+    def target_any_supports_family(self, family: DataCapability) -> bool:
         return any(
-            self._state_supports_family(state, family)
-            for state in self._current_target_model_states()
+            self.state_supports_family(state, family)
+            for state in self.target_model_states()
         )
 
-    def _has_fingerprint_data(self) -> bool:
-        """Return whether fingerprint plotting has any source family available."""
+    def has_fingerprint_data(self) -> bool:
         return any(
-            self._target_any_supports_family(family)
+            self.target_any_supports_family(family)
             for family in ("pae", "pde", "contact_probs", "plddt")
         )
 
-    def _has_matrix_data_family(self, family: str) -> bool:
-        """Return whether a matrix family is available from files or loaded data."""
-        if family == "pae":
-            return self._target_all_supports_family("pae")
-        if family == "pde":
-            return self._target_all_supports_family("pde")
-        return False
+    def has_matrix_data_family(self, family: Literal["pae", "pde"]) -> bool:
+        return family in {"pae", "pde"} and self.target_all_supports_family(family)
 
-    def _current_target_has_multiple_chains(self) -> bool:
-        """Return whether the current target token map has multiple chains."""
-        try:
-            obj_name = self._get_obj_name()
-        except Exception:
-            obj_name = None
-        if not obj_name:
-            return False
+    def current_target_has_multiple_chains(self) -> bool:
+        states = self.target_model_states()
+        return bool(states and plot_data.has_multiple_token_chains(states[0].token_map))
 
-        ensemble_state = getattr(self, "_ensemble", None)
-        if ensemble_state is not None and obj_name == ensemble_state.group_name:
-            members = ensemble_state.members
-            if not members:
-                return False
-            state = self._model_states.get(members[0].rank)
-            return bool(
-                state is not None
-                and plot_data.has_multiple_token_chains(state.token_map)
-            )
+    def ensemble_action_state(self) -> tuple[bool, str]:
+        files = self._state.pred_files
+        if files is None:
+            return False, "Load a prediction with at least two models first."
+        if not files.supports_ensemble:
+            return False, "Ensemble mode requires at least two model files."
+        if self._state.ensemble is not None:
+            return False, "The ensemble for this prediction is already loaded."
+        return (
+            True,
+            "Load all ranked models as an ensemble and compute ensemble-level metrics.",
+        )
 
-        member = self._selected_ensemble_member(obj_name)
-        if member is not None:
-            state = self._model_states.get(member.rank)
-            return bool(
-                state is not None
-                and plot_data.has_multiple_token_chains(state.token_map)
-            )
+    def metric_availability(self) -> tuple[tuple[int, bool], ...]:
+        if self._state.active_model_state is None or self._state.pred_files is None:
+            return ()
+        target_states = self.target_model_states()
+        family_available = {
+            family: self.target_all_supports_family(family)
+            for family in ("pae", "pde", "plddt", "contact_probs")
+        }
+        family_available["confidence"] = bool(target_states) and all(
+            state.data.confidence is not None for state in target_states
+        )
+        has_chain_iptm = bool(target_states) and all(
+            state.data.confidence is not None and state.data.confidence.has_chain_iptm
+            for state in target_states
+        )
+        availability: list[tuple[int, bool]] = []
+        for spec in metrics.METRICS:
+            row = self._metric_rows.get(spec.key)
+            if row is None:
+                continue
+            available = all(family_available[item] for item in spec.requirements)
+            if spec.key == "chain_iptm":
+                available = available and has_chain_iptm
+            if spec.ensemble_level:
+                available = available and self._state.ensemble is not None
+            availability.append((row, available))
+        return tuple(availability)
 
-        try:
-            state = self._require_active_model_state()
-        except Exception:
-            return False
-        return plot_data.has_multiple_token_chains(state.token_map)
+    def first_available_metric(self) -> str | None:
+        available_rows = {
+            row for row, available in self.metric_availability() if available
+        }
+        return next(
+            (
+                spec.key
+                for spec in metrics.METRICS
+                if self._metric_rows.get(spec.key) in available_rows
+            ),
+            None,
+        )
 
-    def _update_plot_actions(self) -> None:
-        """Refresh plot menu action availability from current GUI state."""
-        self.application.view.set_plot_availability(self._plot_availability())
-
-    def _plot_availability(self) -> tuple[tuple[str, bool, str], ...]:
-        metric_key = self._prop_combo.currentData()
-        target_kind = self._current_target_kind()
-        has_reference = bool(self._ref_edit.text().strip())
-        has_ensemble = self._ensemble is not None
-        has_fingerprint_data = self._has_fingerprint_data()
-        has_pae_data = self._has_matrix_data_family("pae")
-        has_pde_data = self._has_matrix_data_family("pde")
-        has_multiple_chains = self._current_target_has_multiple_chains()
-        availability = []
+    def plot_availability(self) -> tuple[tuple[str, bool, str], ...]:
+        selection = self._selection
+        availability: list[tuple[str, bool, str]] = []
         for spec in metrics.PLOTS:
             state = gui_rules.plot_action_state(
                 spec.key,
-                metric_key,
-                target_kind,
-                has_reference,
-                has_ensemble,
-                has_fingerprint_data=has_fingerprint_data,
-                has_pae_data=has_pae_data,
-                has_pde_data=has_pde_data,
-                has_multiple_chains=has_multiple_chains,
+                selection.metric_key,
+                self.target_kind(),
+                bool(selection.reference_selection),
+                self._state.ensemble is not None,
+                has_fingerprint_data=self.has_fingerprint_data(),
+                has_pae_data=self.has_matrix_data_family("pae"),
+                has_pde_data=self.has_matrix_data_family("pde"),
+                has_multiple_chains=self.current_target_has_multiple_chains(),
             )
-            tip = state.reason or f"Show {spec.label.lower()}."
-            availability.append((spec.key, state.enabled, tip))
+            availability.append(
+                (spec.key, state.enabled, state.reason or f"Show {spec.label.lower()}.")
+            )
         return tuple(availability)
 
-    def _derive_context_view_state(self) -> ContextViewState:
-        key = self._prop_combo.currentData()
-        target_kind = self._current_target_kind()
+    def derive_view_state(
+        self, *, target_names: list[str] | None = None
+    ) -> ContextViewState:
+        selection = self._selection
+        target_kind = self.target_kind()
         field = gui_rules.field_context(
-            key,
+            selection.metric_key,
             target_kind,
-            self._ensemble is not None,
-            self._has_fingerprint_data(),
+            self._state.ensemble is not None,
+            self.has_fingerprint_data(),
         )
-        ref_sel = self._ref_edit.text().strip()
-        cutoff_text = self._cutoff_edit.text()
-        active = self._active_model_state
+        if target_names is None:
+            ensemble_state = self._state.ensemble
+            additional = () if ensemble_state is None else (ensemble_state.group_name,)
+            try:
+                target_names = self._ordered_target_names(
+                    self._viewer.object_names(additional_names=additional)
+                )
+            except Exception:
+                target_names = []
+        ensemble_state = self._state.ensemble
+        group_name = None if ensemble_state is None else ensemble_state.group_name
+        member_names = {
+            member.obj_name
+            for member in (() if ensemble_state is None else ensemble_state.members)
+        }
+        targets = tuple(
+            TargetChoice(
+                name,
+                (
+                    "ensemble_group"
+                    if name == group_name
+                    else "ensemble_member"
+                    if name in member_names
+                    else "single"
+                ),
+            )
+            for name in target_names
+        )
+        files = self._state.pred_files
+        ensemble_enabled, ensemble_tooltip = self.ensemble_action_state()
+        model_choices = (
+            ()
+            if files is None
+            else tuple(
+                ModelChoice(model.rank, model.display_label) for model in files.models
+            )
+        )
+        active = self._state.active_model_state
         return ContextViewState(
-            metric_availability=self._metric_availability(),
-            plot_availability=self._plot_availability(),
+            metric_availability=self.metric_availability(),
+            plot_availability=self.plot_availability(),
             reference_label=field.ref_label,
             reference_tooltip=field.ref_tooltip,
             reference_enabled=field.ref_enabled,
@@ -339,34 +305,21 @@ class ContextWorkflow:
                 None if active is None else active.data
             ),
             preview_text=gui_rules.metric_preview_text(
-                key,
+                selection.metric_key,
                 target_kind,
-                ref_sel,
-                cutoff_text,
-                self._ensemble is not None,
+                selection.reference_selection,
+                selection.cutoff_text,
+                self._state.ensemble is not None,
             ),
+            ensemble_enabled=ensemble_enabled,
+            ensemble_tooltip=ensemble_tooltip,
+            model_choices=model_choices,
+            target_choices=targets,
+            selected_rank=self._state.active_model_rank,
+            selected_target=selection.target_name or None,
         )
 
-    def _refresh_contextual_ui(self) -> None:
-        """Refresh plot actions, contextual fields, and preview text together."""
-        self._update_ensemble_button_state()
-        self.application.view.apply_context(self._derive_context_view_state())
-
-    def _update_context_controls(self) -> None:
-        """Apply contextual Reference and cutoff control states."""
-        self.application.view.apply_field_context(self._derive_context_view_state())
-
-    def _update_metric_preview(self) -> None:
-        """Show compact practical text for the selected metric and inputs."""
-        self.application.view.set_preview_text(
-            self._derive_context_view_state().preview_text
-        )
-
-    def _set_statistics_text(self, text: str) -> None:
-        """Update the statistics panel when it exists."""
-        self._presenter.show_statistics(text)
-
-    def _update_statistics_for_single(
+    def show_statistics_for_single(
         self,
         key: str,
         target_name: str,
@@ -375,10 +328,9 @@ class ContextWorkflow:
         include_plddt_classes: bool = False,
         include_chain_stats: bool = False,
         include_domain_labels: bool = False,
-        token_map=None,
+        token_map: TokenMap | None = None,
     ) -> None:
-        """Show statistics for one successfully painted target."""
-        self._set_statistics_text(
+        self._presenter.show_statistics(
             reports.format_statistics_report(
                 key,
                 target_name,
@@ -389,22 +341,29 @@ class ContextWorkflow:
             )
         )
 
-    def _update_statistics_for_members(
+    def show_statistics_for_members(
         self,
         key: str,
         target_label: str,
-        member_values: list[tuple[object, np.ndarray]],
+        member_values: list[tuple[EnsembleMember, np.ndarray]],
         *,
         include_plddt_classes: bool = False,
         include_chain_stats: bool = False,
         include_domain_labels: bool = False,
     ) -> None:
-        """Show statistics for successfully painted ensemble targets."""
         entries = [
-            (member.obj_name, values, getattr(member, "token_map", None))
+            (
+                member.obj_name,
+                values,
+                (
+                    None
+                    if (state := self._state.model_states.get(member.rank)) is None
+                    else state.token_map
+                ),
+            )
             for member, values in member_values
         ]
-        self._set_statistics_text(
+        self._presenter.show_statistics(
             reports.format_statistics_report(
                 key,
                 target_label,

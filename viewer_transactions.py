@@ -5,8 +5,13 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from .gui_services import AtomVisualSnapshot, ManagedColorbar, ViewerPort
-from .mol_viewer import PaintBatchResult, PaintTarget
+from .gui_services import (
+    AtomVisualSnapshot,
+    ManagedColorbar,
+    PaintBatchResult,
+    PaintTarget,
+    ViewerPort,
+)
 
 
 class ViewerTransactionError(RuntimeError):

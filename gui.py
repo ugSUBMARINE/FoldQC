@@ -10,20 +10,31 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from . import metrics, session
+from . import metrics
+from .analysis import (
+    AnalysisAction,
+    AnalysisRequest,
+    ColorOptions,
+    DeferredAnalysisAction,
+    ExportOptions,
+    PlotOptions,
+)
 from .compat import (
     AlignLeft,
     AlignVCenter,
     ItemIsEnabled,
-    QSettings,
     QtWidgets,
 )
 from .gui_application import GuiApplicationServices
+from .gui_dependencies import QtDependencyService
 from .gui_layout import build_dialog_ui
 from .gui_presenter import QtGuiScheduler, QtPresenter
-from .gui_state import PluginState, ResolvedTarget
+from .gui_services import ContextSelection
+from .gui_session import QtSessionAdapter
+from .gui_state import PluginState
 from .gui_view import QtDialogView
 from .mol_viewer import PyMOLViewer, get_selection_examples, get_viewer_name
+from .presentation import Notice
 
 APP_TITLE = "FoldQC"
 VIEWER_NAME = get_viewer_name()
@@ -32,8 +43,6 @@ PREDICTION_FILE_FILTER = (
     "Prediction files (*.cif *.pdb *.zip *.tar *.tar.gz *.tgz);;All files (*)"
 )
 
-
-_PlotTarget = ResolvedTarget
 
 # ---------------------------------------------------------------------------
 # Dialog
@@ -57,6 +66,8 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
         self._presenter = QtPresenter(self)
         self._scheduler = QtGuiScheduler()
         self._view = QtDialogView(self, self.widgets)
+        self._session = QtSessionAdapter(self, self.widgets)
+        self._dependencies = QtDependencyService(self)
 
         # Non-widget state is shared with the injected workflow coordinators.
         self.state = PluginState()
@@ -68,18 +79,19 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
             job_runner = QtJobRunner()
         self._job_runner = job_runner
         self.services = GuiApplicationServices(
-            self,
             state=self.state,
             viewer=self._viewer,
             presenter=self._presenter,
             view=self._view,
             scheduler=self._scheduler,
             job_runner=self._job_runner,
+            session=self._session,
+            dependencies=self._dependencies,
+            metric_rows=self.widgets._prop_combo_rows,
         )
-        self.services.dependencies.initialize()
         self._connect_signals()
         self._restore_session_settings()
-        self.services.context.on_property_changed()
+        self.services.context.refresh(self._capture_context_selection())
 
     # -----------------------------------------------------------------------
     # UI construction
@@ -103,13 +115,6 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
         caption.setMinimumHeight(minimum_height)
         caption.setAlignment(alignment)
 
-    def _populate_property_combo(self) -> None:
-        """Populate Color by with disabled group headers and metric rows."""
-        self.widgets._prop_combo_rows = {}
-        self._populate_property_combo_for(
-            self.widgets._prop_combo, self.widgets._prop_combo_rows
-        )
-
     def _populate_property_combo_for(self, combo, rows: dict[str, int]) -> None:
         """Populate a provided metric combo while the widget registry is built."""
         current_group = None
@@ -131,37 +136,25 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
     def _connect_signals(self) -> None:
         self.widgets._dir_btn.clicked.connect(self._browse_directory)
         self.widgets._file_btn.clicked.connect(self._browse_file)
-        self.widgets._dir_edit.returnPressed.connect(
-            self.services.lifecycle.load_prediction
-        )
+        self.widgets._dir_edit.returnPressed.connect(self._load_entered_prediction)
         self.widgets._dir_edit.textChanged.connect(self._save_session_settings)
-        self.widgets._model_combo.currentIndexChanged.connect(
-            self.services.lifecycle._on_model_changed
-        )
+        self.widgets._model_combo.currentIndexChanged.connect(self._model_changed)
         self.widgets._model_combo.currentIndexChanged.connect(
             self._save_session_settings
         )
         self.widgets._obj_refresh_btn.clicked.connect(
-            self.services.context._refresh_objects
+            self.services.context.refresh_objects
         )
-        self.widgets._obj_combo.currentIndexChanged.connect(
-            self.services.context.refresh
-        )
+        self.widgets._obj_combo.currentIndexChanged.connect(self._context_changed)
         self.widgets._obj_combo.currentIndexChanged.connect(self._save_session_settings)
-        self.widgets._prop_combo.currentIndexChanged.connect(
-            self.services.context.on_property_changed
-        )
+        self.widgets._prop_combo.currentIndexChanged.connect(self._context_changed)
         self.widgets._prop_combo.currentIndexChanged.connect(
             self._save_session_settings
         )
-        self.widgets._ref_edit.textChanged.connect(self.services.context.refresh)
+        self.widgets._ref_edit.textChanged.connect(self._context_changed)
         self.widgets._ref_edit.textChanged.connect(self._save_session_settings)
-        self.widgets._ref_edit.textChanged.connect(self.services.analysis.bump_revision)
-        self.widgets._cutoff_edit.textChanged.connect(self.services.context.refresh)
+        self.widgets._cutoff_edit.textChanged.connect(self._context_changed)
         self.widgets._cutoff_edit.textChanged.connect(self._save_session_settings)
-        self.widgets._cutoff_edit.textChanged.connect(
-            self.services.analysis.bump_revision
-        )
         self.widgets._palette_combo.currentIndexChanged.connect(
             self._save_session_settings
         )
@@ -170,33 +163,26 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
         )
         self.widgets._vmin_edit.textChanged.connect(self._save_session_settings)
         self.widgets._vmax_edit.textChanged.connect(self._save_session_settings)
-        self.widgets._model_combo.currentIndexChanged.connect(
-            self.services.analysis.bump_revision
-        )
-        self.widgets._obj_combo.currentIndexChanged.connect(
-            self.services.analysis.bump_revision
-        )
-        self.widgets._prop_combo.currentIndexChanged.connect(
-            self.services.analysis.bump_revision
-        )
         self.widgets._palette_combo.currentIndexChanged.connect(
-            self.services.analysis.bump_revision
+            self.services.analysis.invalidate_ui
         )
         self.widgets._palette_reverse_chk.stateChanged.connect(
-            self.services.analysis.bump_revision
+            self.services.analysis.invalidate_ui
         )
         self.widgets._vmin_edit.textChanged.connect(
-            self.services.analysis.bump_revision
+            self.services.analysis.invalidate_ui
         )
         self.widgets._vmax_edit.textChanged.connect(
-            self.services.analysis.bump_revision
+            self.services.analysis.invalidate_ui
         )
+        for plot_type, action in self.widgets._plot_actions.items():
+            action.triggered.connect(
+                lambda _checked=False, key=plot_type: self._submit_plot(key)
+            )
         self.widgets._guide_btn.clicked.connect(self._show_guide)
-        self.widgets._apply_btn.clicked.connect(self.services.analysis.apply_coloring)
+        self.widgets._apply_btn.clicked.connect(self._apply_coloring)
         self.widgets._export_csv_btn.clicked.connect(self._export_csv)
-        self.widgets._ensemble_btn.clicked.connect(
-            self.services.lifecycle.show_ensemble
-        )
+        self.widgets._ensemble_btn.clicked.connect(self._activate_ensemble)
         self.widgets._close_btn.clicked.connect(self.close)
 
     def _guide_text(self) -> str:
@@ -257,56 +243,18 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
     # Session settings
     # -----------------------------------------------------------------------
 
-    def _settings(self):
-        """Return the persistent settings store for FoldQC GUI state."""
-        return QSettings(session.SETTINGS_ORGANIZATION, session.SETTINGS_APPLICATION)
-
     def _save_session_settings(self, *_args) -> None:
-        """Persist lightweight GUI state for the next FoldQC dialog."""
-        if self.services.lifecycle.restoring_settings:
-            return
-        if self.services.lifecycle._gui_job_is_busy():
-            return
-
-        try:
-            settings = self._settings()
-            rank = self.widgets._model_combo.currentData()
-            metric_key = self.widgets._prop_combo.currentData()
-            palette_key = str(self.widgets._palette_combo.currentData())
-            reverse_palette = bool(self.widgets._palette_reverse_chk.isChecked())
-            geometry = None
-            if hasattr(self, "saveGeometry"):
-                geometry = self.saveGeometry()
-            state = session.SessionState(
-                path=self.widgets._dir_edit.text(),
-                model_rank=rank,
-                metric_key="" if metric_key is None else metric_key,
-                target_name=self.widgets._obj_combo.currentText(),
-                reference_text=self.widgets._ref_edit.text(),
-                cutoff_text=self.widgets._cutoff_edit.text(),
-                palette_key=palette_key,
-                palette_reversed=reverse_palette,
-                scale_min=self.widgets._vmin_edit.text(),
-                scale_max=self.widgets._vmax_edit.text(),
-                geometry=geometry,
-            )
-            session.write_session_state(settings, state)
-        except Exception:
-            pass
+        if not self.services.operations.is_busy:
+            try:
+                self._session.save()
+            except Exception:
+                pass
 
     def _restore_session_settings(self) -> None:
         """Restore saved lightweight GUI state and reload a valid last path."""
-        self.services.lifecycle.restoring_settings = True
+        self._session.set_restoring(True)
         try:
-            settings = self._settings()
-            state = session.read_session_state(settings)
-            self.services.lifecycle.pending_session_restore = (
-                session.PendingSessionRestore(
-                    model_rank=state.model_rank,
-                    metric_key=state.metric_key or None,
-                    target_name=state.target_name or None,
-                )
-            )
+            state = self._session.restore()
 
             self.widgets._dir_edit.setText(state.path)
             self.widgets._ref_edit.setText(state.reference_text)
@@ -329,22 +277,22 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
                     pass
 
             if state.path and Path(state.path).exists():
-                self.services.lifecycle.load_prediction(state.path)
+                self.services.context.set_selection(self._capture_context_selection())
+                self.services.lifecycle.load_prediction(
+                    state.path,
+                    preferred_rank=state.model_rank,
+                    preferred_target=state.target_name,
+                )
         finally:
-            self.services.lifecycle.restoring_settings = False
+            self._session.set_restoring(False)
 
     def closeEvent(self, event) -> None:
         """Persist session state when the dialog closes."""
-        if self.services.dependencies._dependency_close_is_blocked(event):
+        if self._dependencies.close_is_blocked(event):
             return
-        if self.services.lifecycle._gui_job_is_busy():
-            self.services.lifecycle._abandon_active_gui_job()
-        else:
+        if not self.services.operations.is_busy:
             self._save_session_settings()
-        pred_files = self.state.pred_files
-        self.state.pred_files = None
-        if pred_files is not None:
-            self._job_runner.dispose(pred_files)
+        self.services.close()
         try:
             super().closeEvent(event)
         except AttributeError:
@@ -353,6 +301,109 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
     # -----------------------------------------------------------------------
     # Slots
     # -----------------------------------------------------------------------
+
+    def _capture_context_selection(self) -> ContextSelection:
+        metric = self.widgets._prop_combo.currentData()
+        return ContextSelection(
+            target_name=self.widgets._obj_combo.currentText().strip(),
+            metric_key=None if metric is None else str(metric),
+            reference_selection=self.widgets._ref_edit.text().strip(),
+            cutoff_text=self.widgets._cutoff_edit.text().strip(),
+        )
+
+    @staticmethod
+    def _optional_float(text: str, *, label: str) -> float | None:
+        stripped = text.strip()
+        if not stripped or stripped.lower() == "auto":
+            return None
+        try:
+            return float(stripped)
+        except ValueError as exc:
+            raise ValueError(f"{label} must be a number or 'auto'.") from exc
+
+    def _capture_action(
+        self,
+        action: AnalysisAction,
+        *,
+        export_path: Path | None = None,
+    ) -> DeferredAnalysisAction:
+        request = self._capture_request(action)
+        plot = metrics.PLOTS.find(action)
+        if action == "color":
+            options: ColorOptions | PlotOptions | ExportOptions = ColorOptions(
+                str(self.widgets._palette_combo.currentData()),
+                bool(self.widgets._palette_reverse_chk.isChecked()),
+                self._optional_float(self.widgets._vmin_edit.text(), label="Minimum"),
+                self._optional_float(self.widgets._vmax_edit.text(), label="Maximum"),
+            )
+        elif plot is not None:
+            options = PlotOptions(
+                str(self.widgets._palette_combo.currentData()),
+                bool(self.widgets._palette_reverse_chk.isChecked()),
+                self._optional_float(self.widgets._vmin_edit.text(), label="Minimum"),
+                self._optional_float(self.widgets._vmax_edit.text(), label="Maximum"),
+            )
+        else:
+            if export_path is None:
+                raise ValueError("Export requires an output path.")
+            options = ExportOptions(export_path)
+        return DeferredAnalysisAction(request, options)
+
+    def _capture_request(self, action: AnalysisAction) -> AnalysisRequest:
+        selection = self._capture_context_selection()
+        plot = metrics.PLOTS.find(action)
+        metric_key = selection.metric_key
+        if plot is not None and not plot.requires_metric:
+            metric_key = None
+        metric = None if metric_key is None else metrics.METRICS.require(metric_key)
+        needs_cutoff = bool(
+            (metric is not None and metric.needs_cutoff)
+            or action in {"binding_site_fingerprint", "ensemble_site_summary"}
+        )
+        cutoff = None
+        if needs_cutoff:
+            cutoff = self._optional_float(
+                selection.cutoff_text or "5.0", label="Cutoff"
+            )
+            if cutoff is None or cutoff <= 0:
+                raise ValueError("Cutoff / threshold must be greater than 0 Å.")
+        return AnalysisRequest(
+            action,
+            selection.target_name,
+            metric_key,
+            selection.reference_selection,
+            cutoff,
+            self.services.analysis.ui_revision,
+        )
+
+    def _context_changed(self, *_args) -> None:
+        self.services.analysis.invalidate_ui()
+        self.services.context.refresh(self._capture_context_selection())
+
+    def _model_changed(self, *_args) -> None:
+        self.services.analysis.invalidate_ui()
+        self.services.context.set_selection(self._capture_context_selection())
+        rank = self.widgets._model_combo.currentData()
+        if rank is not None:
+            self.services.lifecycle.select_model(int(rank))
+
+    def _load_entered_prediction(self) -> None:
+        self.services.lifecycle.load_prediction(self.widgets._dir_edit.text())
+
+    def _apply_coloring(self) -> None:
+        try:
+            self.services.analysis.submit(self._capture_action("color"))
+        except ValueError as exc:
+            self._presenter.present_notice(Notice("color_preflight", str(exc)))
+
+    def _submit_plot(self, plot_type: AnalysisAction) -> None:
+        try:
+            self.services.analysis.submit(self._capture_action(plot_type))
+        except ValueError as exc:
+            self._presenter.present_notice(Notice("plot_preflight", str(exc)))
+
+    def _activate_ensemble(self) -> None:
+        self.services.ensemble.activate(self.widgets._obj_combo.currentText().strip())
 
     def _browse_directory(self) -> None:
         path = QtWidgets.QFileDialog.getExistingDirectory(
@@ -383,7 +434,12 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
 
     def _export_csv(self) -> None:
         """Capture a native save path before submitting the export request."""
-        default_path = self.services.analysis.default_export_path()
+        try:
+            request = self._capture_request("export")
+        except ValueError as exc:
+            self._presenter.present_notice(Notice("export_preflight", str(exc)))
+            return
+        default_path = self.services.analysis.default_export_path(request)
         if default_path is None:
             return
         result = QtWidgets.QFileDialog.getSaveFileName(
@@ -394,7 +450,9 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
         )
         path = result[0] if isinstance(result, tuple) else result
         if path:
-            self.services.analysis.export_csv(path)
+            self.services.analysis.submit(
+                DeferredAnalysisAction(request, ExportOptions(Path(path)))
+            )
         else:
             self._raise_after_native_dialog()
 

@@ -327,6 +327,22 @@ class AlphaFold3Provider(BaseProvider):
     def scan(self, path: Path) -> PredictionFiles:
         return _scan_af3_dir(path, self)
 
+    def normalize_confidence_payload(self, payload: dict | None) -> dict | None:
+        """Convert AF3's numeric JSON clash flag to the canonical boolean."""
+        if not isinstance(payload, dict):
+            return payload
+        normalized = dict(payload)
+        for key in ("has_clash", "has_inter_chain_clashes"):
+            raw = normalized.get(key)
+            if isinstance(raw, (bool, np.bool_)) or not isinstance(
+                raw, (int, float, np.integer, np.floating)
+            ):
+                continue
+            numeric = float(raw)
+            if np.isfinite(numeric) and numeric in (0.0, 1.0):
+                normalized[key] = bool(numeric)
+        return normalized
+
     def load_model_data(self, pred_files, model, data, options, *, structure_index):
         confidence_payload = _load_af3_model_data(
             model,

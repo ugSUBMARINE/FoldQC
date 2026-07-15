@@ -11,8 +11,9 @@ from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
     from .ensemble import EnsembleMember, EnsembleState
-    from .loader_models import PredictionFiles
+    from .loader_models import PredictionData, PredictionFiles
     from .model_state import ModelState
+    from .token_map import TokenMap
 
 
 @dataclass(frozen=True)
@@ -38,14 +39,14 @@ class ResolvedTarget:
             )
 
     @property
-    def data(self):
+    def data(self) -> PredictionData | None:
         """Return live data for a single-state target, or None for a group."""
         if self.kind == "ensemble_group":
             return None
         return self.model_states[0].data
 
     @property
-    def token_map(self):
+    def token_map(self) -> TokenMap:
         """Return the canonical token map shared by this target."""
         return self.model_states[0].token_map
 

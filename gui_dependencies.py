@@ -18,8 +18,26 @@ from .compat import (
 APP_TITLE = "FoldQC"
 
 
-class DependencyWorkflow:
-    """GUI-side optional dependency installation workflow."""
+class QtDependencyService:
+    """Concrete Qt adapter for optional dependency installation."""
+
+    def __init__(self, dialog) -> None:
+        self._dialog = dialog
+        self._initialize_dependency_controller()
+
+    def ensure(self, dependency_keys, *, feature_label: str) -> bool:
+        return self._ensure_dependencies(dependency_keys, feature_label=feature_label)
+
+    def close_is_blocked(self, event) -> bool:
+        return self._dependency_close_is_blocked(event)
+
+    def close(self) -> None:
+        dialog = self._dependency_progress_dialog
+        if dialog is not None:
+            dialog.close()
+            if hasattr(dialog, "deleteLater"):
+                dialog.deleteLater()
+        self._dependency_progress_dialog = None
 
     def _initialize_dependency_controller(self) -> None:
         self._dependency_process = None
@@ -46,7 +64,7 @@ class DependencyWorkflow:
             return True
         if getattr(self, "_dependency_install_active", False):
             QtWidgets.QMessageBox.information(
-                self,
+                self._dialog,
                 APP_TITLE,
                 "A dependency installation is already in progress.",
             )
@@ -76,7 +94,7 @@ class DependencyWorkflow:
 
     def _prompt_dependency_action(self, dependency_keys, *, feature_label: str) -> str:
         names = self._dependency_display_names(dependency_keys)
-        box = QtWidgets.QMessageBox(self)
+        box = QtWidgets.QMessageBox(self._dialog)
         box.setWindowTitle(APP_TITLE)
         if hasattr(box, "setIcon"):
             box.setIcon(MessageBoxIcon.Information)
@@ -130,7 +148,7 @@ class DependencyWorkflow:
         if old_dialog is not None:
             old_dialog.close()
 
-        dialog = QtWidgets.QDialog(self)
+        dialog = QtWidgets.QDialog(self._dialog)
         dialog.setWindowTitle(f"{APP_TITLE} – Installing dependencies")
         dialog.setModal(False)
         if hasattr(dialog, "setMinimumWidth"):
@@ -196,7 +214,7 @@ class DependencyWorkflow:
     def _start_dependency_process(
         self, program: str, arguments: list[str], *, phase: str
     ):
-        process = QtCore.QProcess(self)
+        process = QtCore.QProcess(self._dialog)
         self._dependency_process = process
         self._dependency_process_phase = phase
         self._dependency_process_error = ""
@@ -298,7 +316,7 @@ class DependencyWorkflow:
         if close_button is not None:
             close_button.setEnabled(True)
         QtWidgets.QMessageBox.information(
-            self,
+            self._dialog,
             APP_TITLE,
             "The missing dependencies were installed and verified. You can retry "
             "the requested action now. A PyMOL restart may be necessary if the "
@@ -333,7 +351,7 @@ class DependencyWorkflow:
         if log_text:
             details = f"{instructions}\n\nInstaller log:\n{log_text}"
 
-        box = QtWidgets.QMessageBox(self)
+        box = QtWidgets.QMessageBox(self._dialog)
         box.setWindowTitle(f"{APP_TITLE} – Manual dependency installation")
         if hasattr(box, "setIcon"):
             box.setIcon(MessageBoxIcon.Warning)
@@ -352,7 +370,7 @@ class DependencyWorkflow:
         if not getattr(self, "_dependency_install_active", False):
             return False
         QtWidgets.QMessageBox.information(
-            self,
+            self._dialog,
             APP_TITLE,
             "Dependency installation is still running. Wait for it to finish before "
             "closing FoldQC.",

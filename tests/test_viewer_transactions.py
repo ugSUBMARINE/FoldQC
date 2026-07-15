@@ -8,8 +8,12 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from FoldQC.gui_services import AtomVisualSnapshot, ManagedColorbar
-from FoldQC.mol_viewer import PaintBatchResult, PaintTarget
+from FoldQC.gui_services import (
+    AtomVisualSnapshot,
+    ManagedColorbar,
+    PaintBatchResult,
+    PaintTarget,
+)
 from FoldQC.token_map import TokenMap
 from FoldQC.viewer_transactions import (
     ColorbarChange,

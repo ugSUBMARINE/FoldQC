@@ -1,296 +1,79 @@
-"""CSV export orchestration for GUI-resolved targets."""
+"""CSV export of resolved immutable analysis results."""
 
 from __future__ import annotations
 
-from pathlib import Path
-
-from . import export, metrics
-from .gui_state import MetricContext
-from .gui_state import ResolvedTarget as _PlotTarget
-from .token_map import TokenMap
-from .workflow_presentation import present_error, present_information, present_warning
+from . import export
+from .analysis import ComputedMetric, ExportOptions, ResolvedAnalysis
+from .gui_state import PluginState
+from .presentation import Notice, PresentationPort
 
 APP_TITLE = "FoldQC"
 
 
-class ExportWorkflow:
-    def _export_csv_to_path(self, path: str | Path) -> None:
-        """Build and write CSV rows, reporting GUI errors consistently."""
-        if self._pred_files is not None:
-            key = self._analysis_metric_key()
-            spec = metrics.METRICS.find(key)
-            target = self._resolve_plot_target() if spec is not None else None
-            if target is not None and not spec.ensemble_level:
-                if self._defer_action_for_data(
-                    target,
-                    spec.load_capabilities,
-                    error_title=f"{APP_TITLE} - export error",
-                    deferred_action=self.services.analysis.capture_current(
-                        "export", export_path=path
-                    ),
-                ):
-                    return
-        try:
-            rows = self._build_csv_export_rows()
-            if rows is None:
-                return
-            if not rows:
-                present_warning(
-                    self, APP_TITLE, "No token rows were available for export."
-                )
-                return
-            from .export import write_csv
+class ExportCoordinator:
+    def __init__(self, state: PluginState, presenter: PresentationPort) -> None:
+        self._state = state
+        self._presenter = presenter
 
-            write_csv(path, rows)
-            present_information(
-                self,
-                APP_TITLE,
-                f"Exported {len(rows)} token rows to:\n{path}",
-            )
-        except Exception as exc:
-            present_error(self, f"{APP_TITLE} - export error", str(exc))
-
-    def _build_csv_export_rows(self) -> list[dict[str, object]] | None:
-        """Return CSV rows for the current metric/target, or None when cancelled."""
-        if self._pred_files is None:
-            present_warning(self, APP_TITLE, "No prediction output loaded.")
-            return None
-        key = self._analysis_metric_key()
-        spec = metrics.METRICS.find(key)
-        if spec is None:
-            present_warning(
-                self, APP_TITLE, "Select a Color by metric before exporting."
-            )
-            return None
-        target = self._resolve_plot_target()
-        if target is None:
-            return None
-
-        if target.kind == "ensemble_group":
-            return self._csv_rows_for_ensemble_group(key, spec, target)
-        return self._csv_rows_for_single_target(key, spec, target)
-
-    def _csv_rows_for_single_target(
+    def execute(
         self,
-        key: str,
-        spec: metrics.MetricSpec,
-        target: _PlotTarget,
-    ) -> list[dict[str, object]] | None:
-        """Build CSV rows for a single model or one ensemble member."""
-        member = (
-            (target.members or [None])[0] if target.kind == "ensemble_member" else None
-        )
-        include_ensemble = target.kind == "ensemble_member"
+        resolved: ResolvedAnalysis,
+        computed: tuple[ComputedMetric, ...],
+        options: ExportOptions,
+    ) -> None:
+        spec = resolved.metric_spec
+        files = self._state.pred_files
+        if spec is None or files is None:
+            raise ValueError("CSV export requires a loaded prediction and metric.")
+        if not computed:
+            raise ValueError("No token rows were available for export.")
 
-        if spec.ensemble_level:
-            values = self._compute_ensemble_property(key)
-            data = (
-                target.data
-                if target.data is not None
-                else getattr(member, "data", None)
-            )
-            aggregate_kind = spec.aggregate_kind
-        else:
-            if target.kind == "ensemble_member" and member is not None:
-                self._ensure_member_data_for_property(member, spec)
-            else:
-                self._ensure_current_data_for_property(spec)
-            context = self._csv_metric_context(
-                key, spec, target.token_map, target.obj_name
-            )
-            if context is None:
-                return None
-            values = self._compute_property_from_context(
-                key,
-                target.data,
-                target.token_map,
-                context,
-            )
-            if values is None:
-                return None
-            aggregate_kind = "ensemble_member" if include_ensemble else "single_model"
-
-        self._validate_token_count(values, target.token_map, target.label)
-        if spec.ensemble_level:
-            context = self._csv_metric_context(
-                key, spec, target.token_map, target.obj_name
-            )
-            if context is None:
-                return None
-        return self._csv_rows_from_values(
-            key,
-            target.data if target.data is not None else data,
-            target.token_map,
-            values,
-            context,
-            include_ensemble=include_ensemble,
-            member=member,
-            aggregate_kind=aggregate_kind,
-        )
-
-    def _csv_rows_for_ensemble_group(
-        self,
-        key: str,
-        spec: metrics.MetricSpec,
-        target: _PlotTarget,
-    ) -> list[dict[str, object]] | None:
-        """Build CSV rows for the active ensemble group target."""
-        members = sorted(target.members or [], key=lambda member: member.rank)
-        if not members:
-            present_information(
-                self,
-                APP_TITLE,
-                "The ensemble target is not active.\nUse the Ensemble\u2026 button first.",
-            )
-            return None
-
-        if spec.ensemble_level:
-            context = self._csv_metric_context(
-                key, spec, target.token_map, target.obj_name
-            )
-            if context is None:
-                return None
-            values = self._compute_ensemble_property(key)
-            self._validate_token_count(values, target.token_map, target.label)
-            first_state = self._canonical_state_for_ensemble_member(members[0])
-            return self._csv_rows_from_values(
-                key,
-                first_state.data,
-                target.token_map,
-                values,
-                context,
-                include_ensemble=True,
-                member=None,
-                aggregate_kind=spec.aggregate_kind,
-            )
-
+        ensemble_state = self._state.ensemble
         rows: list[dict[str, object]] = []
-        for member in members:
-            self._ensure_member_data_for_property(member, spec)
-            state = self._canonical_state_for_ensemble_member(member)
-            context = self._csv_metric_context(
-                key, spec, state.token_map, member.obj_name
-            )
-            if context is None:
-                return None
-            values = self._compute_property_from_context(
-                key,
-                state.data,
-                state.token_map,
-                context,
-            )
-            if values is None:
-                return None
-            self._validate_token_count(values, state.token_map, member.obj_name)
+        entries = computed[:1] if spec.ensemble_level else computed
+        for item in entries:
+            include_ensemble = resolved.target.kind.startswith("ensemble")
+            member_rank = None
+            member_label = ""
+            aggregate_kind: str = spec.aggregate_kind
+            if include_ensemble and not spec.ensemble_level:
+                member_rank = item.rank
+                member_label = export.model_label_for_rank(
+                    files, item.rank, fallback=item.label
+                )
+                aggregate_kind = "ensemble_member"
+            context = item.metric_context
             rows.extend(
-                self._csv_rows_from_values(
-                    key,
-                    state.data,
-                    state.token_map,
-                    values,
-                    context,
-                    include_ensemble=True,
-                    member=member,
-                    aggregate_kind="ensemble_member",
+                export.build_token_rows(
+                    pred_files=files,
+                    data=item.model_state.data,
+                    token_map=item.model_state.token_map,
+                    values=item.values,
+                    metric_key=spec.key,
+                    reference_selection=context.reference_selection,
+                    cutoff_angstrom=context.cutoff_angstrom,
+                    reference_indices=context.reference_indices,
+                    contact_indices=context.contact_indices,
+                    include_ensemble=include_ensemble,
+                    ensemble_group=(
+                        "" if ensemble_state is None else ensemble_state.group_name
+                    ),
+                    ensemble_member_rank=member_rank,
+                    ensemble_member_label=member_label,
+                    ensemble_aligned=(
+                        None if ensemble_state is None else ensemble_state.aligned
+                    )
+                    if include_ensemble
+                    else None,
+                    aggregate_kind=aggregate_kind,
                 )
             )
-        return rows
-
-    def _csv_metric_context(
-        self,
-        key: str,
-        spec: metrics.MetricSpec,
-        token_map: TokenMap,
-        obj_name: str,
-    ) -> MetricContext | None:
-        """Resolve reference/contact provenance for one export computation."""
-        reference_selection = ""
-        reference_indices: list[int] = []
-        contact_indices: list[int] = []
-        cutoff = None
-
-        if spec.needs_reference:
-            resolved = self._resolve_reference_indices(
-                token_map, obj_name, required=True
+        export.write_csv(options.path, rows)
+        self._presenter.present_notice(
+            Notice(
+                "csv_exported",
+                f"Exported {len(rows)} token rows to:\n{options.path}",
+                severity="information",
+                title=APP_TITLE,
             )
-            if resolved is None:
-                return None
-            reference_indices = list(resolved)
-            reference_selection = self._analysis_reference_selection()
-
-        if spec.needs_contact_shell:
-            cutoff = self._get_cutoff_threshold()
-            if cutoff is None:
-                return None
-            contact_indices = self._binding_site_token_indices(
-                token_map,
-                obj_name,
-                reference_selection,
-                reference_indices,
-                cutoff,
-            )
-            if not contact_indices:
-                present_warning(
-                    self,
-                    APP_TITLE,
-                    "No polymer binding-site residues were found within "
-                    f"{cutoff:g} Å of the reference selection.",
-                )
-                return None
-        elif spec.is_domain_label:
-            cutoff = self._get_cutoff_threshold()
-            if cutoff is None:
-                return None
-
-        return MetricContext(
-            reference_selection=reference_selection,
-            reference_indices=tuple(reference_indices),
-            contact_indices=tuple(contact_indices),
-            cutoff_angstrom=cutoff,
-        )
-
-    def _csv_rows_from_values(
-        self,
-        key: str,
-        data,
-        token_map: TokenMap,
-        values,
-        context: MetricContext,
-        *,
-        include_ensemble: bool,
-        member,
-        aggregate_kind: str,
-    ) -> list[dict[str, object]]:
-        """Delegate row assembly to the viewer-independent exporter."""
-        from .export import build_token_rows
-
-        member_rank = getattr(member, "rank", None) if member is not None else None
-        member_label = ""
-        if member is not None:
-            member_label = export.model_label_for_rank(
-                self._pred_files, member.rank, fallback=f"model_{member.rank}"
-            )
-        ensemble_state = getattr(self, "_ensemble", None)
-        return build_token_rows(
-            pred_files=self._pred_files,
-            data=data,
-            token_map=token_map,
-            values=values,
-            metric_key=key,
-            reference_selection=context.reference_selection,
-            cutoff_angstrom=context.cutoff_angstrom,
-            reference_indices=context.reference_indices,
-            contact_indices=context.contact_indices,
-            include_ensemble=include_ensemble,
-            ensemble_group=(
-                "" if ensemble_state is None else ensemble_state.group_name
-            ),
-            ensemble_member_rank=member_rank,
-            ensemble_member_label=member_label,
-            ensemble_aligned=(
-                None if ensemble_state is None else ensemble_state.aligned
-            )
-            if include_ensemble
-            else None,
-            aggregate_kind=aggregate_kind,
         )

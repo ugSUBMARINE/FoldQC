@@ -797,7 +797,11 @@ class LoaderProviderTests(unittest.TestCase):
                 (root / f"server_job_model_{rank}.cif").write_text(CIF_TEXT)
                 _write_json(
                     root / f"server_job_summary_confidences_{rank}.json",
-                    {"ranking_score": 1.0 - rank, "chain_iptm": [0.5, 0.4]},
+                    {
+                        "ranking_score": 1.0 - rank,
+                        "chain_iptm": [0.5, 0.4],
+                        "has_clash": float(rank),
+                    },
                 )
                 _write_json(
                     root / f"server_job_full_data_{rank}.json",
@@ -812,6 +816,9 @@ class LoaderProviderTests(unittest.TestCase):
             data = load_prediction_data(
                 files, rank=0, load_pae=True, load_contact_probs=True
             )
+            rank_one = load_prediction_data(
+                files, rank=1, load_pae=False, load_contact_probs=False
+            )
 
         self.assertEqual(files.provider.key, "af3_server")
         self.assertEqual(files.n_models, 2)
@@ -822,10 +829,30 @@ class LoaderProviderTests(unittest.TestCase):
             data.token_plddt, np.array([0.9, 0.4], dtype=np.float32)
         )
         self.assertEqual(data.token_plddt_source, "provider_atom_mean")
+        self.assertIs(data.confidence.has_clash, False)
         np.testing.assert_allclose(data.pae, np.array([[0.0, 1.0], [2.0, 0.0]]))
         np.testing.assert_allclose(
             data.contact_probs, np.array([[1.0, 0.25], [0.25, 1.0]])
         )
+
+        self.assertIs(rank_one.confidence.has_clash, True)
+
+    def test_af3_server_rejects_ambiguous_numeric_clash_flag(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "server_job"
+            root.mkdir()
+            (root / "server_job_model_0.cif").write_text(CIF_TEXT)
+            _write_json(
+                root / "server_job_summary_confidences_0.json",
+                {"ranking_score": 1.0, "has_clash": 0.5},
+            )
+            _write_json(root / "server_job_full_data_0.json", {})
+
+            files = scan_prediction_path(root)
+            with self.assertRaisesRegex(
+                ValueError, "has_clash must be boolean or null"
+            ):
+                load_prediction_data(files, load_pae=False)
 
     def test_af3_server_accepts_truncated_ranked_json_names(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

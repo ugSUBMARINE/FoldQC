@@ -2,39 +2,23 @@
 
 from __future__ import annotations
 
-import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
 
-from . import ensemble, gui_rules, metrics, plot_data, reports
+from . import ensemble
 from .analysis import DataLoadRequirement, DeferredAnalysisAction
-from .loader_models import DataCapability, PredictionData, PredictionFiles
+from .gui_services import ObjectPaintMapping, ObjectTokenInspection
+from .loader_models import (
+    DataCapability,
+    PredictionCandidate,
+    PredictionData,
+    PredictionDiscovery,
+    PredictionFiles,
+)
 from .model_state import ModelState, ModelStateSnapshot
-from .mol_viewer import (
-    add_objects_to_group,
-    delete_viewer_names,
-    ensure_structure_object,
-    get_group_members,
-    get_object_list,
-    get_viewer_name,
-    inspect_object_tokens,
-    load_structure_object_if_missing,
-    rebuild,
-    remove_objects_from_group,
-    run_with_updates_suspended,
-    transform_object,
-    viewer_name_exists,
-)
-from .presentation import (
-    ChoiceOption,
-    ChoiceRequest,
-    Notice,
-    ProgressRequest,
-    SelectionItem,
-    SelectionRequest,
-)
 
 # These names form the intentionally private support surface consumed by the
 # four lifecycle services. Keeping the imports here avoids each service
@@ -43,24 +27,17 @@ from .presentation import (
 __all__ = (
     "APP_TITLE",
     "VIEWER_NAME",
-    "ChoiceOption",
-    "ChoiceRequest",
     "DataCapability",
     "DataLoadBatchResult",
     "DataLoadRequirement",
     "DeferredAnalysisAction",
     "EnsembleActivationTransaction",
     "InitialLoadResult",
-    "InitialPredictionSnapshot",
     "ModelState",
     "ModelStoreSnapshot",
     "ModelSwitchResult",
-    "Notice",
     "Path",
     "PredictionFiles",
-    "ProgressRequest",
-    "SelectionItem",
-    "SelectionRequest",
     "_discover_prediction",
     "_discovery_phase",
     "_load_data_batch",
@@ -68,32 +45,15 @@ __all__ = (
     "_prepare_ensemble_job",
     "_scan_and_load_initial_prediction",
     "_session_path_for_candidate",
-    "add_objects_to_group",
-    "delete_viewer_names",
     "ensemble",
-    "ensure_structure_object",
-    "get_group_members",
-    "get_object_list",
-    "gui_rules",
-    "inspect_object_tokens",
-    "load_structure_object_if_missing",
-    "logger",
-    "metrics",
     "np",
-    "plot_data",
-    "rebuild",
-    "remove_objects_from_group",
-    "reports",
-    "run_with_updates_suspended",
-    "transform_object",
-    "viewer_name_exists",
 )
 
 APP_TITLE = "FoldQC"
-VIEWER_NAME = get_viewer_name()
-logger = logging.getLogger(__name__)
+VIEWER_NAME = "PyMOL"
 
 _ARCHIVE_SUFFIXES = (".zip", ".tar", ".tar.gz", ".tgz")
+ProgressReporter = Callable[[str], None]
 
 
 @dataclass
@@ -153,19 +113,6 @@ class ModelStoreSnapshot:
     entries: tuple[tuple[int, ModelState, ModelStateSnapshot], ...]
 
 
-@dataclass(frozen=True)
-class InitialPredictionSnapshot:
-    """GUI state restored if initial prediction activation fails."""
-
-    pred_files: PredictionFiles | None
-    model_store: ModelStoreSnapshot
-    ensemble_state: ensemble.EnsembleState | None
-    display_path: str
-    model_items: tuple[tuple[str, object], ...]
-    selected_model_rank: object | None
-    viewer_context: tuple
-
-
 @dataclass
 class EnsembleActivationTransaction:
     """Main-thread state for an incrementally committed ensemble."""
@@ -174,22 +121,22 @@ class EnsembleActivationTransaction:
     prepared: ensemble.PreparedEnsemble
     previous_target: str = ""
     created_objects: list[str] = field(default_factory=list)
-    inspections: dict[int, object] = field(default_factory=dict)
+    inspections: dict[int, ObjectTokenInspection] = field(default_factory=dict)
     applied_transforms: list[ensemble.AlignmentTransform] = field(default_factory=list)
     group_existed: bool = False
     previous_group_members: tuple[str, ...] = ()
     group_additions: tuple[str, ...] = ()
     previous_ensemble: ensemble.EnsembleState | None = None
     previous_model_store: ModelStoreSnapshot | None = None
-    previous_viewer_context: tuple | None = None
+    previous_viewer_context: dict[tuple[str, str], ObjectPaintMapping] | None = None
 
 
-def _session_path_for_candidate(discovery, candidate) -> Path:
-    input_path = getattr(discovery, "input_path", None)
-    if input_path is not None:
-        input_path = Path(input_path)
-        if input_path.is_file():
-            return input_path
+def _session_path_for_candidate(
+    discovery: PredictionDiscovery, candidate: PredictionCandidate
+) -> Path:
+    input_path = Path(discovery.input_path)
+    if input_path.is_file():
+        return input_path
     return Path(candidate.path)
 
 
@@ -202,7 +149,9 @@ def _discovery_phase(path: str) -> str:
     return "Discovering prediction folders…"
 
 
-def _discover_prediction(path: str, report_phase):
+def _discover_prediction(
+    path: str, report_phase: ProgressReporter
+) -> PredictionDiscovery:
     from .loader import discover_prediction_candidates
 
     report_phase(_discovery_phase(path))
@@ -210,10 +159,10 @@ def _discover_prediction(path: str, report_phase):
 
 
 def _scan_and_load_initial_prediction(
-    discovery,
-    candidate,
+    discovery: PredictionDiscovery,
+    candidate: PredictionCandidate,
     preferred_rank: int | None,
-    report_phase,
+    report_phase: ProgressReporter,
 ) -> InitialLoadResult:
     from .loader import load_prediction_data, scan_prediction_candidate
     from .structure_index import StructureIndex
@@ -259,7 +208,9 @@ def _scan_and_load_initial_prediction(
         raise
 
 
-def _load_rank_data(pred_files, rank: int, report_phase) -> ModelSwitchResult:
+def _load_rank_data(
+    pred_files: PredictionFiles, rank: int, report_phase: ProgressReporter
+) -> ModelSwitchResult:
     from .loader import load_prediction_data
     from .structure_index import StructureIndex
 
@@ -281,10 +232,14 @@ def _load_rank_data(pred_files, rank: int, report_phase) -> ModelSwitchResult:
     )
 
 
-def _load_data_batch(pred_files, items: tuple[DataLoadRequirement, ...], report_phase):
+def _load_data_batch(
+    pred_files: PredictionFiles,
+    items: tuple[DataLoadRequirement, ...],
+    report_phase: ProgressReporter,
+) -> DataLoadBatchResult:
     from .loader import load_prediction_data
 
-    loaded = []
+    loaded: list[tuple[DataLoadRequirement, PredictionData]] = []
     total = len(items)
     for index, item in enumerate(items, start=1):
         arrays = " and ".join(item.phase_arrays) or "metric data"
@@ -301,11 +256,11 @@ def _load_data_batch(pred_files, items: tuple[DataLoadRequirement, ...], report_
 
 
 def _prepare_ensemble_job(
-    pred_files,
+    pred_files: PredictionFiles,
     skip_alignment: bool,
     existing_states_by_rank: dict[int, ModelState],
-    report_phase,
-):
+    report_phase: ProgressReporter,
+) -> ensemble.PreparedEnsemble:
     return ensemble.prepare_ensemble(
         pred_files,
         skip_alignment=skip_alignment,

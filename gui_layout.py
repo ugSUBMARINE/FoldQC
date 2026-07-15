@@ -81,16 +81,11 @@ class GuiWidgets:
         )
 
 
-def build_plot_actions(dialog, menu) -> dict[metrics.PlotType, QAction]:
+def build_plot_actions(menu) -> dict[metrics.PlotType, QAction]:
     """Create plot actions with a real Qt owner on both Qt5 and Qt6."""
     actions = {}
     for spec in metrics.PLOTS:
         action = QAction(spec.label, menu)
-        action.triggered.connect(
-            lambda _checked=False, plot_type=spec.key: (
-                dialog.services.analysis.show_plot(plot_type)
-            )
-        )
         menu.addAction(action)
         actions[spec.key] = action
     return actions
@@ -283,7 +278,7 @@ def build_dialog_ui(dialog) -> GuiWidgets:
     self._plot_btn = QtWidgets.QPushButton("Plot")
     self._export_csv_btn = QtWidgets.QPushButton("Export CSV\u2026")
     self._plot_menu = QtWidgets.QMenu(self._plot_btn)
-    self._plot_actions = build_plot_actions(dialog, self._plot_menu)
+    self._plot_actions = build_plot_actions(self._plot_menu)
     self._plot_btn.setMenu(self._plot_menu)
     self._ensemble_btn = QtWidgets.QPushButton("Load Ensemble\u2026")
     self._close_btn = QtWidgets.QPushButton("Close")

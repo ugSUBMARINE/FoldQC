@@ -3,13 +3,21 @@
 from __future__ import annotations
 
 from .compat import ItemIsEnabled
-from .gui_services import ContextViewState
+from .gui_services import (
+    BusyViewState,
+    ContextViewState,
+    LifecycleUiUpdate,
+    TargetChoice,
+)
 
 
 class QtDialogView:
     def __init__(self, dialog, widgets) -> None:
         self.dialog = dialog
         self.widgets = widgets
+        self._busy = False
+        self._ensemble_enabled = False
+        self._ensemble_tooltip = "Load a prediction with at least two models first."
 
     def select_object(self, name: str) -> None:
         combo = self.widgets._obj_combo
@@ -76,6 +84,20 @@ class QtDialogView:
     def set_preview_text(self, text: str) -> None:
         self.widgets._preview_label.setText(text)
 
+    @staticmethod
+    def _add_target_choice(combo, choice: TargetChoice) -> None:
+        """Add one target and emphasize the active ensemble group."""
+        combo.addItem(choice.name)
+        if choice.kind != "ensemble_group":
+            return
+        item = combo.model().item(combo.count() - 1)
+        if item is None:
+            return
+        font = item.font()
+        font.setBold(True)
+        font.setItalic(True)
+        item.setFont(font)
+
     def apply_field_context(self, state: ContextViewState) -> None:
         self.widgets._ref_label.setText(state.reference_label)
         self.widgets._ref_label.setToolTip(state.reference_tooltip)
@@ -87,11 +109,86 @@ class QtDialogView:
         self.widgets._cutoff_edit.setToolTip(state.cutoff_tooltip)
 
     def apply_context(self, state: ContextViewState) -> None:
+        if state.model_choices:
+            combo = self.widgets._model_combo
+            combo.blockSignals(True)
+            try:
+                combo.clear()
+                for model_choice in state.model_choices:
+                    combo.addItem(model_choice.label, model_choice.rank)
+                if state.selected_rank is not None:
+                    self.select_model_rank(state.selected_rank)
+            finally:
+                combo.blockSignals(False)
+        if state.target_choices:
+            combo = self.widgets._obj_combo
+            combo.blockSignals(True)
+            try:
+                combo.clear()
+                for target_choice in state.target_choices:
+                    self._add_target_choice(combo, target_choice)
+                if state.selected_target:
+                    self.select_object(state.selected_target)
+            finally:
+                combo.blockSignals(False)
         for row, available in state.metric_availability:
             self.set_metric_available(row, available)
         self.set_plot_availability(state.plot_availability)
         self.apply_field_context(state)
         self.set_confidence_text(state.confidence_text)
         self.set_preview_text(state.preview_text)
+        self._ensemble_enabled = state.ensemble_enabled
+        self._ensemble_tooltip = state.ensemble_tooltip
+        self._render_ensemble_button()
         if state.statistics_text is not None:
             self.widgets._stats_browser.setPlainText(state.statistics_text)
+
+    def apply_lifecycle(self, update: LifecycleUiUpdate) -> None:
+        if update.display_path is not None:
+            self.widgets._dir_edit.setText(update.display_path)
+        if update.model_choices:
+            combo = self.widgets._model_combo
+            combo.blockSignals(True)
+            try:
+                combo.clear()
+                for choice in update.model_choices:
+                    combo.addItem(choice.label, choice.rank)
+                if update.selected_rank is not None:
+                    self.select_model_rank(update.selected_rank)
+            finally:
+                combo.blockSignals(False)
+        if update.target_choices:
+            combo = self.widgets._obj_combo
+            combo.blockSignals(True)
+            try:
+                combo.clear()
+                for choice in update.target_choices:
+                    self._add_target_choice(combo, choice)
+                if update.selected_target:
+                    self.select_object(update.selected_target)
+            finally:
+                combo.blockSignals(False)
+
+    def set_busy(self, state: BusyViewState) -> None:
+        self._busy = state.busy
+        enabled = state.prediction_controls_enabled
+        for widget in (
+            self.widgets._dir_btn,
+            self.widgets._file_btn,
+            self.widgets._dir_edit,
+            self.widgets._model_combo,
+        ):
+            widget.setEnabled(enabled)
+        self._render_ensemble_button()
+
+    def _render_ensemble_button(self) -> None:
+        button = self.widgets._ensemble_btn
+        button.setEnabled(self._ensemble_enabled and not self._busy)
+        button.setToolTip(
+            "Ensemble loading is unavailable while another task is running."
+            if self._busy
+            else self._ensemble_tooltip
+        )
+
+    def close(self) -> None:
+        """Release deterministic view resources (currently none)."""

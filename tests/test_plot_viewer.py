@@ -63,8 +63,67 @@ def _install_fake_pymol() -> None:
 
 _install_fake_pymol()
 
+from FoldQC.gui_services import TargetChoice  # noqa: E402
+from FoldQC.gui_view import QtDialogView  # noqa: E402
 from FoldQC.plot_viewer import PlotDialog  # noqa: E402
 from FoldQC.token_map import ResidueId, TokenInfo  # noqa: E402
+
+
+class _TargetFont:
+    def __init__(self) -> None:
+        self.bold = False
+        self.italic = False
+
+    def setBold(self, enabled: bool) -> None:
+        self.bold = enabled
+
+    def setItalic(self, enabled: bool) -> None:
+        self.italic = enabled
+
+
+class _TargetItem:
+    def __init__(self) -> None:
+        self.value = _TargetFont()
+
+    def font(self) -> _TargetFont:
+        return self.value
+
+    def setFont(self, font: _TargetFont) -> None:
+        self.value = font
+
+
+class _TargetCombo:
+    def __init__(self) -> None:
+        self.names: list[str] = []
+        self.items: list[_TargetItem] = []
+
+    def addItem(self, name: str) -> None:
+        self.names.append(name)
+        self.items.append(_TargetItem())
+
+    def count(self) -> int:
+        return len(self.items)
+
+    def model(self):
+        return self
+
+    def item(self, row: int) -> _TargetItem | None:
+        return self.items[row] if 0 <= row < len(self.items) else None
+
+
+def test_active_ensemble_group_is_bold_and_italic_in_target_combo() -> None:
+    combo = _TargetCombo()
+
+    QtDialogView._add_target_choice(combo, TargetChoice("model_0", "single"))
+    QtDialogView._add_target_choice(
+        combo, TargetChoice("prediction_ensemble", "ensemble_group")
+    )
+
+    assert combo.names == ["model_0", "prediction_ensemble"]
+    assert combo.items[0].value.bold is False
+    assert combo.items[0].value.italic is False
+    assert combo.items[1].value.bold is True
+    assert combo.items[1].value.italic is True
 
 
 class PlotViewerSelectionTests(unittest.TestCase):

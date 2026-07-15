@@ -66,6 +66,9 @@ Development of FoldQC has included coding assistance from OpenAI's Codex.
 1. Open FoldQC from the PyMOL plugin menu.
 2. Choose a prediction folder, archive, or single `.cif`/`.pdb` structure file.
 3. Select the model, target object, metric, and color palette.
+   When FoldQC must create a model object in PyMOL, it initially applies the
+   familiar pLDDT quality-class coloring. If the named object already exists,
+   FoldQC reuses it without overwriting its current colors.
 4. Click the paint/color action to write the metric into B-factors and color the
    structure in PyMOL.
 5. For selection-based metrics or site-focused plots, enter a PyMOL selection
@@ -73,6 +76,14 @@ Development of FoldQC has included coding assistance from OpenAI's Codex.
    for metrics that use it, such as contact-filtered PAE/PDE and PAE domain labels.
 6. Use the `Plot` dropdown and ensemble actions for heatmaps, line plots,
    PAE/PDE summary plots, binding-site fingerprints, and multi-model summaries.
+
+`Load Ensemble...` is enabled only for predictions containing at least two
+models and only until that prediction's ensemble has been activated. Its
+tooltip explains when a single-model prediction or an already-loaded ensemble
+makes the action unavailable.
+The active ensemble group is shown in bold italic text in the PyMOL target
+selector, distinguishing analyses that use ensemble data from member-object
+analyses.
 
 `PAE summary` and `PDE summary` are (experimental) speciality line plots for multi-chain
 targets. They plot the gap between each token's mean error to other chains and
@@ -111,6 +122,14 @@ and previews are rendered separately from a typed context view state. Native
 open/save dialogs remain in the main dialog because their paths are captured
 before a workflow is submitted.
 
+The dialog itself is only the Qt composition root. Concrete lifecycle,
+acquisition, analysis, metric, coloring, plot, and export services receive
+their collaborators explicitly and do not retain the dialog, its widgets, or a
+service-locator object. A Qt-independent operation coordinator owns the one
+serialized background-operation lease, progress lifetime, cancellation, and
+stale-generation checks. This makes the asynchronous boundary both testable
+with fake ports and visible to static type checking.
+
 FoldQC painting is transactional. It resolves token-to-atom mappings before
 mutation and snapshots the affected atoms' B-factors and color indices before
 viewer updates are suspended. The managed colorbar is retained as a recreatable
@@ -127,6 +146,8 @@ when available: `ranking_score`, `confidence_score`, `ptm`, `iptm`,
 pairwise chain ipTM, and affinity value/probability. Provider aliases such as
 `aggregate_score`, `structure_confidence`, `disorder`, and the various chain
 field spellings are accepted only at the provider boundary.
+AF3's numeric `has_clash` values are accepted only when they are exactly `0`
+or `1` and are converted immediately to the canonical boolean.
 
 Unknown provider JSON fields are deliberately discarded. Missing recognized
 values remain unavailable; malformed recognized values report the provider,
@@ -134,6 +155,11 @@ model, field, and source file. Chain vectors and matrices are read-only
 `float32` arrays indexed by canonical first-appearance `TokenMap.chain_order`.
 Missing chain cells use `NaN`; missing or zero pair-matrix diagonal cells are
 filled from per-chain pTM when that value exists.
+
+For contributors, `uv run mypy` checks the Phase 5 service boundary with a
+stable strict target. Qt, PyMOL, Matplotlib, providers, and older numerical
+modules outside that target are intentionally not yet a repository-wide typing
+baseline.
 
 ## CSV Export Schema
 

@@ -9,8 +9,12 @@ authors = [
   { name = "Karl Gruber" }
 ]
 
+[dependency-groups]
+dev = ["mypy"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = [".."]
 
 [tool.ruff]
 line-length = 88
@@ -23,3 +27,27 @@ ignore = ["E501"]
 python_version = "3.10"
 ignore_missing_imports = true
 exclude = ["tests/"]
+files = [
+  "analysis.py",
+  "analysis_coordinator.py",
+  "context_service.py",
+  "data_acquisition.py",
+  "ensemble_lifecycle.py",
+  "gui_application.py",
+  "gui_coloring.py",
+  "gui_export.py",
+  "gui_metrics.py",
+  "gui_operations.py",
+  "gui_services.py",
+  "gui_state.py",
+  "lifecycle_support.py",
+  "plot_coordinator.py",
+  "plot_preparation.py",
+  "prediction_lifecycle.py",
+  "presentation.py",
+  "viewer_transactions.py",
+]
+follow_imports = "silent"
+check_untyped_defs = true
+disallow_untyped_defs = true
+warn_unused_ignores = true

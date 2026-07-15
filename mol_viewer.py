@@ -17,6 +17,12 @@ from typing import Any, TypeVar
 
 import numpy as np
 
+from .gui_services import (
+    ObjectPaintMapping,
+    ObjectTokenInspection,
+    PaintBatchResult,
+    PaintTarget,
+)
 from .palettes import (
     BUILTIN_PALETTE_KEYS,
     PALETTE_SPECS,
@@ -58,45 +64,6 @@ class _ColorDef:
 class _PaletteResolution:
     palette: str
     custom_colors: tuple[_ColorDef, ...] = ()
-
-
-@dataclass(frozen=True)
-class ObjectPaintMapping:
-    """Stable mapping from one PyMOL object's atom indices to prediction tokens."""
-
-    obj_name: str
-    atom_index_fingerprint: tuple[int, ...]
-    atom_token_indices: np.ndarray
-    atom_count: int
-    max_atom_index: int
-    overlap: TokenOverlapSummary
-
-
-@dataclass(frozen=True)
-class ObjectTokenInspection:
-    """One object snapshot reused for painting metadata and representative coordinates."""
-
-    paint_mapping: ObjectPaintMapping
-    representative_coords: np.ndarray
-
-
-@dataclass(frozen=True)
-class PaintTarget:
-    """One object and per-token array participating in a paint operation."""
-
-    obj_name: str
-    token_map: TokenMap
-    values: np.ndarray
-    mapping: ObjectPaintMapping | None = None
-
-
-@dataclass(frozen=True)
-class PaintBatchResult:
-    """Resolved range and mappings from a batch paint operation."""
-
-    vmin: float
-    vmax: float
-    mappings: tuple[ObjectPaintMapping, ...]
 
 
 def get_viewer_name() -> str:
@@ -1315,6 +1282,20 @@ class PyMOLViewer:
     def __init__(self) -> None:
         self.paint_mappings: dict[tuple[str, str], ObjectPaintMapping] = {}
         self._managed_colorbar = None
+
+    def capture_paint_mappings(
+        self,
+    ) -> dict[tuple[str, str], ObjectPaintMapping]:
+        """Return a shallow snapshot of immutable paint mappings."""
+        return dict(self.paint_mappings)
+
+    def restore_paint_mappings(
+        self, mappings: dict[tuple[str, str], ObjectPaintMapping]
+    ) -> None:
+        self.paint_mappings = dict(mappings)
+
+    def clear_paint_mappings(self) -> None:
+        self.paint_mappings.clear()
 
     def object_names(self, additional_names: Sequence[str] = ()) -> list[str]:
         return get_object_list(additional_names=additional_names)
