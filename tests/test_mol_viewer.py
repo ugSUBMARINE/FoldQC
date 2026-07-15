@@ -7,6 +7,7 @@ from pathlib import Path
 
 import numpy as np
 from FoldQC import mol_viewer
+from FoldQC.gui_services import ManagedColorbar
 from FoldQC.token_map import ResidueId, TokenInfo, TokenMap
 
 
@@ -121,6 +122,35 @@ def test_incremental_ensemble_viewer_helpers_preserve_existing_objects(
 
     mol_viewer.delete_viewer_names(("missing", "model_1"))
     assert deleted == ["model_1"]
+
+
+def test_managed_colorbar_replacement_never_renames_pymol_ramps(monkeypatch) -> None:
+    calls = []
+    monkeypatch.setattr(
+        mol_viewer,
+        "show_colorbar",
+        lambda palette, reverse, vmin, vmax, **kwargs: calls.append(
+            ("show", palette, reverse, vmin, vmax, kwargs["object_names"])
+        ),
+    )
+    monkeypatch.setattr(
+        mol_viewer, "delete_colorbar", lambda: calls.append(("delete",))
+    )
+    viewer = mol_viewer.PyMOLViewer()
+    first = ManagedColorbar("white_blue", False, 0.0, 1.0, ("model_0",))
+    second = ManagedColorbar("white_red", True, 1.0, 2.0, ("model_0",))
+
+    viewer.replace_managed_colorbar(first)
+    viewer.replace_managed_colorbar(second)
+    viewer.replace_managed_colorbar(None)
+
+    assert viewer.get_managed_colorbar() is None
+    assert calls == [
+        ("show", "white_blue", False, 0.0, 1.0, ("model_0",)),
+        ("show", "white_red", True, 1.0, 2.0, ("model_0",)),
+        ("delete",),
+    ]
+    assert not hasattr(viewer, "rename")
 
 
 def test_object_paint_mapping_handles_polymer_ligand_order_and_sparse_indices(

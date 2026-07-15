@@ -10,9 +10,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from FoldQC.gui_state import (  # noqa: E402
-    GuiState,
-    GuiStateBacked,
     MetricContext,
+    PluginState,
     ResolvedTarget,
 )
 from FoldQC.loader_models import PredictionData  # noqa: E402
@@ -36,13 +35,12 @@ def _index(path: Path, token_map: TokenMap) -> StructureIndex:
 
 
 def test_gui_state_uses_independent_mutable_defaults() -> None:
-    first = GuiState()
-    second = GuiState()
+    first = PluginState()
+    second = PluginState()
 
-    first.accepted_token_overlap_warnings.add(("model.cif", "model"))
+    first.model_states[1] = object()
 
-    assert second.accepted_token_overlap_warnings == set()
-    assert first.pending_session_restore is not second.pending_session_restore
+    assert second.model_states == {}
 
 
 def test_metric_context_keeps_immutable_selection_provenance() -> None:
@@ -121,12 +119,8 @@ def test_resolved_target_exposes_live_state_data_and_is_not_assignable() -> None
         target.token_map = TokenMap(())
 
 
-def test_state_backed_properties_share_one_state() -> None:
-    class Host(GuiStateBacked):
-        pass
-
-    host = Host()
-    host._state = GuiState()
+def test_plugin_state_resolves_the_active_canonical_model() -> None:
+    state = PluginState()
     data = PredictionData(
         name="model",
         rank=2,
@@ -139,9 +133,9 @@ def test_state_backed_properties_share_one_state() -> None:
         data=data,
         structure_index=_index(Path(data.structure_path), token_map),
     )
-    host._model_states = {2: model_state}
-    host._active_model_rank = 2
+    state.model_states = {2: model_state}
+    state.active_model_rank = 2
 
-    assert host._active_model_state is model_state
-    assert host._state.model_states == {2: model_state}
-    assert host._state.active_model_rank == 2
+    assert state.active_model_state is model_state
+    assert state.model_states == {2: model_state}
+    assert state.active_model_rank == 2

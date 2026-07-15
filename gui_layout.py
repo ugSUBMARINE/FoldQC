@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from types import SimpleNamespace
 
 from . import metrics
 from .compat import FormFieldGrowthPolicy, QAction, QtWidgets
@@ -17,34 +18,34 @@ SELECTION_EXAMPLES = get_selection_examples()
 class GuiWidgets:
     """All widgets created by the main dialog layout."""
 
-    _apply_btn: object
-    _close_btn: object
-    _conf_browser: object
-    _cutoff_edit: object
-    _cutoff_label: object
-    _dir_btn: object
-    _dir_edit: object
-    _ensemble_btn: object
-    _export_csv_btn: object
-    _file_btn: object
-    _guide_btn: object
-    _model_combo: object
-    _obj_combo: object
-    _obj_refresh_btn: object
-    _palette_combo: object
-    _palette_reverse_chk: object
-    _plot_actions: object
-    _plot_btn: object
-    _plot_menu: object
-    _preview_caption: object
-    _preview_label: object
-    _prop_combo: object
-    _prop_combo_rows: object
-    _ref_edit: object
-    _ref_label: object
-    _stats_browser: object
-    _vmax_edit: object
-    _vmin_edit: object
+    _apply_btn: QtWidgets.QPushButton
+    _close_btn: QtWidgets.QPushButton
+    _conf_browser: QtWidgets.QTextBrowser
+    _cutoff_edit: QtWidgets.QLineEdit
+    _cutoff_label: QtWidgets.QLabel
+    _dir_btn: QtWidgets.QPushButton
+    _dir_edit: QtWidgets.QLineEdit
+    _ensemble_btn: QtWidgets.QPushButton
+    _export_csv_btn: QtWidgets.QPushButton
+    _file_btn: QtWidgets.QPushButton
+    _guide_btn: QtWidgets.QPushButton
+    _model_combo: QtWidgets.QComboBox
+    _obj_combo: QtWidgets.QComboBox
+    _obj_refresh_btn: QtWidgets.QPushButton
+    _palette_combo: QtWidgets.QComboBox
+    _palette_reverse_chk: QtWidgets.QCheckBox
+    _plot_actions: dict[metrics.PlotType, QAction]
+    _plot_btn: QtWidgets.QPushButton
+    _plot_menu: QtWidgets.QMenu
+    _preview_caption: QtWidgets.QLabel
+    _preview_label: QtWidgets.QLabel
+    _prop_combo: QtWidgets.QComboBox
+    _prop_combo_rows: dict[str, int]
+    _ref_edit: QtWidgets.QLineEdit
+    _ref_label: QtWidgets.QLabel
+    _stats_browser: QtWidgets.QTextBrowser
+    _vmax_edit: QtWidgets.QLineEdit
+    _vmin_edit: QtWidgets.QLineEdit
 
     @classmethod
     def capture(cls, dialog) -> GuiWidgets:
@@ -80,8 +81,25 @@ class GuiWidgets:
         )
 
 
-def build_dialog_ui(self) -> GuiWidgets:
-    root = QtWidgets.QVBoxLayout(self)
+def build_plot_actions(dialog, menu) -> dict[metrics.PlotType, QAction]:
+    """Create plot actions with a real Qt owner on both Qt5 and Qt6."""
+    actions = {}
+    for spec in metrics.PLOTS:
+        action = QAction(spec.label, menu)
+        action.triggered.connect(
+            lambda _checked=False, plot_type=spec.key: (
+                dialog.services.analysis.show_plot(plot_type)
+            )
+        )
+        menu.addAction(action)
+        actions[spec.key] = action
+    return actions
+
+
+def build_dialog_ui(dialog) -> GuiWidgets:
+    """Build widgets into one registry without mutating the dialog namespace."""
+    self = SimpleNamespace()
+    root = QtWidgets.QVBoxLayout(dialog)
     root.setSpacing(6)
 
     # --- Input row ---
@@ -100,8 +118,8 @@ def build_dialog_ui(self) -> GuiWidgets:
     self._file_btn.setToolTip(
         "Choose a prediction archive or single CIF/PDB file to load."
     )
-    self._disable_default_button(self._dir_btn)
-    self._disable_default_button(self._file_btn)
+    dialog._disable_default_button(self._dir_btn)
+    dialog._disable_default_button(self._file_btn)
     dir_layout.addWidget(self._dir_edit)
     dir_layout.addWidget(self._dir_btn)
     dir_layout.addWidget(self._file_btn)
@@ -145,7 +163,7 @@ def build_dialog_ui(self) -> GuiWidgets:
         f"{VIEWER_NAME} object, ensemble group, or ensemble member that will be colored or plotted."
     )
     self._obj_refresh_btn = QtWidgets.QPushButton("\u21ba")
-    self._disable_default_button(self._obj_refresh_btn)
+    dialog._disable_default_button(self._obj_refresh_btn)
     self._obj_refresh_btn.setFixedWidth(28)
     self._obj_refresh_btn.setToolTip(
         f"Refresh the list of {VIEWER_NAME} objects and ensemble targets."
@@ -157,7 +175,7 @@ def build_dialog_ui(self) -> GuiWidgets:
 
     self._prop_combo = QtWidgets.QComboBox()
     self._prop_combo_rows: dict[str, int] = {}
-    self._populate_property_combo()
+    dialog._populate_property_combo_for(self._prop_combo, self._prop_combo_rows)
     self._prop_combo.setToolTip(
         "Confidence metric to write into B-factors and display on the selected target."
     )
@@ -186,7 +204,7 @@ def build_dialog_ui(self) -> GuiWidgets:
 
     self._preview_caption = QtWidgets.QLabel("Preview:")
     self._preview_label = QtWidgets.QLabel("")
-    self._configure_preview_widgets(
+    dialog._configure_preview_widgets(
         self._preview_caption,
         self._preview_label,
     )
@@ -194,7 +212,7 @@ def build_dialog_ui(self) -> GuiWidgets:
         "Compact summary of what the selected metric will do."
     )
     self._guide_btn = QtWidgets.QPushButton("?")
-    self._disable_default_button(self._guide_btn)
+    dialog._disable_default_button(self._guide_btn)
     self._guide_btn.setFixedWidth(28)
     self._guide_btn.setToolTip("Open a quick guide to common FoldQC workflows.")
     preview_row = QtWidgets.QHBoxLayout()
@@ -265,16 +283,7 @@ def build_dialog_ui(self) -> GuiWidgets:
     self._plot_btn = QtWidgets.QPushButton("Plot")
     self._export_csv_btn = QtWidgets.QPushButton("Export CSV\u2026")
     self._plot_menu = QtWidgets.QMenu(self._plot_btn)
-    self._plot_actions: dict[str, object] = {}
-    for spec in metrics.PLOTS:
-        action = QAction(spec.label, self)
-        action.triggered.connect(
-            lambda _checked=False, plot_type=spec.key: self._show_selected_plot(
-                plot_type
-            )
-        )
-        self._plot_menu.addAction(action)
-        self._plot_actions[spec.key] = action
+    self._plot_actions = build_plot_actions(dialog, self._plot_menu)
     self._plot_btn.setMenu(self._plot_menu)
     self._ensemble_btn = QtWidgets.QPushButton("Load Ensemble\u2026")
     self._close_btn = QtWidgets.QPushButton("Close")
@@ -300,7 +309,7 @@ def build_dialog_ui(self) -> GuiWidgets:
         self._ensemble_btn,
         self._close_btn,
     ):
-        self._disable_default_button(btn)
+        dialog._disable_default_button(btn)
         btn_layout.addWidget(btn)
 
     root.addLayout(btn_layout)

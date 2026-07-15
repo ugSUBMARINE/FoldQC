@@ -19,12 +19,66 @@ from .mol_viewer import (
     run_with_updates_suspended,
     show_colorbar,
 )
+from .viewer_transactions import ColorbarChange, PaintTransaction
 
 APP_TITLE = "FoldQC"
 VIEWER_NAME = get_viewer_name()
 
 
-class ColoringController:
+class ColoringWorkflow:
+    def _transactional_paint(
+        self,
+        targets,
+        *,
+        kind: str,
+        palette: str = "",
+        reverse_palette: bool = False,
+        vmin: float | None = None,
+        vmax: float | None = None,
+    ):
+        """Apply one fully compensating paint operation through the viewer port."""
+        viewer = getattr(self, "_viewer", None)
+        if viewer is None:
+            return None
+        targets = tuple(targets)
+        colorbar = ColorbarChange(
+            "replace" if kind == "continuous" else "remove",
+            palette=palette if kind == "continuous" else "",
+            reverse_palette=reverse_palette,
+        )
+        transaction = PaintTransaction(viewer, targets, colorbar)
+        if kind == "continuous":
+
+            def paint():
+                return viewer.paint_continuous(
+                    targets,
+                    palette=palette,
+                    reverse_palette=reverse_palette,
+                    vmin=vmin,
+                    vmax=vmax,
+                    rebuild=False,
+                )
+        elif kind == "categorical":
+
+            def paint():
+                return viewer.paint_categorical(targets, rebuild=False)
+        elif kind == "plddt_class":
+
+            def paint():
+                return viewer.paint_plddt_classes(targets, rebuild=False)
+        else:
+            raise ValueError(f"Unknown paint transaction kind: {kind!r}.")
+        try:
+            result = transaction.execute(paint)
+        except Exception:
+            self._staged_paint_mappings = {}
+            raise
+        mappings = dict(getattr(self, "_paint_mappings", {}))
+        mappings.update(getattr(self, "_staged_paint_mappings", {}))
+        self._paint_mappings = mappings
+        self._staged_paint_mappings = {}
+        return result
+
     def _get_obj_name(self) -> str | None:
         name = self._obj_combo.currentText().strip()
         return name if name else None
@@ -96,6 +150,7 @@ class ColoringController:
             spec.load_capabilities,
             self._apply_coloring,
             error_title=f"{APP_TITLE} - error",
+            deferred_action=self.services.analysis.capture_current("color"),
         ):
             return
 
@@ -142,31 +197,49 @@ class ColoringController:
             ):
                 return
             if spec.is_domain_label:
-                used_vmin, used_vmax = paint_categorical_labels_bulk(
-                    obj_name,
-                    token_map,
-                    values,
-                    mapping=mapping,
+                result = self._transactional_paint(
+                    (PaintTarget(obj_name, token_map, values, mapping),),
+                    kind="categorical",
                 )
-                delete_colorbar()
+                if result is None:
+                    used_vmin, used_vmax = paint_categorical_labels_bulk(
+                        obj_name,
+                        token_map,
+                        values,
+                        mapping=mapping,
+                    )
+                    delete_colorbar()
+                else:
+                    used_vmin, used_vmax = result.vmin, result.vmax
             else:
-                used_vmin, used_vmax = paint_property(
-                    obj_name,
-                    token_map,
-                    values,
+                result = self._transactional_paint(
+                    (PaintTarget(obj_name, token_map, values, mapping),),
+                    kind="continuous",
                     palette=palette,
                     reverse_palette=reverse_palette,
                     vmin=vmin,
                     vmax=vmax,
-                    mapping=mapping,
                 )
-                show_colorbar(
-                    palette,
-                    reverse_palette,
-                    used_vmin,
-                    used_vmax,
-                    object_names=[obj_name],
-                )
+                if result is None:
+                    used_vmin, used_vmax = paint_property(
+                        obj_name,
+                        token_map,
+                        values,
+                        palette=palette,
+                        reverse_palette=reverse_palette,
+                        vmin=vmin,
+                        vmax=vmax,
+                        mapping=mapping,
+                    )
+                    show_colorbar(
+                        palette,
+                        reverse_palette,
+                        used_vmin,
+                        used_vmax,
+                        object_names=[obj_name],
+                    )
+                else:
+                    used_vmin, used_vmax = result.vmin, result.vmax
             self.setWindowTitle(
                 f"{APP_TITLE} - {key} [{used_vmin:.2f}, {used_vmax:.2f}]"
             )
@@ -195,13 +268,17 @@ class ColoringController:
             spec.load_capabilities,
             self._apply_coloring,
             error_title=f"{APP_TITLE} - error",
+            deferred_action=self.services.analysis.capture_current("color"),
         ):
             return
 
         try:
-            self._with_viewer_updates_suspended(
-                lambda: self._dispatch_ensemble_coloring(key, spec, target_members)
-            )
+            if getattr(self, "_viewer", None) is not None:
+                self._dispatch_ensemble_coloring(key, spec, target_members)
+            else:
+                self._with_viewer_updates_suspended(
+                    lambda: self._dispatch_ensemble_coloring(key, spec, target_members)
+                )
         except Exception as exc:
             QtWidgets.QMessageBox.critical(self, f"{APP_TITLE} - error", str(exc))
 
@@ -239,25 +316,36 @@ class ColoringController:
                 return
             member_values.append((member, state, values, mapping))
 
-        result = paint_properties_bulk(
-            [
-                PaintTarget(member.obj_name, state.token_map, item_values, mapping)
-                for member, state, item_values, mapping in member_values
-            ],
+        targets = [
+            PaintTarget(member.obj_name, state.token_map, item_values, mapping)
+            for member, state, item_values, mapping in member_values
+        ]
+        result = self._transactional_paint(
+            targets,
+            kind="continuous",
             palette=palette,
             reverse_palette=reverse_palette,
             vmin=vmin,
             vmax=vmax,
-            rebuild=False,
         )
+        if result is None:
+            result = paint_properties_bulk(
+                targets,
+                palette=palette,
+                reverse_palette=reverse_palette,
+                vmin=vmin,
+                vmax=vmax,
+                rebuild=False,
+            )
         used_vmin, used_vmax = result.vmin, result.vmax
-        show_colorbar(
-            palette,
-            reverse_palette,
-            used_vmin,
-            used_vmax,
-            object_names=[member.obj_name for member in target_members],
-        )
+        if getattr(self, "_viewer", None) is None:
+            show_colorbar(
+                palette,
+                reverse_palette,
+                used_vmin,
+                used_vmax,
+                object_names=[member.obj_name for member in target_members],
+            )
         ensemble_state = self._ensemble
         label = (
             ensemble_state.group_name
@@ -300,14 +388,14 @@ class ColoringController:
             member_values.append((member, state, values, mapping))
 
         if spec.is_domain_label:
-            result = paint_categorical_labels_batch(
-                [
-                    PaintTarget(member.obj_name, state.token_map, values, mapping)
-                    for member, state, values, mapping in member_values
-                ],
-                rebuild=False,
-            )
-            delete_colorbar()
+            targets = [
+                PaintTarget(member.obj_name, state.token_map, values, mapping)
+                for member, state, values, mapping in member_values
+            ]
+            result = self._transactional_paint(targets, kind="categorical")
+            if result is None:
+                result = paint_categorical_labels_batch(targets, rebuild=False)
+                delete_colorbar()
             shared_vmin, shared_vmax = result.vmin, result.vmax
             ensemble_state = self._ensemble
             label = (
@@ -344,26 +432,37 @@ class ColoringController:
         if shared_vmin == shared_vmax:
             shared_vmax = shared_vmin + 1.0
 
-        paint_properties_bulk(
-            [
-                PaintTarget(member.obj_name, state.token_map, values, mapping)
-                for member, state, values, mapping in member_values
-            ],
+        targets = [
+            PaintTarget(member.obj_name, state.token_map, values, mapping)
+            for member, state, values, mapping in member_values
+        ]
+        result = self._transactional_paint(
+            targets,
+            kind="continuous",
             palette=palette,
             reverse_palette=reverse_palette,
             vmin=shared_vmin,
             vmax=shared_vmax,
-            rebuild=False,
         )
-        show_colorbar(
-            palette,
-            reverse_palette,
-            shared_vmin,
-            shared_vmax,
-            object_names=[
-                member.obj_name for member, _state, _values, _mapping in member_values
-            ],
-        )
+        if result is None:
+            paint_properties_bulk(
+                targets,
+                palette=palette,
+                reverse_palette=reverse_palette,
+                vmin=shared_vmin,
+                vmax=shared_vmax,
+                rebuild=False,
+            )
+            show_colorbar(
+                palette,
+                reverse_palette,
+                shared_vmin,
+                shared_vmax,
+                object_names=[
+                    member.obj_name
+                    for member, _state, _values, _mapping in member_values
+                ],
+            )
         ensemble_state = self._ensemble
         label = (
             ensemble_state.group_name
@@ -411,14 +510,14 @@ class ColoringController:
                 return
             member_values.append((member, state, values, mapping))
 
-        paint_plddt_class_batch(
-            [
-                PaintTarget(member.obj_name, state.token_map, values, mapping)
-                for member, state, values, mapping in member_values
-            ],
-            rebuild=False,
-        )
-        delete_colorbar()
+        targets = [
+            PaintTarget(member.obj_name, state.token_map, values, mapping)
+            for member, state, values, mapping in member_values
+        ]
+        result = self._transactional_paint(targets, kind="plddt_class")
+        if result is None:
+            paint_plddt_class_batch(targets, rebuild=False)
+            delete_colorbar()
         ensemble_state = self._ensemble
         label = (
             ensemble_state.group_name
@@ -465,14 +564,18 @@ class ColoringController:
             mapping=mapping,
         ):
             return
-        paint_plddt_class_coloring(
-            obj_name,
-            values=values,
-            token_map=token_map,
-            mapping=mapping,
+        result = self._transactional_paint(
+            (PaintTarget(obj_name, token_map, values, mapping),),
+            kind="plddt_class",
         )
-
-        delete_colorbar()
+        if result is None:
+            paint_plddt_class_coloring(
+                obj_name,
+                values=values,
+                token_map=token_map,
+                mapping=mapping,
+            )
+            delete_colorbar()
         self.setWindowTitle(f"{APP_TITLE} - pLDDT quality classes")
         self._update_statistics_for_single(
             key, obj_name, values, include_plddt_classes=True

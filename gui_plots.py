@@ -15,7 +15,7 @@ APP_TITLE = "FoldQC"
 VIEWER_NAME = get_viewer_name()
 
 
-class PlotController:
+class PlotWorkflow:
     def _resolve_plot_target(self) -> _PlotTarget | None:
         """Resolve the current viewer target into data and token-map context."""
         obj_name = self._get_obj_name()
@@ -577,6 +577,7 @@ class PlotController:
             spec.load_capabilities,
             self._show_line_plot,
             error_title=f"{APP_TITLE} - error",
+            deferred_action=self.services.analysis.capture_current("line"),
         ):
             return
 
@@ -662,6 +663,7 @@ class PlotController:
             capabilities,
             lambda: self._show_summary_plot(kind),
             error_title=f"{APP_TITLE} - error",
+            deferred_action=self.services.analysis.capture_current(f"{kind}_summary"),
         ):
             return
 
@@ -749,6 +751,7 @@ class PlotController:
             spec.load_capabilities,
             self._show_distribution_plot,
             error_title=f"{APP_TITLE} - error",
+            deferred_action=self.services.analysis.capture_current("distribution"),
         ):
             return
 
@@ -867,6 +870,9 @@ class PlotController:
                 self._show_ensemble_site_summary,
                 error_title=f"{APP_TITLE} - error",
                 allow_partial=True,
+                deferred_action=self.services.analysis.capture_current(
+                    "ensemble_site_summary"
+                ),
             ):
                 return
 
@@ -938,6 +944,7 @@ class PlotController:
             capabilities,
             self._show_matrix_plot,
             error_title=f"{APP_TITLE} - error",
+            deferred_action=self.services.analysis.capture_current("matrix"),
         ):
             return
 
@@ -1036,6 +1043,9 @@ class PlotController:
             self._show_binding_site_fingerprint,
             error_title=f"{APP_TITLE} - error",
             allow_partial=True,
+            deferred_action=self.services.analysis.capture_current(
+                "binding_site_fingerprint"
+            ),
         ):
             return
 

@@ -434,6 +434,7 @@ def _install_fake_pymol() -> types.SimpleNamespace:
     class _Action:
         def __init__(self, text: str, _parent=None) -> None:
             self._text = text
+            self.parent = _parent
             self._enabled = True
             self.tooltip = ""
             self.status_tip = ""
@@ -503,7 +504,9 @@ from FoldQC.gui import (  # noqa: E402
 from FoldQC.gui import (  # noqa: E402
     _PlotTarget as _ResolvedTarget,
 )
-from FoldQC.gui_state import GuiState  # noqa: E402
+from FoldQC.gui_application import GuiApplicationServices  # noqa: E402
+from FoldQC.gui_layout import build_plot_actions  # noqa: E402
+from FoldQC.gui_state import PluginState  # noqa: E402
 from FoldQC.model_state import ModelState  # noqa: E402
 from FoldQC.providers.registry import BUILTIN_PROVIDERS  # noqa: E402
 from FoldQC.structure_index import StructureIndex  # noqa: E402
@@ -695,7 +698,8 @@ def _PlotTarget(
 
 def _new_dialog() -> FoldQCPluginDialog:
     dialog = FoldQCPluginDialog.__new__(FoldQCPluginDialog)
-    dialog._state = GuiState()
+    dialog.state = PluginState()
+    dialog.services = GuiApplicationServices(dialog)
     dialog._initialize_dependency_controller()
     return dialog
 
@@ -1718,7 +1722,7 @@ class GuiModelSwitchingTests(unittest.TestCase):
         previous_ensemble = dialog._ensemble
         prepared = self._prepared_ensemble(pred_files)
         request_id = 17
-        transaction = gui_loading.EnsembleViewerTransaction(
+        transaction = gui_loading.EnsembleActivationTransaction(
             request_id=request_id,
             prepared=prepared,
             previous_ensemble=previous_ensemble,
@@ -3359,6 +3363,15 @@ class GuiModelSwitchingTests(unittest.TestCase):
         self.assertEqual(
             set(dialog._plot_actions), {spec.key for spec in metrics.PLOTS}
         )
+
+    def test_plot_actions_are_owned_by_the_qt_menu(self) -> None:
+        dialog = _new_dialog()
+        menu = _PYMOL.Qt.QtWidgets.QMenu()
+
+        actions = build_plot_actions(dialog, menu)
+
+        self.assertEqual(tuple(actions), tuple(spec.key for spec in metrics.PLOTS))
+        self.assertTrue(all(action.parent is menu for action in actions.values()))
 
     def _context_dialog(self, metric: str, *, ref: str = "", cutoff: str = "5.0"):
         dialog = _new_dialog()

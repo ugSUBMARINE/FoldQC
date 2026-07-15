@@ -21,7 +21,7 @@ APP_TITLE = "FoldQC"
 VIEWER_NAME = get_viewer_name()
 
 
-class MetricController:
+class MetricWorkflow:
     def _require_active_model_state(self):
         """Return the active canonical model state or raise a user-facing error."""
         state = self._active_model_state
@@ -319,9 +319,14 @@ class MetricController:
         cache_key = self._paint_mapping_cache_key(data, obj_name)
         existing = getattr(self, "_paint_mappings", {}).get(cache_key)
         mapping, rebuilt = ensure_object_paint_mapping(obj_name, token_map, existing)
-        mappings = dict(getattr(self, "_paint_mappings", {}))
-        mappings[cache_key] = mapping
-        self._paint_mappings = mappings
+        if getattr(self, "_viewer", None) is None:
+            mappings = dict(getattr(self, "_paint_mappings", {}))
+            mappings[cache_key] = mapping
+            self._paint_mappings = mappings
+        else:
+            staged = dict(getattr(self, "_staged_paint_mappings", {}))
+            staged[cache_key] = mapping
+            self._staged_paint_mappings = staged
         if rebuilt:
             accepted = set(getattr(self, "_accepted_token_overlap_warnings", set()))
             accepted.discard(cache_key)

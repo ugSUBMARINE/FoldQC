@@ -1,15 +1,13 @@
 """Typed state and context values shared by FoldQC GUI coordinators.
 
 This module is deliberately independent of Qt and PyMOL.  The dialog owns one
-``GuiState`` instance while GUI-side coordinators operate on the same state.
+``PluginState`` instance while GUI-side coordinators operate on the same state.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
-
-from .session import PendingSessionRestore
 
 if TYPE_CHECKING:
     from .ensemble import EnsembleMember, EnsembleState
@@ -63,65 +61,15 @@ class MetricContext:
 
 
 @dataclass
-class GuiState:
+class PluginState:
     """Mutable non-widget state owned by the main FoldQC dialog."""
 
     pred_files: PredictionFiles | None = None
     model_states: dict[int, ModelState] = field(default_factory=dict)
     active_model_rank: int | None = None
-    paint_mappings: dict[tuple[str, str], object] = field(default_factory=dict)
     ensemble: EnsembleState | None = None
-    accepted_token_overlap_warnings: set[tuple[str, str]] = field(default_factory=set)
-    loading_prediction: bool = False
-    loading_data: bool = False
-    gui_job_request_id: int = 0
-    prediction_load_request_id: int = 0
-    data_load_request_id: int = 0
-    restoring_settings: bool = False
-    pending_session_restore: PendingSessionRestore = field(
-        default_factory=PendingSessionRestore
-    )
 
-
-class GuiStateBacked:
-    """Properties exposing the dialog's shared state to GUI coordinators."""
-
-
-def _state_property(name: str):
-    def getter(self):
-        return getattr(self._state, name)
-
-    def setter(self, value) -> None:
-        setattr(self._state, name, value)
-
-    return property(getter, setter)
-
-
-for _private_name, _state_name in {
-    "_pred_files": "pred_files",
-    "_model_states": "model_states",
-    "_active_model_rank": "active_model_rank",
-    "_paint_mappings": "paint_mappings",
-    "_ensemble": "ensemble",
-    "_accepted_token_overlap_warnings": "accepted_token_overlap_warnings",
-    "_loading_prediction": "loading_prediction",
-    "_loading_data": "loading_data",
-    "_gui_job_request_id": "gui_job_request_id",
-    "_prediction_load_request_id": "prediction_load_request_id",
-    "_data_load_request_id": "data_load_request_id",
-    "_restoring_settings": "restoring_settings",
-    "_pending_session_restore": "pending_session_restore",
-}.items():
-    setattr(GuiStateBacked, _private_name, _state_property(_state_name))
-
-
-def _active_model_state(self):
-    rank = self._state.active_model_rank
-    if rank is None:
-        return None
-    return self._state.model_states.get(rank)
-
-
-GuiStateBacked._active_model_state = property(_active_model_state)
-
-del _private_name, _state_name
+    @property
+    def active_model_state(self) -> ModelState | None:
+        rank = self.active_model_rank
+        return None if rank is None else self.model_states.get(rank)

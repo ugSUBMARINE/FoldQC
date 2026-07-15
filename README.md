@@ -91,6 +91,21 @@ that specification once when an action starts, then loads only the required
 per-model capabilities. Availability therefore follows the selected rank and
 target rather than a prediction-wide union.
 
+Coloring, plotting, and CSV export capture the selected metric, target,
+reference, cutoff, and action in one immutable analysis request. Lazy provider
+data is loaded against the canonical model versions for that request. If the
+prediction, model, ensemble, or relevant controls change while work is running,
+the stale result is discarded instead of applying the old action to a new
+target.
+
+FoldQC painting is transactional. It resolves token-to-atom mappings before
+mutation and snapshots the affected atoms' B-factors and color indices before
+viewer updates are suspended. The managed colorbar is retained as a recreatable
+typed specification: FoldQC deletes and recreates its ramp under the stable
+managed name and never renames PyMOL ramp objects. If a multi-object paint or
+colorbar operation fails, the previous atom values, colors, and managed
+colorbar are restored.
+
 Provider confidence JSON is normalized when parsed. Live model state contains
 one immutable provider-neutral confidence object with these recognized fields
 when available: `ranking_score`, `confidence_score`, `ptm`, `iptm`,

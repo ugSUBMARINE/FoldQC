@@ -257,6 +257,56 @@ def run_with_updates_suspended(func: Callable[[], T]) -> T:
             pass
 
 
+def snapshot_atom_visuals(obj_name: str):
+    """Capture the atom-index fingerprint, B-factors, and color indices."""
+    from pymol import cmd
+
+    from .gui_services import AtomVisualSnapshot
+
+    model = cmd.get_model(obj_name)
+    atoms = tuple(getattr(model, "atom", ()) or ())
+    return AtomVisualSnapshot(
+        obj_name=str(obj_name),
+        atom_indices=tuple(int(atom.index) for atom in atoms),
+        b_factors=np.asarray(
+            [float(getattr(atom, "b", 0.0)) for atom in atoms], dtype=np.float32
+        ),
+        color_indices=np.asarray(
+            [int(getattr(atom, "color", 0)) for atom in atoms], dtype=np.int32
+        ),
+    )
+
+
+def restore_atom_visuals(snapshot) -> None:
+    """Restore a snapshot, rejecting objects whose atom identity changed."""
+    from pymol import cmd
+
+    current = cmd.get_model(snapshot.obj_name)
+    current_indices = tuple(
+        int(atom.index) for atom in (getattr(current, "atom", ()) or ())
+    )
+    if current_indices != snapshot.atom_indices:
+        raise ValueError(
+            f"Cannot restore {snapshot.obj_name}: its atom indices changed during painting."
+        )
+    max_index = max(snapshot.atom_indices, default=-1)
+    b_values = np.zeros(max_index + 1, dtype=np.float32)
+    colors = np.zeros(max_index + 1, dtype=np.int32)
+    if snapshot.atom_indices:
+        indices = np.asarray(snapshot.atom_indices, dtype=np.int64)
+        b_values[indices] = snapshot.b_factors
+        colors[indices] = snapshot.color_indices
+    cmd.alter(
+        snapshot.obj_name,
+        "b = foldqc_restore_b[index]; color = foldqc_restore_color[index]",
+        space={
+            "foldqc_restore_b": b_values.tolist(),
+            "foldqc_restore_color": colors.tolist(),
+        },
+    )
+    cmd.recolor(snapshot.obj_name)
+
+
 def rebuild() -> None:
     from pymol import cmd
 
@@ -1257,3 +1307,81 @@ def clear_selections(
         cmd.select(str(name), "none")
     if refresh_view:
         cmd.refresh()
+
+
+class PyMOLViewer:
+    """Concrete object adapter implementing the application ``ViewerPort``."""
+
+    def __init__(self) -> None:
+        self.paint_mappings: dict[tuple[str, str], ObjectPaintMapping] = {}
+        self._managed_colorbar = None
+
+    def snapshot_atom_visuals(self, obj_name: str):
+        return snapshot_atom_visuals(obj_name)
+
+    def restore_atom_visuals(self, snapshot) -> None:
+        restore_atom_visuals(snapshot)
+
+    def paint_continuous(
+        self,
+        targets: Sequence[PaintTarget],
+        *,
+        palette: str,
+        reverse_palette: bool,
+        vmin: float | None,
+        vmax: float | None,
+        rebuild: bool = False,
+    ) -> PaintBatchResult:
+        return paint_properties_bulk(
+            targets,
+            palette=palette,
+            reverse_palette=reverse_palette,
+            vmin=vmin,
+            vmax=vmax,
+            rebuild=rebuild,
+        )
+
+    def paint_categorical(
+        self, targets: Sequence[PaintTarget], *, rebuild: bool = False
+    ) -> PaintBatchResult:
+        return paint_categorical_labels_batch(targets, rebuild=rebuild)
+
+    def paint_plddt_classes(
+        self, targets: Sequence[PaintTarget], *, rebuild: bool = False
+    ) -> PaintBatchResult:
+        mappings = paint_plddt_class_batch(targets, rebuild=rebuild)
+        arrays = [np.asarray(target.values, dtype=np.float32) for target in targets]
+        combined = np.concatenate(arrays) if len(arrays) > 1 else arrays[0]
+        vmin, vmax = _resolve_color_range(combined)
+        return PaintBatchResult(vmin, vmax, tuple(mappings))
+
+    def get_managed_colorbar(self):
+        return self._managed_colorbar
+
+    def replace_managed_colorbar(self, state) -> None:
+        if state is None:
+            delete_colorbar()
+            self._managed_colorbar = None
+            return
+        show_colorbar(
+            state.palette,
+            state.reverse_palette,
+            state.vmin,
+            state.vmax,
+            object_names=state.object_names,
+        )
+        self._managed_colorbar = state
+
+    def rebuild(self) -> None:
+        rebuild()
+
+    def run_suspended(self, operation: Callable[[], T]) -> T:
+        return run_with_updates_suspended(operation)
+
+    def ensure_paint_mapping(
+        self,
+        obj_name: str,
+        token_map: TokenMap,
+        existing: ObjectPaintMapping | None,
+    ) -> tuple[ObjectPaintMapping, bool]:
+        return ensure_object_paint_mapping(obj_name, token_map, existing)

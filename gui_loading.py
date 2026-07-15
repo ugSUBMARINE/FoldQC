@@ -9,6 +9,7 @@ from pathlib import Path
 import numpy as np
 
 from . import ensemble, gui_rules, metrics, plot_data, reports
+from .analysis import DataLoadRequirement, DeferredAnalysisAction
 from .compat import ItemIsEnabled, QtCore, QtWidgets, WindowCloseButtonHint
 from .loader_models import DataCapability, PredictionData, PredictionFiles
 from .model_state import ModelState, ModelStateSnapshot
@@ -77,32 +78,11 @@ class ModelSwitchResult:
 
 
 @dataclass(frozen=True)
-class DataLoadItem:
-    """One current-model or ensemble-member lazy reload request."""
-
-    rank: int
-    model_label: str
-    capabilities: frozenset[DataCapability]
-    model_state: ModelState
-    expected_version: int
-    expected_ensemble: ensemble.EnsembleState | None = None
-    phase_arrays: tuple[str, ...] = ()
-
-    def load_kwargs(self) -> dict[str, bool]:
-        return {
-            "load_pae": "pae" in self.capabilities,
-            "load_pde": "pde" in self.capabilities,
-            "load_contact_probs": "contact_probs" in self.capabilities,
-            "load_token_plddt": "plddt" in self.capabilities,
-        }
-
-
-@dataclass(frozen=True)
 class DataLoadBatchResult:
     """Atomically committable lazy data returned by one worker task."""
 
     pred_files: PredictionFiles
-    loaded: tuple[tuple[DataLoadItem, PredictionData], ...]
+    loaded: tuple[tuple[DataLoadRequirement, PredictionData], ...]
 
 
 @dataclass(frozen=True)
@@ -127,7 +107,7 @@ class InitialPredictionSnapshot:
 
 
 @dataclass
-class EnsembleViewerTransaction:
+class EnsembleActivationTransaction:
     """Main-thread state for an incrementally committed ensemble."""
 
     request_id: int
@@ -241,7 +221,7 @@ def _load_rank_data(pred_files, rank: int, report_phase) -> ModelSwitchResult:
     )
 
 
-def _load_data_batch(pred_files, items: tuple[DataLoadItem, ...], report_phase):
+def _load_data_batch(pred_files, items: tuple[DataLoadRequirement, ...], report_phase):
     from .loader import load_prediction_data
 
     loaded = []
@@ -274,7 +254,7 @@ def _prepare_ensemble_job(
     )
 
 
-class GuiLoadingController:
+class PredictionLifecycleWorkflow:
     def _capture_model_store(self) -> ModelStoreSnapshot:
         return ModelStoreSnapshot(
             active_rank=self._active_model_rank,
@@ -587,7 +567,7 @@ class GuiLoadingController:
         self._prediction_load_request_id = request_id
         self._data_load_request_id = request_id
         self._active_load_handle = None
-        self._active_data_continuation = None
+        self._active_deferred_analysis = None
         self._model_switch_previous_store = None
         self._model_switch_previous_viewer_context = None
         self._loading_prediction = False
@@ -969,7 +949,7 @@ class GuiLoadingController:
         if request_id != self._data_load_request_id:
             return
         self._active_load_handle = None
-        self._active_data_continuation = None
+        self._active_deferred_analysis = None
         self._model_switch_previous_store = None
         self._model_switch_previous_viewer_context = None
         self._loading_data = False
@@ -987,14 +967,27 @@ class GuiLoadingController:
         *,
         error_title: str,
         allow_partial: bool = False,
+        deferred_action: DeferredAnalysisAction | None = None,
     ) -> bool:
         """Submit missing lazy arrays and resume *continuation* after commit."""
         if self._pred_files is None:
             return False
         try:
-            items = self._data_load_items_for_target(
-                target, requested_capabilities, allow_partial=allow_partial
-            )
+            items = None
+            if (
+                deferred_action is not None
+                and not allow_partial
+                and isinstance(self._pred_files, PredictionFiles)
+            ):
+                resolved, plan = self.services.analysis.resolve_and_plan(
+                    deferred_action.request
+                )
+                if resolved.required_capabilities == requested_capabilities:
+                    items = list(plan.requirements)
+            if items is None:
+                items = self._data_load_items_for_target(
+                    target, requested_capabilities, allow_partial=allow_partial
+                )
         except ValueError as exc:
             QtWidgets.QMessageBox.warning(self, error_title, str(exc))
             return True
@@ -1007,7 +1000,12 @@ class GuiLoadingController:
         self._loading_data = True
         request_id = self._next_gui_job_request_id()
         self._data_load_request_id = request_id
-        self._active_data_continuation = continuation
+        if deferred_action is None:
+            # Compatibility for non-analysis callers; action entry points pass
+            # immutable DeferredAnalysisAction instances.
+            self._active_deferred_analysis = continuation
+        else:
+            self._active_deferred_analysis = deferred_action
         self._active_data_error_title = error_title
         self._set_prediction_load_controls_enabled(False)
         first = items[0]
@@ -1034,7 +1032,7 @@ class GuiLoadingController:
         requested_capabilities: frozenset[DataCapability],
         *,
         allow_partial: bool = False,
-    ) -> list[DataLoadItem]:
+    ) -> list[DataLoadRequirement]:
         if target is None:
             return []
         expected_ensemble = (
@@ -1110,7 +1108,7 @@ class GuiLoadingController:
         *,
         expected_ensemble: ensemble.EnsembleState | None,
         allow_partial: bool = False,
-    ) -> DataLoadItem | None:
+    ) -> DataLoadRequirement | None:
         data = model_state.data
         capability_attrs = {
             "pae": ("pae", "PAE"),
@@ -1140,7 +1138,7 @@ class GuiLoadingController:
         )
         rank = model_state.rank
         model = self._pred_files.model(rank)
-        return DataLoadItem(
+        return DataLoadRequirement(
             rank=rank,
             model_label=model.display_label,
             capabilities=frozenset(missing),
@@ -1190,7 +1188,7 @@ class GuiLoadingController:
             return
 
         self._active_load_handle = None
-        continuation = self._active_data_continuation
+        continuation = self._active_deferred_analysis
         self._on_data_load_progress(request_id, "Preparing requested action…")
         QtCore.QTimer.singleShot(
             0,
@@ -1210,7 +1208,7 @@ class GuiLoadingController:
                     return False
         return True
 
-    def _validate_lazy_loaded_item(self, item: DataLoadItem, data) -> None:
+    def _validate_lazy_loaded_item(self, item: DataLoadRequirement, data) -> None:
         fields = (
             ("pae", "pae", "PAE"),
             ("pde", "pde", "PDE"),
@@ -1232,7 +1230,9 @@ class GuiLoadingController:
         if not self._data_load_is_active(request_id):
             return
         try:
-            if continuation is not None:
+            if isinstance(continuation, DeferredAnalysisAction):
+                self.services.analysis.resume(continuation)
+            elif continuation is not None:
                 continuation()
         except Exception as exc:
             logger.exception("Could not resume the requested action")
@@ -1763,7 +1763,7 @@ class GuiLoadingController:
                 str(exc),
             )
             return
-        transaction = EnsembleViewerTransaction(
+        transaction = EnsembleActivationTransaction(
             request_id=request_id,
             prepared=prepared,
             previous_target=previous_target,
@@ -1781,7 +1781,7 @@ class GuiLoadingController:
 
     def _ensemble_transaction_is_active(
         self,
-        transaction: EnsembleViewerTransaction,
+        transaction: EnsembleActivationTransaction,
     ) -> bool:
         return bool(
             self._data_load_is_active(transaction.request_id)
@@ -1791,7 +1791,7 @@ class GuiLoadingController:
 
     def _load_next_ensemble_object(
         self,
-        transaction: EnsembleViewerTransaction,
+        transaction: EnsembleActivationTransaction,
         index: int,
     ) -> None:
         if not self._ensemble_transaction_is_active(transaction):
@@ -1826,7 +1826,7 @@ class GuiLoadingController:
 
     def _inspect_next_ensemble_object(
         self,
-        transaction: EnsembleViewerTransaction,
+        transaction: EnsembleActivationTransaction,
         index: int,
     ) -> None:
         if not self._ensemble_transaction_is_active(transaction):
@@ -1862,7 +1862,7 @@ class GuiLoadingController:
 
     def _align_and_group_ensemble(
         self,
-        transaction: EnsembleViewerTransaction,
+        transaction: EnsembleActivationTransaction,
     ) -> None:
         if not self._ensemble_transaction_is_active(transaction):
             return
@@ -1932,7 +1932,7 @@ class GuiLoadingController:
 
     def _commit_ensemble_transaction(
         self,
-        transaction: EnsembleViewerTransaction,
+        transaction: EnsembleActivationTransaction,
         rmsd: np.ndarray,
     ) -> None:
         if not self._ensemble_transaction_is_active(transaction):
@@ -1994,7 +1994,7 @@ class GuiLoadingController:
 
     def _restore_previous_ensemble_state(
         self,
-        transaction: EnsembleViewerTransaction,
+        transaction: EnsembleActivationTransaction,
     ) -> None:
         if transaction.previous_model_store is not None:
             self._restore_model_store(transaction.previous_model_store)
@@ -2017,7 +2017,7 @@ class GuiLoadingController:
 
     def _fail_ensemble_viewer_transaction(
         self,
-        transaction: EnsembleViewerTransaction,
+        transaction: EnsembleActivationTransaction,
         exc: Exception,
     ) -> None:
         if not self._ensemble_transaction_is_active(transaction):

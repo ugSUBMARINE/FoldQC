@@ -18,7 +18,7 @@ from .compat import (
 APP_TITLE = "FoldQC"
 
 
-class DependencyController:
+class DependencyWorkflow:
     """GUI-side optional dependency installation workflow."""
 
     def _initialize_dependency_controller(self) -> None:

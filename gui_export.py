@@ -13,7 +13,7 @@ from .token_map import TokenMap
 APP_TITLE = "FoldQC"
 
 
-class ExportController:
+class ExportWorkflow:
     def _export_csv(self) -> None:
         """Export token-level CSV rows for the current metric and target."""
         target = self._resolve_plot_target()
@@ -55,6 +55,9 @@ class ExportController:
                     spec.load_capabilities,
                     lambda: self._export_csv_to_path(path),
                     error_title=f"{APP_TITLE} - export error",
+                    deferred_action=self.services.analysis.capture_current(
+                        "export", export_path=path
+                    ),
                 ):
                     return
         try:
