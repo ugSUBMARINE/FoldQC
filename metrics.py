@@ -300,7 +300,7 @@ METRICS = MetricRegistry(
     (
         MetricSpec(
             "plddt_class",
-            "pLDDT — quality classes",
+            "pLDDT — classes",
             "pLDDT",
             frozenset({"plddt"}),
             "plddt",

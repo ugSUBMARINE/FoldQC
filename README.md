@@ -279,7 +279,7 @@ and made read-only before entering model state.
 
 | Color by option | How it is calculated | How to interpret it |
 | --- | --- | --- |
-| pLDDT - quality classes | Uses the provider-selected canonical pLDDT array. Applies the AlphaFold four-class coloring: very high >=90, high 70-90, low 50-70, very low <50. | Quick local-confidence overview. Blue/light blue regions are more reliable; yellow/orange regions should be treated cautiously. |
+| pLDDT - classes | Uses the provider-selected canonical pLDDT array. Applies the AlphaFold four-class coloring: very high >=90, high 70-90, low 50-70, very low <50. | Quick local-confidence overview. Blue/light blue regions are more reliable; yellow/orange regions should be treated cautiously. |
 | pLDDT - continuous | Uses the provider-selected canonical pLDDT array and colors local confidence as a continuous value. | Higher values indicate higher local model confidence. |
 | PAE - row mean | For token `i`, computes `mean(PAE[i, :])` over all other tokens. | Average uncertainty of the rest of the model when aligned on token `i`. Lower values indicate a better anchored token; higher values often mark flexible or poorly positioned regions. |
 | PAE - column mean | For token `j`, computes `mean(PAE[:, j])` over all alignment frames. | Average uncertainty in token `j`'s position from the perspective of all other tokens. Lower values indicate globally consistent placement. |

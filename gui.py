@@ -177,7 +177,7 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
         return (
             "FoldQC Quick Guide\n\n"
             "1. Overall local confidence\n"
-            "Use: pLDDT - quality classes\n"
+            "Use: pLDDT - classes\n"
             "Plot: Distribution or Line\n\n"
             "2. Ligand / binding-site confidence\n"
             f"Reference examples: {SELECTION_EXAMPLES['ligand']}\n"

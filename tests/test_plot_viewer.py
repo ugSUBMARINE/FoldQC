@@ -111,6 +111,14 @@ class _TargetCombo:
         return self.items[row] if 0 <= row < len(self.items) else None
 
 
+class _MetricCombo:
+    def __init__(self) -> None:
+        self.labels = ["group", "old pLDDT", "PAE"]
+
+    def setItemText(self, row: int, label: str) -> None:
+        self.labels[row] = label
+
+
 class _HistoryItem:
     def __init__(self) -> None:
         self.tooltip = ""
@@ -193,6 +201,16 @@ def test_active_ensemble_group_is_bold_and_italic_in_target_combo() -> None:
     assert combo.items[0].value.italic is False
     assert combo.items[1].value.bold is True
     assert combo.items[1].value.italic is True
+
+
+def test_context_metric_labels_update_existing_combo_rows() -> None:
+    combo = _MetricCombo()
+    view = QtDialogView.__new__(QtDialogView)
+    view.widgets = types.SimpleNamespace(_prop_combo=combo)
+
+    view.set_metric_labels(((1, "  pLDDT (structure B-factors)"),))
+
+    assert combo.labels == ["group", "  pLDDT (structure B-factors)", "PAE"]
 
 
 def test_recent_prediction_rendering_preserves_edit_text_and_blocks_activation() -> (

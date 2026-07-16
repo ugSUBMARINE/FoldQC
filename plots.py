@@ -316,7 +316,7 @@ def make_plddt_class_bar_plot(
     counts: Sequence[int],
     *,
     total: int | None = None,
-    title: str = "pLDDT quality classes",
+    title: str = "pLDDT classes",
     colors: Sequence[str] | None = None,
 ) -> plt.Figure:
     """Create a pLDDT quality-class count bar plot."""

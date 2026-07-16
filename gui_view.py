@@ -65,6 +65,11 @@ class QtDialogView:
         item = self.widgets._prop_combo.model().item(row)
         return bool(item is not None and item.flags() & ItemIsEnabled)
 
+    def set_metric_labels(self, labels: tuple[tuple[int, str], ...]) -> None:
+        combo = self.widgets._prop_combo
+        for row, label in labels:
+            combo.setItemText(row, label)
+
     def set_plot_availability(
         self, availability: tuple[tuple[str, bool, str], ...]
     ) -> None:
@@ -129,6 +134,7 @@ class QtDialogView:
                 self.select_object(state.selected_target)
         finally:
             combo.blockSignals(False)
+        self.set_metric_labels(state.metric_labels)
         for row, available in state.metric_availability:
             self.set_metric_available(row, available)
         self.set_plot_availability(state.plot_availability)

@@ -18,12 +18,18 @@ from .gui_services import (
     ViewerPort,
 )
 from .gui_state import PluginState
-from .loader_models import DataCapability
+from .loader_models import DataCapability, PlddtSource
 from .model_state import ModelState
 from .presentation import PresentationPort
 from .token_map import TokenMap
 
 TargetKind = Literal["none", "single", "ensemble_member", "ensemble_group"]
+
+_PLDDT_SOURCE_LABELS: dict[PlddtSource, str] = {
+    "structure_b_factor": "structure B-factors",
+    "provider_token": "provider token values",
+    "provider_atom_mean": "provider atom mean",
+}
 
 
 class ContextService:
@@ -223,6 +229,33 @@ class ContextService:
             None,
         )
 
+    def metric_labels(self) -> tuple[tuple[int, str], ...]:
+        """Return contextual labels for metrics whose provenance is user-visible."""
+        states = self.target_model_states()
+        sources = tuple(state.data.token_plddt_source for state in states)
+        if not sources:
+            source_label = None
+        elif any(source is None for source in sources):
+            source_label = "source not loaded"
+        elif len(set(sources)) > 1:
+            source_label = "mixed sources"
+        else:
+            source = sources[0]
+            source_label = None if source is None else _PLDDT_SOURCE_LABELS[source]
+
+        labels: list[tuple[int, str]] = []
+        for spec in metrics.METRICS:
+            if spec.value_unit != "plddt":
+                continue
+            row = self._metric_rows.get(spec.key)
+            if row is None:
+                continue
+            label = metrics.property_combo_label(spec)
+            if source_label is not None:
+                label = f"{label} ({source_label})"
+            labels.append((row, label))
+        return tuple(labels)
+
     def plot_availability(self) -> tuple[tuple[str, bool, str], ...]:
         selection = self._selection
         availability: list[tuple[str, bool, str]] = []
@@ -294,6 +327,7 @@ class ContextService:
         active = self._state.active_model_state
         return ContextViewState(
             metric_availability=self.metric_availability(),
+            metric_labels=self.metric_labels(),
             plot_availability=self.plot_availability(),
             reference_label=field.ref_label,
             reference_tooltip=field.ref_tooltip,

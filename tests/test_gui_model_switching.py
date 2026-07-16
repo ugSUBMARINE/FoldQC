@@ -928,3 +928,82 @@ def test_context_reports_ensemble_button_availability_and_tooltips() -> None:
     assert loaded.ensemble_tooltip == (
         "The ensemble for this prediction is already loaded."
     )
+
+
+def test_context_labels_plddt_metrics_with_selected_target_source() -> None:
+    presenter = FakePresenter()
+    view = FakeView()
+    state, _files = _state()
+    rows = {
+        "plddt_class": 1,
+        "plddt": 2,
+        "pae_row_mean": 4,
+        "ensemble_plddt_mean": 8,
+    }
+    context = ContextService(state, TargetListViewer(), presenter, view, rows)
+
+    labels = dict(context.derive_view_state(target_names=["model_0"]).metric_labels)
+
+    assert labels[1] == "  pLDDT — classes (provider token values)"
+    assert labels[2] == "  pLDDT — continuous (provider token values)"
+    assert labels[8] == "  Ensemble pLDDT mean (provider token values)"
+    assert 4 not in labels
+
+    state.active_model_state.data.token_plddt_source = "provider_atom_mean"
+    labels = dict(context.derive_view_state(target_names=["model_0"]).metric_labels)
+    assert labels[2] == "  pLDDT — continuous (provider atom mean)"
+
+
+def test_context_labels_ensemble_plddt_with_mixed_sources() -> None:
+    presenter = FakePresenter()
+    view = FakeView()
+    state, files = _state()
+    first_state = state.model_states[0]
+    second_model = ModelFiles(
+        1,
+        Path("/tmp/model_1.cif"),
+        "model 1",
+        "model_1",
+        capabilities=frozenset({"plddt"}),
+    )
+    files.models.append(second_model)
+    second_data = PredictionData(
+        "prediction",
+        1,
+        second_model.structure_path,
+        first_state.data.provider,
+        token_plddt=np.array([0.7, 0.6], dtype=np.float32),
+        token_plddt_source="structure_b_factor",
+    )
+    second_index = StructureIndex(
+        second_model.structure_path,
+        "cif",
+        first_state.token_map,
+        2,
+        (0, 1),
+        first_state.structure_index.structure_plddt,
+    )
+    state.model_states[1] = ModelState(1, second_data, second_index)
+    state.ensemble = ensemble.EnsembleState(
+        "prediction_ensemble",
+        (
+            ensemble.EnsembleMember(0, "model_0"),
+            ensemble.EnsembleMember(1, "model_1"),
+        ),
+        False,
+        np.zeros(2, dtype=np.float32),
+        np.zeros(2, dtype=np.float32),
+        np.zeros(2, dtype=np.float32),
+    )
+    context = ContextService(
+        state,
+        TargetListViewer(),
+        presenter,
+        view,
+        {"ensemble_plddt_mean": 8},
+    )
+    context.set_selection(ContextSelection(target_name="prediction_ensemble"))
+
+    labels = dict(context.derive_view_state().metric_labels)
+
+    assert labels[8] == "  Ensemble pLDDT mean (mixed sources)"
