@@ -119,24 +119,7 @@ class StructureIndex:
             raise ValueError(
                 f"Atom pLDDT array for {self.path.name} must not contain infinity."
             )
-
-        percentage = np.isfinite(values) & (values > 1.5)
-        if percentage.any():
-            values = values.copy()
-            values[percentage] /= 100.0
-
-        grouped: list[list[float]] = [[] for _ in self.token_map]
-        for token_idx, value in zip(self.atom_to_token, values, strict=True):
-            if token_idx is None:
-                continue
-            grouped[token_idx].append(float(value))
-        collapsed = []
-        for group in grouped:
-            finite_group = [value for value in group if np.isfinite(value)]
-            collapsed.append(
-                float(np.mean(finite_group)) if finite_group else float("nan")
-            )
-        return np.asarray(collapsed, dtype=np.float32)
+        return _collapse_atom_values(values, self.atom_to_token, len(self.token_map))
 
     def matches_path(self, structure_path: str | Path) -> bool:
         """Return whether *structure_path* identifies this indexed file."""
@@ -233,7 +216,6 @@ def _index_atoms(
 ) -> tuple[TokenMap, tuple[int | None, ...], np.ndarray]:
     tokens: list[TokenInfo] = []
     atom_to_token: list[int | None] = []
-    first_b_factors: list[float] = []
     polymer_tokens: dict[tuple[str, ResidueId], tuple[int, str]] = {}
     hetatm_tokens: set[tuple[str, ResidueId, str, str]] = set()
     residue_names: dict[tuple[str, ResidueId], str] = {}
@@ -272,7 +254,6 @@ def _index_atoms(
                     atom_name=atom.name,
                 )
             )
-            first_b_factors.append(atom.b_factor)
         else:
             key = residue_key
             existing = polymer_tokens.get(key)
@@ -289,16 +270,40 @@ def _index_atoms(
                         atom_name=None,
                     )
                 )
-                first_b_factors.append(atom.b_factor)
             else:
                 token_idx = existing[0]
         atom_to_token.append(token_idx)
 
-    structure_plddt = np.asarray(first_b_factors, dtype=np.float32)
-    percentage = np.isfinite(structure_plddt) & (structure_plddt > 1.5)
-    structure_plddt[percentage] /= 100.0
+    b_factors = np.asarray([atom.b_factor for atom in atoms], dtype=np.float32)
+    if np.isinf(b_factors).any():
+        raise ValueError("Structure B-factors must not contain infinity.")
+    structure_plddt = _collapse_atom_values(
+        b_factors, tuple(atom_to_token), len(tokens)
+    )
     return (
         TokenMap(tuple(tokens)),
         tuple(atom_to_token),
         structure_plddt,
+    )
+
+
+def _collapse_atom_values(
+    atom_values: np.ndarray,
+    atom_to_token: tuple[int | None, ...],
+    token_count: int,
+) -> np.ndarray:
+    """Normalize and average finite atom values into canonical token order."""
+    values = np.asarray(atom_values, dtype=np.float32)
+    percentage = np.isfinite(values) & (values > 1.5)
+    if percentage.any():
+        values = values.copy()
+        values[percentage] /= 100.0
+
+    grouped: list[list[float]] = [[] for _ in range(token_count)]
+    for token_idx, value in zip(atom_to_token, values, strict=True):
+        if token_idx is not None and np.isfinite(value):
+            grouped[token_idx].append(float(value))
+    return np.asarray(
+        [float(np.mean(group)) if group else float("nan") for group in grouped],
+        dtype=np.float32,
     )

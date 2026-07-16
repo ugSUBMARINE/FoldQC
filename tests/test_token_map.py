@@ -249,7 +249,7 @@ HETATM O O1 LIG 42 L A 30
         with self.assertRaises(FrozenInstanceError):
             index.path = Path("other.cif")  # type: ignore[misc]
 
-    def test_collapse_atom_plddt_averages_polymer_atoms_in_token_order(self) -> None:
+    def test_atom_plddt_sources_average_polymer_atoms_in_token_order(self) -> None:
         pdb = """\
 ATOM      1  N   ALA A   1      0.000   0.000   0.000  1.00 90.00           N
 ATOM      2  CA  ALA A   1      1.000   0.000   0.000  1.00 80.00           C
@@ -262,7 +262,7 @@ HETATM    3  C1  LIG L   2      2.000   0.000   0.000  1.00 70.00           C
 
         self.assertEqual(index.format, "pdb")
         self.assertEqual(index.atom_to_token, (0, 0, 1))
-        np.testing.assert_allclose(index.structure_plddt, [0.9, 0.7])
+        np.testing.assert_allclose(index.structure_plddt, [0.85, 0.7])
         np.testing.assert_allclose(
             index.collapse_atom_plddt(np.array([70.0, 90.0, 60.0])),
             [0.8, 0.6],

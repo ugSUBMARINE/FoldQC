@@ -103,7 +103,7 @@ class LoaderProviderTests(unittest.TestCase):
         self.assertEqual(files.structure_path(0).name, "model.cif")
         np.testing.assert_allclose(
             data.token_plddt,
-            np.array([0.8, 0.4], dtype=np.float32),
+            np.array([0.9, 0.4], dtype=np.float32),
         )
         self.assertEqual(data.token_plddt_source, "structure_b_factor")
 
@@ -165,7 +165,7 @@ class LoaderProviderTests(unittest.TestCase):
             data = load_prediction_data(scan_prediction_path(pred_dir))
 
         np.testing.assert_allclose(
-            data.token_plddt, np.array([0.8, 0.4], dtype=np.float32)
+            data.token_plddt, np.array([0.9, 0.4], dtype=np.float32)
         )
         self.assertEqual(data.token_plddt_source, "structure_b_factor")
 
@@ -236,7 +236,7 @@ class LoaderProviderTests(unittest.TestCase):
         np.testing.assert_allclose(data.pae, np.array([[0.0, 1.0], [1.0, 0.0]]))
         self.assertEqual(data.confidence.confidence_score, 0.91)
         np.testing.assert_allclose(
-            data.token_plddt, np.array([0.8, 0.4], dtype=np.float32)
+            data.token_plddt, np.array([0.9, 0.4], dtype=np.float32)
         )
         self.assertEqual(data.token_plddt_source, "structure_b_factor")
 
@@ -283,7 +283,7 @@ class LoaderProviderTests(unittest.TestCase):
         self.assertEqual(data.confidence.confidence_score, 0.95)
         self.assertEqual(data.confidence.ptm, 0.9)
         np.testing.assert_allclose(
-            data.token_plddt, np.array([0.8, 0.4], dtype=np.float32)
+            data.token_plddt, np.array([0.9, 0.4], dtype=np.float32)
         )
         self.assertEqual(data.token_plddt_source, "structure_b_factor")
 
@@ -403,7 +403,7 @@ class LoaderProviderTests(unittest.TestCase):
         )
         self.assertIs(data.confidence.has_clash, False)
         np.testing.assert_allclose(
-            data.token_plddt, np.array([0.8, 0.4], dtype=np.float32)
+            data.token_plddt, np.array([0.9, 0.4], dtype=np.float32)
         )
         self.assertEqual(data.token_plddt_source, "structure_b_factor")
 
@@ -505,7 +505,7 @@ class LoaderProviderTests(unittest.TestCase):
         )
         self.assertIsNone(data.pae)
         np.testing.assert_allclose(
-            data.token_plddt, np.array([0.8, 0.4], dtype=np.float32)
+            data.token_plddt, np.array([0.9, 0.4], dtype=np.float32)
         )
         self.assertEqual(data.token_plddt_source, "structure_b_factor")
 
@@ -754,7 +754,7 @@ class LoaderProviderTests(unittest.TestCase):
             data = load_prediction_data(scan_prediction_path(root), load_pae=False)
 
         np.testing.assert_allclose(
-            data.token_plddt, np.array([0.8, 0.4], dtype=np.float32)
+            data.token_plddt, np.array([0.9, 0.4], dtype=np.float32)
         )
         self.assertEqual(data.token_plddt_source, "structure_b_factor")
 
@@ -871,7 +871,7 @@ class LoaderProviderTests(unittest.TestCase):
         )
         self.assertEqual(files.models[0].confidence_path.name, "full_data_0.json")
         np.testing.assert_allclose(
-            data.token_plddt, np.array([0.8, 0.4], dtype=np.float32)
+            data.token_plddt, np.array([0.9, 0.4], dtype=np.float32)
         )
         self.assertEqual(data.token_plddt_source, "structure_b_factor")
 
@@ -1235,7 +1235,7 @@ class LoaderProviderTests(unittest.TestCase):
         self.assertEqual(files.name, "target")
         np.testing.assert_allclose(data.confidence.chain_ptm, [0.9, 0.8])
         np.testing.assert_allclose(
-            data.token_plddt, np.array([0.8, 0.4], dtype=np.float32)
+            data.token_plddt, np.array([0.9, 0.4], dtype=np.float32)
         )
         self.assertEqual(data.token_plddt_source, "structure_b_factor")
 

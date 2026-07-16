@@ -260,13 +260,14 @@ selection will color and calls out missing requirements such as a reference
 selection or unloaded ensemble.
 
 Each provider resolves one canonical token-level pLDDT array when it loads a
-model. Boltz uses its token NPZ when present. AlphaFold 3 and Protenix use their
-per-atom confidence arrays when present and average polymer atoms by residue in
-prediction token order (ligand heavy atoms remain individual tokens). Standalone
-structures, Chai, Boltz Lab, and Boltz API use structure B-factors. Missing
-provider arrays fall back to structure B-factors; malformed explicit arrays are
-reported as errors. Coloring, plots, exports, alignment, and ensemble consensus
-all consume this same canonical array. This follows AlphaFold 3's documented
+model. Boltz uses its token NPZ when present. All atom-level sources, including
+provider confidence arrays and structure B-factors, average finite polymer atom
+values by residue in prediction token order; ligand heavy atoms remain individual
+tokens. Standalone structures, Chai, Boltz Lab, and Boltz API use structure
+B-factors. Missing provider arrays fall back to structure B-factors; malformed
+explicit arrays are reported as errors. Coloring, plots, exports, alignment, and
+ensemble consensus all consume this same canonical array. This follows AlphaFold
+3's documented
 [`atom_plddts` per-atom semantics](https://github.com/google-deepmind/alphafold3/blob/main/docs/output.md#metrics-in-confidences-json).
 
 PAE, PDE, and interaction-probability availability is tracked per ranked model,
