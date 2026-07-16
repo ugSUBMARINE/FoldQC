@@ -178,6 +178,36 @@ def test_dialog_and_application_have_no_dynamic_workflow_bridge() -> None:
     assert not (root / "gui_plots.py").exists()
 
 
+def test_native_browse_paths_remain_provisional_until_lifecycle_commit() -> None:
+    tree = ast.parse(Path(__file__).resolve().parents[1].joinpath("gui.py").read_text())
+    dialog = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "FoldQCPluginDialog"
+    )
+    methods = {
+        node.name: node
+        for node in dialog.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name in {"_browse_directory", "_browse_file"}
+    }
+
+    assert methods.keys() == {"_browse_directory", "_browse_file"}
+    for method in methods.values():
+        calls = [node for node in ast.walk(method) if isinstance(node, ast.Call)]
+        assert not any(
+            isinstance(call.func, ast.Attribute) and call.func.attr == "setText"
+            for call in calls
+        )
+        assert any(
+            isinstance(call.func, ast.Attribute)
+            and call.func.attr == "load_prediction"
+            and len(call.args) == 1
+            and ast.unparse(call.args[0]) == "path"
+            for call in calls
+        )
+
+
 def test_plot_actions_are_parented_to_the_real_qt_menu() -> None:
     root = Path(__file__).resolve().parents[1]
     tree = ast.parse((root / "gui_layout.py").read_text())

@@ -423,7 +423,10 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
             self.widgets._dir_edit.text() or str(Path.home()),
         )
         if path:
-            self.widgets._dir_edit.setText(path)
+            # Keep the selected path provisional.  The lifecycle view writes the
+            # canonical display path only after the prediction commits, so a
+            # cancelled candidate choice or failed load preserves the previous
+            # entry (and the last path persisted by its textChanged signal).
             self.services.lifecycle.load_prediction(path)
         else:
             self._raise_after_native_dialog()
@@ -438,7 +441,8 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
         )
         path = result[0] if isinstance(result, tuple) else result
         if path:
-            self.widgets._dir_edit.setText(path)
+            # Archives can also contain multiple prediction candidates.  As for
+            # folders, leave the current entry untouched until a load commits.
             self.services.lifecycle.load_prediction(path)
         else:
             self._raise_after_native_dialog()
