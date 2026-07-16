@@ -3,16 +3,23 @@
 from __future__ import annotations
 
 import logging
+import os
+from dataclasses import dataclass
+from pathlib import Path
 
+from . import metrics
 from .analysis import AnalysisRequest, ColorOptions, DeferredAnalysisAction
 from .context_service import ContextService
+from .ensemble import EnsembleState
 from .gui_services import (
     AnalysisSubmissionPort,
     ContextSelection,
+    ContextViewState,
     DialogViewPort,
     JobRunner,
     LifecycleUiUpdate,
     ModelChoice,
+    ObjectPaintMapping,
     OperationCoordinatorPort,
     OperationLease,
     SessionPort,
@@ -31,9 +38,28 @@ from .lifecycle_support import (
     _scan_and_load_initial_prediction,
 )
 from .loader_models import PredictionDiscovery, PredictionFiles
-from .presentation import Notice, PresentationPort, SelectionItem, SelectionRequest
+from .presentation import (
+    ChoiceOption,
+    ChoiceRequest,
+    Notice,
+    PresentationPort,
+    SelectionItem,
+    SelectionRequest,
+)
+from .session import normalize_prediction_path
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class _PredictionReplacementSnapshot:
+    pred_files: PredictionFiles | None
+    model_store: ModelStoreSnapshot
+    ensemble: EnsembleState | None
+    paint_mappings: dict[tuple[str, str], ObjectPaintMapping]
+    context_selection: ContextSelection
+    context_state: ContextViewState
+    display_path: str
 
 
 class PredictionLifecycleService:
@@ -63,6 +89,7 @@ class PredictionLifecycleService:
         self._preferred_rank: int | None = None
         self._preferred_target: str | None = None
         self._discovery: PredictionDiscovery | None = None
+        self._display_path = ""
 
     @property
     def is_loading(self) -> bool:
@@ -120,8 +147,50 @@ class PredictionLifecycleService:
         preferred_rank: int | None = None,
         preferred_target: str | None = None,
     ) -> None:
-        path = str(path).strip()
+        self._start_prediction_load(
+            path,
+            from_history=False,
+            preferred_rank=preferred_rank,
+            preferred_target=preferred_target,
+        )
+
+    def load_recent_prediction(self, path: str) -> None:
+        """Load one persisted MRU path, offering removal when it is stale."""
+        normalized = normalize_prediction_path(path)
+        if (
+            self._state.pred_files is not None
+            and normalized
+            and os.path.normcase(normalized) == os.path.normcase(self._display_path)
+        ):
+            self._restore_display_path()
+            return
+        self._start_prediction_load(normalized, from_history=True)
+
+    def _start_prediction_load(
+        self,
+        path: str,
+        *,
+        from_history: bool,
+        preferred_rank: int | None = None,
+        preferred_target: str | None = None,
+    ) -> None:
+        path = normalize_prediction_path(path)
         if not path:
+            self._restore_display_path()
+            return
+        if not Path(path).exists():
+            self._restore_display_path()
+            if from_history:
+                self._handle_missing_recent_prediction(path)
+            else:
+                self._presenter.present_notice(
+                    Notice(
+                        "prediction_path_missing",
+                        f"The prediction path does not exist:\n{path}",
+                        severity="error",
+                        title=f"{APP_TITLE} - error",
+                    )
+                )
             return
         lease = self._operations.begin(
             "prediction",
@@ -131,6 +200,7 @@ class PredictionLifecycleService:
             on_cancel=self._cancel_pending_load,
         )
         if lease is None:
+            self._restore_display_path()
             return
         self._preferred_rank = preferred_rank
         self._preferred_target = preferred_target
@@ -143,10 +213,47 @@ class PredictionLifecycleService:
         )
         self._operations.attach(lease, handle)
 
+    def _handle_missing_recent_prediction(self, path: str) -> None:
+        selected = self._presenter.choose(
+            ChoiceRequest(
+                "missing_recent_prediction",
+                f"{APP_TITLE} - missing recent prediction",
+                "This recent prediction no longer exists:\n\n"
+                f"{path}\n\nKeep it in the recent-prediction list?",
+                (
+                    ChoiceOption("keep", "Keep", role="reject"),
+                    ChoiceOption(
+                        "remove",
+                        "Remove from history",
+                        role="destructive",
+                    ),
+                ),
+                default_key="keep",
+            )
+        )
+        if selected != "remove":
+            return
+        try:
+            recent = self._session.remove_recent_prediction(path)
+            self._view.apply_lifecycle(LifecycleUiUpdate(recent_predictions=recent))
+        except Exception as exc:
+            logger.exception("Could not remove a recent prediction")
+            self._presenter.present_notice(
+                Notice(
+                    "prediction_history_save_failed",
+                    f"Could not update the recent-prediction list: {exc}",
+                    severity="warning",
+                )
+            )
+
+    def _restore_display_path(self) -> None:
+        self._view.apply_lifecycle(LifecycleUiUpdate(display_path=self._display_path))
+
     def _cancel_pending_load(self) -> None:
         self._preferred_rank = None
         self._preferred_target = None
         self._discovery = None
+        self._restore_display_path()
 
     def _on_progress(self, request_id: int, label: str) -> None:
         lease = self._operations.active
@@ -190,6 +297,7 @@ class PredictionLifecycleService:
                 self._preferred_rank = None
                 self._preferred_target = None
                 self._operations.finish(lease)
+                self._restore_display_path()
                 return
             candidate = candidates[int(selected)]
         self._discovery = discovery
@@ -218,13 +326,24 @@ class PredictionLifecycleService:
             self._job_runner.dispose(value)
             self._fail(lease, "The prediction worker returned an unexpected result.")
             return
-        new_files = value.pred_files
-        model = new_files.model(value.rank)
-        object_name = model.object_name
-        previous_files = self._state.pred_files
-        previous_store = self.capture_model_store()
-        previous_ensemble = self._state.ensemble
-        previous_mappings = self._viewer.capture_paint_mappings()
+        try:
+            new_files = value.pred_files
+            model = new_files.model(value.rank)
+            object_name = model.object_name
+            new_display_path = normalize_prediction_path(value.display_path)
+            snapshot = _PredictionReplacementSnapshot(
+                self._state.pred_files,
+                self.capture_model_store(),
+                self._state.ensemble,
+                self._viewer.capture_paint_mappings(),
+                self._context.selection,
+                self._context.derive_view_state(),
+                self._display_path,
+            )
+        except Exception as exc:
+            value.close()
+            self._fail(lease, str(exc))
+            return
         created = False
         preferred_target = self._preferred_target
         self._preferred_rank = None
@@ -252,7 +371,7 @@ class PredictionLifecycleService:
                 LifecycleUiUpdate(
                     selected_rank=value.rank,
                     selected_target=context_state.selected_target,
-                    display_path=str(value.display_path),
+                    display_path=new_display_path,
                     model_choices=tuple(
                         ModelChoice(item.rank, item.display_label)
                         for item in self._state.pred_files.models
@@ -260,26 +379,71 @@ class PredictionLifecycleService:
                     target_choices=context_state.target_choices,
                 )
             )
+            self._display_path = new_display_path
             self._operations.finish(lease)
             if created:
                 self._submit_default_coloring(object_name)
-            if not self._session.restoring:
-                self._session.save()
-            if previous_files is not None:
-                self._job_runner.dispose(previous_files)
+            try:
+                recent = self._session.record_recent_prediction(self._display_path)
+                self._view.apply_lifecycle(LifecycleUiUpdate(recent_predictions=recent))
+            except Exception as exc:
+                logger.exception("Could not persist the recent prediction")
+                self._presenter.present_notice(
+                    Notice(
+                        "prediction_history_save_failed",
+                        f"The prediction loaded, but its history could not be saved: {exc}",
+                        severity="warning",
+                    )
+                )
+            if snapshot.pred_files is not None:
+                try:
+                    self._job_runner.dispose(snapshot.pred_files)
+                except Exception:
+                    logger.exception("Could not dispose the previous prediction")
         except Exception as exc:
-            if self._state.pred_files is not previous_files:
-                current = self._state.pred_files
-                self._state.pred_files = previous_files
-                if current is not None:
+            self._rollback_replacement(snapshot, value, object_name, created)
+            self._fail(lease, str(exc))
+
+    def _rollback_replacement(
+        self,
+        snapshot: _PredictionReplacementSnapshot,
+        value: InitialLoadResult,
+        object_name: str,
+        created: bool,
+    ) -> None:
+        self._display_path = snapshot.display_path
+        if self._state.pred_files is not snapshot.pred_files:
+            current = self._state.pred_files
+            self._state.pred_files = snapshot.pred_files
+            if current is not None:
+                try:
                     self._job_runner.dispose(current)
-            self.restore_model_store(previous_store)
-            self._state.ensemble = previous_ensemble
-            self._viewer.restore_paint_mappings(previous_mappings)
+                except Exception:
+                    logger.exception("Could not dispose the failed prediction")
+        try:
+            self.restore_model_store(snapshot.model_store)
+            self._state.ensemble = snapshot.ensemble
+        except Exception:
+            logger.exception("Could not restore the previous prediction data")
+        try:
+            self._viewer.restore_paint_mappings(snapshot.paint_mappings)
             if created:
                 self._viewer.delete_names((object_name,))
+        except Exception:
+            logger.exception("Could not restore the previous viewer state")
+        try:
+            self._context.set_selection(snapshot.context_selection)
+            self._view.apply_context(snapshot.context_state)
+        except Exception:
+            logger.exception("Could not restore the previous prediction context")
+        try:
+            self._restore_display_path()
+        except Exception:
+            logger.exception("Could not restore the previous prediction path")
+        try:
             value.close()
-            self._fail(lease, str(exc))
+        except Exception:
+            logger.exception("Could not close the failed prediction result")
 
     def select_model(self, rank: int) -> None:
         files = self._state.pred_files
@@ -339,8 +503,6 @@ class PredictionLifecycleService:
         )
         self._state.active_model_rank = model_state.rank
         self._context.refresh_objects(model.object_name)
-        if not self._session.restoring:
-            self._session.save()
         return created
 
     def _submit_default_coloring(self, object_name: str) -> None:
@@ -351,7 +513,7 @@ class PredictionLifecycleService:
                     AnalysisRequest(
                         "color",
                         object_name,
-                        "plddt_class",
+                        metrics.DEFAULT_METRIC_KEY,
                         ui_revision=self._analysis.ui_revision,
                     ),
                     ColorOptions("viridis"),
@@ -377,6 +539,7 @@ class PredictionLifecycleService:
         if discovery is not None:
             self._job_runner.dispose(discovery)
         self._operations.finish(lease)
+        self._restore_display_path()
         self._presenter.present_notice(
             Notice(
                 "prediction_load_failed",

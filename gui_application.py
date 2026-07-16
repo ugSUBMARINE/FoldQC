@@ -111,7 +111,6 @@ class GuiApplicationServices:
             self.operations,
             self.lifecycle,
             self.context,
-            session,
         )
 
     def close(self) -> None:

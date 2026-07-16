@@ -9,8 +9,6 @@ from .gui_services import PaintTarget, ViewerPort
 from .presentation import PresentationPort
 from .viewer_transactions import ColorbarChange, PaintTransaction
 
-APP_TITLE = "FoldQC"
-
 
 class ColoringCoordinator:
     """Apply already-computed values through one compensating transaction."""
@@ -89,7 +87,7 @@ class ColoringCoordinator:
             )
             transaction = PaintTransaction(self._viewer, tuple(targets), colorbar)
             if kind == "continuous":
-                result = transaction.execute(
+                transaction.execute(
                     lambda: self._viewer.paint_continuous(
                         targets,
                         palette=options.palette_key,
@@ -100,11 +98,11 @@ class ColoringCoordinator:
                     )
                 )
             elif kind == "categorical":
-                result = transaction.execute(
+                transaction.execute(
                     lambda: self._viewer.paint_categorical(targets, rebuild=False)
                 )
             else:
-                result = transaction.execute(
+                transaction.execute(
                     lambda: self._viewer.paint_plddt_classes(targets, rebuild=False)
                 )
         except Exception:
@@ -112,16 +110,6 @@ class ColoringCoordinator:
             raise
 
         label = resolved.target.label
-        if kind == "plddt_class":
-            self._presenter.set_window_title(
-                f"{APP_TITLE} - pLDDT quality classes on {label}"
-            )
-        else:
-            self._presenter.set_window_title(
-                f"{APP_TITLE} - {spec.key} on {label} "
-                f"[{result.vmin:.2f}, {result.vmax:.2f}]"
-            )
-
         if len(entries) == 1 or spec.ensemble_level:
             first = entries[0]
             self._context.show_statistics_for_single(

@@ -31,13 +31,20 @@ from FoldQC.gui_services import (
     ContextViewState,
     DataAcquisitionOutcome,
     LifecycleUiUpdate,
+    ModelChoice,
     TargetChoice,
 )
 from FoldQC.gui_state import PluginState
-from FoldQC.lifecycle_support import DataLoadBatchResult, InitialLoadResult
+from FoldQC.lifecycle_support import (
+    DataLoadBatchResult,
+    InitialLoadResult,
+    _session_path_for_candidate,
+)
 from FoldQC.loader_models import (
     ModelFiles,
+    PredictionCandidate,
     PredictionData,
+    PredictionDiscovery,
     PredictionFiles,
     ProviderInfo,
 )
@@ -55,16 +62,26 @@ class FakePresenter:
         self.finished: list[str] = []
         self.plots: list[object] = []
         self.cancel_callbacks: list[object] = []
+        self.choice_requests: list[object] = []
+        self.selection_requests: list[object] = []
+        self.choice_response = "yes"
+        self.selection_response: str | None = "default"
         self.closed = False
 
     def present_notice(self, notice: Notice) -> None:
         self.notices.append(notice)
 
-    def choose(self, _request):
-        return "yes"
+    def choose(self, request):
+        self.choice_requests.append(request)
+        return self.choice_response
 
     def select_item(self, request):
-        return request.default_key
+        self.selection_requests.append(request)
+        return (
+            request.default_key
+            if self.selection_response == "default"
+            else self.selection_response
+        )
 
     def start_progress(self, request, on_cancel=None) -> None:
         self.progress.append((request.operation_id, request.label))
@@ -75,9 +92,6 @@ class FakePresenter:
 
     def finish_progress(self, operation_id: str) -> None:
         self.finished.append(operation_id)
-
-    def set_window_title(self, _title: str) -> None:
-        pass
 
     def show_statistics(self, _text: str) -> None:
         pass
@@ -348,12 +362,21 @@ class FakeDependencies:
 
 
 class FakeSession:
-    restoring = False
+    def __init__(self) -> None:
+        self.recent: tuple[str, ...] = ()
 
     def restore(self):
         raise AssertionError("composition close attempted session restoration")
 
-    def save(self) -> None:
+    def record_recent_prediction(self, path) -> tuple[str, ...]:
+        self.recent = (str(path), *tuple(item for item in self.recent if item != path))
+        return self.recent
+
+    def remove_recent_prediction(self, path) -> tuple[str, ...]:
+        self.recent = tuple(item for item in self.recent if item != path)
+        return self.recent
+
+    def save_geometry(self) -> None:
         pass
 
 
@@ -364,6 +387,9 @@ class LifecycleContext:
     def set_selection(self, selection: ContextSelection) -> None:
         self.selection = selection
 
+    def derive_view_state(self) -> ContextViewState:
+        return ContextViewState(selected_target=self.selection.target_name or None)
+
     def refresh_objects(self, preferred_target: str | None = None) -> ContextViewState:
         target = preferred_target or "model_0"
         return ContextViewState(
@@ -372,10 +398,26 @@ class LifecycleContext:
         )
 
 
+class FailingLifecycleContext(LifecycleContext):
+    def derive_view_state(self) -> ContextViewState:
+        return ContextViewState(
+            model_choices=(ModelChoice(0, "old model"),),
+            target_choices=(TargetChoice("old_model", "single"),),
+            selected_rank=0,
+            selected_target="old_model",
+            confidence_text="old confidence",
+        )
+
+    def refresh_objects(self, preferred_target: str | None = None) -> ContextViewState:
+        raise RuntimeError("context commit failed")
+
+
 class LifecycleViewer:
     def __init__(self, *, created: bool) -> None:
         self.created = created
         self.cleared = False
+        self.restored = None
+        self.deleted: list[tuple[str, ...]] = []
 
     def ensure_structure_object(self, _path, _name: str, *, zoom: bool = True) -> bool:
         return self.created
@@ -384,13 +426,13 @@ class LifecycleViewer:
         return {}
 
     def restore_paint_mappings(self, _mappings) -> None:
-        pass
+        self.restored = _mappings
 
     def clear_paint_mappings(self) -> None:
         self.cleared = True
 
     def delete_names(self, _names) -> None:
-        pass
+        self.deleted.append(tuple(_names))
 
 
 class TargetListViewer:
@@ -520,6 +562,23 @@ def test_typed_lifecycle_and_context_updates_are_immutable_values() -> None:
     assert lifecycle.display_path == "/tmp/prediction"
 
 
+def test_history_path_uses_candidate_folder_but_preserves_archive_source(
+    tmp_path: Path,
+) -> None:
+    provider = ProviderInfo("test", "Test")
+    root = tmp_path / "root"
+    candidate_path = root / "selected_prediction"
+    candidate_path.mkdir(parents=True)
+    candidate = PredictionCandidate(candidate_path, provider, "selected_prediction")
+    directory_discovery = PredictionDiscovery(root, (candidate,))
+    assert _session_path_for_candidate(directory_discovery, candidate) == candidate_path
+
+    archive = tmp_path / "predictions.zip"
+    archive.touch()
+    archive_discovery = PredictionDiscovery(archive, (candidate,))
+    assert _session_path_for_candidate(archive_discovery, candidate) == archive
+
+
 def test_application_close_releases_adapters_and_prediction_owner_in_order() -> None:
     state, files = _state()
     events: list[str] = []
@@ -558,6 +617,7 @@ def test_initial_prediction_colors_only_a_newly_created_viewer_object() -> None:
         runner = DeferredRunner()
         operations = GuiOperationCoordinator(presenter, view)
         analysis = RecordingAnalysisSubmission(operations)
+        session = FakeSession()
         service = PredictionLifecycleService(
             state,
             LifecycleViewer(created=created),
@@ -566,7 +626,7 @@ def test_initial_prediction_colors_only_a_newly_created_viewer_object() -> None:
             LifecycleContext(),
             operations,
             runner,
-            FakeSession(),
+            session,
             analysis,
         )
         lease = operations.begin("prediction", title="Loading", label="Prediction")
@@ -588,6 +648,238 @@ def test_initial_prediction_colors_only_a_newly_created_viewer_object() -> None:
             assert action.request.ui_revision == analysis.ui_revision
         else:
             assert analysis.actions == []
+        expected_path = str(Path("/tmp/prediction").absolute())
+        assert session.recent == (expected_path,)
+        assert view.lifecycle[-1].recent_predictions == (expected_path,)
+
+
+def test_missing_recent_prediction_restores_path_and_can_be_removed(
+    tmp_path: Path,
+) -> None:
+    state = PluginState()
+    presenter = FakePresenter()
+    presenter.choice_response = "remove"
+    view = FakeView()
+    runner = DeferredRunner()
+    operations = GuiOperationCoordinator(presenter, view)
+    session = FakeSession()
+    missing = str(tmp_path / "missing")
+    session.recent = (missing,)
+    service = PredictionLifecycleService(
+        state,
+        LifecycleViewer(created=False),
+        presenter,
+        view,
+        LifecycleContext(),
+        operations,
+        runner,
+        session,
+        RecordingAnalysisSubmission(operations),
+    )
+    service._display_path = "/tmp/previous"
+
+    service.load_recent_prediction(missing)
+
+    assert view.lifecycle[-2].display_path == "/tmp/previous"
+    assert view.lifecycle[-1].recent_predictions == ()
+    assert session.recent == ()
+    assert presenter.choice_requests[-1].code == "missing_recent_prediction"
+    assert not operations.is_busy
+    assert runner.task is None
+
+
+def test_missing_recent_prediction_can_be_kept(tmp_path: Path) -> None:
+    presenter = FakePresenter()
+    presenter.choice_response = "keep"
+    view = FakeView()
+    runner = DeferredRunner()
+    operations = GuiOperationCoordinator(presenter, view)
+    session = FakeSession()
+    missing = str(tmp_path / "missing")
+    session.recent = (missing,)
+    service = PredictionLifecycleService(
+        PluginState(),
+        LifecycleViewer(created=False),
+        presenter,
+        view,
+        LifecycleContext(),
+        operations,
+        runner,
+        session,
+        RecordingAnalysisSubmission(operations),
+    )
+
+    service.load_recent_prediction(missing)
+
+    assert session.recent == (missing,)
+    assert view.lifecycle[-1].display_path == ""
+    assert all(update.recent_predictions is None for update in view.lifecycle)
+
+
+def test_missing_typed_path_reports_error_without_history_prompt(
+    tmp_path: Path,
+) -> None:
+    presenter = FakePresenter()
+    view = FakeView()
+    runner = DeferredRunner()
+    operations = GuiOperationCoordinator(presenter, view)
+    service = PredictionLifecycleService(
+        PluginState(),
+        LifecycleViewer(created=False),
+        presenter,
+        view,
+        LifecycleContext(),
+        operations,
+        runner,
+        FakeSession(),
+        RecordingAnalysisSubmission(operations),
+    )
+
+    service.load_prediction(str(tmp_path / "missing"))
+
+    assert presenter.notices[-1].code == "prediction_path_missing"
+    assert presenter.choice_requests == []
+    assert view.lifecycle[-1].display_path == ""
+
+
+def test_selecting_active_recent_prediction_is_a_noop() -> None:
+    state, _files = _state()
+    presenter = FakePresenter()
+    view = FakeView()
+    runner = DeferredRunner()
+    operations = GuiOperationCoordinator(presenter, view)
+    service = PredictionLifecycleService(
+        state,
+        LifecycleViewer(created=False),
+        presenter,
+        view,
+        LifecycleContext(),
+        operations,
+        runner,
+        FakeSession(),
+        RecordingAnalysisSubmission(operations),
+    )
+    active_path = str(Path("/tmp/prediction").absolute())
+    service._display_path = active_path
+
+    service.load_recent_prediction(active_path)
+
+    assert runner.task is None
+    assert not operations.is_busy
+    assert view.lifecycle[-1].display_path == active_path
+    assert presenter.choice_requests == []
+
+
+def test_candidate_cancellation_restores_committed_path(tmp_path: Path) -> None:
+    presenter = FakePresenter()
+    presenter.selection_response = None
+    view = FakeView()
+    runner = DeferredRunner()
+    operations = GuiOperationCoordinator(presenter, view)
+    service = PredictionLifecycleService(
+        PluginState(),
+        LifecycleViewer(created=False),
+        presenter,
+        view,
+        LifecycleContext(),
+        operations,
+        runner,
+        FakeSession(),
+        RecordingAnalysisSubmission(operations),
+    )
+    service._display_path = "/tmp/previous"
+    provider = ProviderInfo("test", "Test")
+    discovery = PredictionDiscovery(
+        tmp_path,
+        (
+            PredictionCandidate(tmp_path / "a", provider, "a"),
+            PredictionCandidate(tmp_path / "b", provider, "b"),
+        ),
+    )
+
+    service.load_prediction(str(tmp_path))
+    runner.deliver(discovery)
+
+    assert not operations.is_busy
+    assert view.lifecycle[-1].display_path == "/tmp/previous"
+    assert presenter.selection_requests[-1].code == "prediction_candidate"
+
+
+def test_progress_cancellation_restores_committed_path(tmp_path: Path) -> None:
+    presenter = FakePresenter()
+    view = FakeView()
+    runner = DeferredRunner()
+    operations = GuiOperationCoordinator(presenter, view)
+    service = PredictionLifecycleService(
+        PluginState(),
+        LifecycleViewer(created=False),
+        presenter,
+        view,
+        LifecycleContext(),
+        operations,
+        runner,
+        FakeSession(),
+        RecordingAnalysisSubmission(operations),
+    )
+    service._display_path = "/tmp/previous"
+
+    service.load_prediction(str(tmp_path))
+    cancel = presenter.cancel_callbacks[-1]
+    assert cancel is not None
+    cancel()
+
+    assert not operations.is_busy
+    assert runner.handle.abandoned
+    assert view.lifecycle[-1].display_path == "/tmp/previous"
+
+
+def test_commit_failure_restores_previous_prediction_context_and_path() -> None:
+    state, old_files = _state()
+    old_model_state = state.model_states[0]
+    _new_state, new_files = _state()
+    presenter = FakePresenter()
+    view = FakeView()
+    runner = DeferredRunner()
+    operations = GuiOperationCoordinator(presenter, view)
+    viewer = LifecycleViewer(created=True)
+    context = FailingLifecycleContext()
+    context.selection = ContextSelection(target_name="old_model", metric_key="plddt")
+    session = FakeSession()
+    service = PredictionLifecycleService(
+        state,
+        viewer,
+        presenter,
+        view,
+        context,
+        operations,
+        runner,
+        session,
+        RecordingAnalysisSubmission(operations),
+    )
+    service._display_path = "/tmp/old_prediction"
+    lease = operations.begin("prediction", title="Loading", label="Prediction")
+    assert lease is not None
+
+    service._on_initial_result(
+        lease.request_id,
+        InitialLoadResult(
+            new_files,
+            _new_state.model_states[0],
+            Path("/tmp/new_prediction"),
+        ),
+    )
+
+    assert state.pred_files is old_files
+    assert state.model_states[0] is old_model_state
+    assert state.active_model_rank == 0
+    assert context.selection.target_name == "old_model"
+    assert view.context[-1].confidence_text == "old confidence"
+    assert view.lifecycle[-1].display_path == "/tmp/old_prediction"
+    assert viewer.restored == {}
+    assert viewer.deleted == [("model_0",)]
+    assert new_files in runner.disposed
+    assert session.recent == ()
+    assert presenter.notices[-1].code == "prediction_load_failed"
 
 
 def test_context_reports_ensemble_button_availability_and_tooltips() -> None:

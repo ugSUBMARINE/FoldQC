@@ -51,6 +51,11 @@ else:
     ScrollBarAsNeeded = QtCore.Qt.ScrollBarAsNeeded
     WindowCloseButtonHint = QtCore.Qt.WindowCloseButtonHint
 
+# Text elision used by the prediction-history popup.  Left elision retains the
+# final folder or filename when older Qt styles constrain an item's paint rect.
+_TextElideMode = getattr(QtCore.Qt, "TextElideMode", QtCore.Qt)
+ElideLeft = getattr(_TextElideMode, "ElideLeft", 0)
+
 # QAction: lives in QtWidgets (Qt5) and moved to QtGui (Qt6)
 if QT_MAJOR >= 6:
     QAction = QtGui.QAction
@@ -64,6 +69,12 @@ if QT_MAJOR >= 6:
     FormFieldGrowthPolicy = QtWidgets.QFormLayout.FieldGrowthPolicy
 else:
     FormFieldGrowthPolicy = QtWidgets.QFormLayout
+
+# QComboBox insert policy for editable, externally managed history controls.
+_QComboBox = getattr(QtWidgets, "QComboBox", object)
+ComboBoxNoInsert = getattr(
+    getattr(_QComboBox, "InsertPolicy", _QComboBox), "NoInsert", 0
+)
 
 # Qt.ItemIsEnabled flag
 # Qt5: QtCore.Qt.ItemIsEnabled

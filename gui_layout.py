@@ -6,12 +6,33 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 
 from . import metrics
-from .compat import FormFieldGrowthPolicy, QAction, QtWidgets
+from .compat import (
+    ComboBoxNoInsert,
+    ElideLeft,
+    FormFieldGrowthPolicy,
+    QAction,
+    QtWidgets,
+)
 from .mol_viewer import get_selection_examples, get_viewer_name
 from .palettes import iter_gui_palettes
 
 VIEWER_NAME = get_viewer_name()
 SELECTION_EXAMPLES = get_selection_examples()
+
+
+class RecentPredictionItemDelegate(QtWidgets.QStyledItemDelegate):
+    """Elide paths against the row's real paint width on Qt5 and Qt6."""
+
+    def paint(self, painter, option, index) -> None:
+        item_option = QtWidgets.QStyleOptionViewItem(option)
+        self.initStyleOption(item_option, index)
+        available_width = max(0, item_option.rect.width() - 12)
+        item_option.text = item_option.fontMetrics.elidedText(
+            str(index.data() or ""),
+            ElideLeft,
+            available_width,
+        )
+        super().paint(painter, item_option, index)
 
 
 @dataclass(frozen=True)
@@ -41,6 +62,7 @@ class GuiWidgets:
     _preview_label: QtWidgets.QLabel
     _prop_combo: QtWidgets.QComboBox
     _prop_combo_rows: dict[str, int]
+    _recent_combo: QtWidgets.QComboBox
     _ref_edit: QtWidgets.QLineEdit
     _ref_label: QtWidgets.QLabel
     _stats_browser: QtWidgets.QTextBrowser
@@ -73,6 +95,7 @@ class GuiWidgets:
             _preview_label=dialog._preview_label,
             _prop_combo=dialog._prop_combo,
             _prop_combo_rows=dialog._prop_combo_rows,
+            _recent_combo=dialog._recent_combo,
             _ref_edit=dialog._ref_edit,
             _ref_label=dialog._ref_label,
             _stats_browser=dialog._stats_browser,
@@ -100,7 +123,16 @@ def build_dialog_ui(dialog) -> GuiWidgets:
     # --- Input row ---
     dir_group = QtWidgets.QGroupBox("Prediction output or structure")
     dir_layout = QtWidgets.QHBoxLayout(dir_group)
-    self._dir_edit = QtWidgets.QLineEdit()
+    self._recent_combo = QtWidgets.QComboBox()
+    self._recent_combo.setEditable(True)
+    self._recent_combo.setInsertPolicy(ComboBoxNoInsert)
+    self._recent_combo.setMaxVisibleItems(10)
+    self._recent_combo.setCurrentIndex(-1)
+    self._recent_combo.view().setTextElideMode(ElideLeft)
+    self._recent_combo.setItemDelegate(RecentPredictionItemDelegate(self._recent_combo))
+    self._dir_edit = self._recent_combo.lineEdit()
+    if self._dir_edit is None:
+        raise RuntimeError("Editable prediction history requires a line editor.")
     self._dir_edit.setPlaceholderText("Output folder, archive, .cif, or .pdb file")
     self._dir_edit.setToolTip(
         "Path to a Boltz, AlphaFold 3, AlphaFold 3 Server, or Chai-1 "
@@ -115,7 +147,10 @@ def build_dialog_ui(dialog) -> GuiWidgets:
     )
     dialog._disable_default_button(self._dir_btn)
     dialog._disable_default_button(self._file_btn)
-    dir_layout.addWidget(self._dir_edit)
+    self._recent_combo.setToolTip(
+        "Type a prediction path or choose one of the last 10 successfully loaded predictions."
+    )
+    dir_layout.addWidget(self._recent_combo)
     dir_layout.addWidget(self._dir_btn)
     dir_layout.addWidget(self._file_btn)
     root.addWidget(dir_group)

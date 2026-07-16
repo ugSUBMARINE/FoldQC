@@ -1,16 +1,21 @@
-"""
-Session-state helpers for FoldQC.
-
-This module is intentionally Qt- and viewer-independent. Callers provide a
-settings-like object with ``value`` and ``setValue`` methods, such as QSettings.
-"""
+"""Qt-independent persistence helpers for recent FoldQC predictions."""
 
 from __future__ import annotations
 
+import json
+import os
+from collections.abc import Iterable
 from dataclasses import dataclass
+from pathlib import Path
 
 SETTINGS_ORGANIZATION = "FoldQC"
 SETTINGS_APPLICATION = "FoldQC"
+SETTINGS_KEY_RECENT_PREDICTIONS = "session/recent_predictions"
+SETTINGS_KEY_GEOMETRY = "session/geometry"
+MAX_RECENT_PREDICTIONS = 10
+
+# Keys written by the pre-history session format.  They are retained only for
+# one-time migration and cleanup.
 SETTINGS_KEY_PATH = "session/input_path"
 SETTINGS_KEY_MODEL_RANK = "session/model_rank"
 SETTINGS_KEY_METRIC = "session/metric_key"
@@ -21,96 +26,116 @@ SETTINGS_KEY_PALETTE = "session/palette_key"
 SETTINGS_KEY_PALETTE_REVERSE = "session/palette_reverse"
 SETTINGS_KEY_SCALE_MIN = "session/scale_min"
 SETTINGS_KEY_SCALE_MAX = "session/scale_max"
-SETTINGS_KEY_GEOMETRY = "session/geometry"
+LEGACY_SETTINGS_KEYS = (
+    SETTINGS_KEY_PATH,
+    SETTINGS_KEY_MODEL_RANK,
+    SETTINGS_KEY_METRIC,
+    SETTINGS_KEY_TARGET,
+    SETTINGS_KEY_REFERENCE,
+    SETTINGS_KEY_CUTOFF,
+    SETTINGS_KEY_PALETTE,
+    SETTINGS_KEY_PALETTE_REVERSE,
+    SETTINGS_KEY_SCALE_MIN,
+    SETTINGS_KEY_SCALE_MAX,
+)
 
 
 @dataclass(frozen=True)
 class SessionState:
-    """Serialized lightweight GUI session state."""
+    """The only dialog state persisted across FoldQC sessions."""
 
-    path: str = ""
-    model_rank: int | None = None
-    metric_key: str = ""
-    target_name: str = ""
-    reference_text: str = ""
-    cutoff_text: str = ""
-    palette_key: str = ""
-    palette_reversed: bool = False
-    scale_min: str = ""
-    scale_max: str = ""
+    recent_predictions: tuple[str, ...] = ()
     geometry: object | None = None
 
 
-@dataclass
-class PendingSessionRestore:
-    """Saved UI state that may wait for path/model/object loading."""
-
-    model_rank: int | None = None
-    metric_key: str | None = None
-    target_name: str | None = None
-
-
-def settings_text(settings, key: str) -> str:
-    """Read one settings value as text, returning an empty string if missing."""
-    value = settings.value(key, "")
-    if value is None:
+def normalize_prediction_path(path: str | Path) -> str:
+    """Return a stable absolute history path without requiring it to exist."""
+    text = str(path).strip()
+    if not text:
         return ""
-    return str(value)
+    return os.path.abspath(os.path.expanduser(text))
 
 
-def settings_int(settings, key: str) -> int | None:
-    """Read one optional integer settings value."""
-    value = settings.value(key, None)
-    if value in (None, ""):
-        return None
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
+def _deduplication_key(path: str) -> str:
+    return os.path.normcase(path)
 
 
-def settings_bool(settings, key: str) -> bool:
-    """Read one settings value as a bool across Qt/Python backends."""
-    value = settings.value(key, False)
-    if isinstance(value, str):
-        return value.strip().lower() in {"1", "true", "yes", "on"}
-    return bool(value)
+def normalize_recent_predictions(paths: Iterable[object]) -> tuple[str, ...]:
+    """Normalize an MRU sequence, preserving its first occurrence ordering."""
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for value in paths:
+        if not isinstance(value, (str, Path)):
+            continue
+        path = normalize_prediction_path(value)
+        key = _deduplication_key(path)
+        if not path or key in seen:
+            continue
+        normalized.append(path)
+        seen.add(key)
+        if len(normalized) >= MAX_RECENT_PREDICTIONS:
+            break
+    return tuple(normalized)
+
+
+def add_recent_prediction(
+    recent_predictions: Iterable[object], path: str | Path
+) -> tuple[str, ...]:
+    """Move one successfully loaded prediction to the front of the MRU list."""
+    return normalize_recent_predictions((path, *recent_predictions))
+
+
+def remove_recent_prediction(
+    recent_predictions: Iterable[object], path: str | Path
+) -> tuple[str, ...]:
+    """Remove one normalized path from an MRU list."""
+    target = normalize_prediction_path(path)
+    key = _deduplication_key(target)
+    return normalize_recent_predictions(
+        value
+        for value in recent_predictions
+        if _deduplication_key(normalize_prediction_path(str(value))) != key
+    )
+
+
+def _read_recent_predictions(settings) -> tuple[str, ...]:
+    raw = settings.value(SETTINGS_KEY_RECENT_PREDICTIONS, None)
+    if raw is None:
+        legacy_path = settings.value(SETTINGS_KEY_PATH, "")
+        return normalize_recent_predictions((legacy_path,))
+    if isinstance(raw, str):
+        try:
+            decoded = json.loads(raw)
+        except (TypeError, ValueError):
+            return ()
+    else:
+        decoded = raw
+    if not isinstance(decoded, (list, tuple)):
+        return ()
+    return normalize_recent_predictions(decoded)
 
 
 def read_session_state(settings) -> SessionState:
-    """Read the persisted FoldQC GUI session from a settings-like object."""
+    """Read history and geometry, including the legacy last-path migration."""
     return SessionState(
-        path=settings_text(settings, SETTINGS_KEY_PATH),
-        model_rank=settings_int(settings, SETTINGS_KEY_MODEL_RANK),
-        metric_key=settings_text(settings, SETTINGS_KEY_METRIC),
-        target_name=settings_text(settings, SETTINGS_KEY_TARGET),
-        reference_text=settings_text(settings, SETTINGS_KEY_REFERENCE),
-        cutoff_text=settings_text(settings, SETTINGS_KEY_CUTOFF),
-        palette_key=settings_text(settings, SETTINGS_KEY_PALETTE),
-        palette_reversed=settings_bool(settings, SETTINGS_KEY_PALETTE_REVERSE),
-        scale_min=settings_text(settings, SETTINGS_KEY_SCALE_MIN),
-        scale_max=settings_text(settings, SETTINGS_KEY_SCALE_MAX),
+        recent_predictions=_read_recent_predictions(settings),
         geometry=settings.value(SETTINGS_KEY_GEOMETRY, None),
     )
 
 
 def write_session_state(settings, state: SessionState) -> None:
-    """Write a FoldQC GUI session to a settings-like object."""
-    settings.setValue(SETTINGS_KEY_PATH, state.path)
+    """Persist only recent predictions and dialog geometry, then remove legacy keys."""
+    recent = normalize_recent_predictions(state.recent_predictions)
     settings.setValue(
-        SETTINGS_KEY_MODEL_RANK,
-        "" if state.model_rank is None else state.model_rank,
+        SETTINGS_KEY_RECENT_PREDICTIONS,
+        json.dumps(recent, separators=(",", ":")),
     )
-    settings.setValue(SETTINGS_KEY_METRIC, state.metric_key or "")
-    settings.setValue(SETTINGS_KEY_TARGET, state.target_name)
-    settings.setValue(SETTINGS_KEY_REFERENCE, state.reference_text)
-    settings.setValue(SETTINGS_KEY_CUTOFF, state.cutoff_text)
-    settings.setValue(SETTINGS_KEY_PALETTE, state.palette_key)
-    settings.setValue(SETTINGS_KEY_PALETTE_REVERSE, state.palette_reversed)
-    settings.setValue(SETTINGS_KEY_SCALE_MIN, state.scale_min)
-    settings.setValue(SETTINGS_KEY_SCALE_MAX, state.scale_max)
-    if state.geometry:
+    if state.geometry is not None:
         settings.setValue(SETTINGS_KEY_GEOMETRY, state.geometry)
+    remove = getattr(settings, "remove", None)
+    if callable(remove):
+        for key in LEGACY_SETTINGS_KEYS:
+            remove(key)
     sync = getattr(settings, "sync", None)
     if callable(sync):
         sync()

@@ -34,6 +34,7 @@ ValueSemantics = Literal["higher_is_better", "lower_is_better", "categorical_lab
 AggregateKind = Literal[
     "single_model", "ensemble_mean", "ensemble_std", "ensemble_rmsd"
 ]
+DEFAULT_METRIC_KEY = "plddt_class"
 _PREVIEW_FIELDS = frozenset({"target_text", "ref_sel", "cutoff"})
 _DATA_CAPABILITIES = frozenset({"plddt", "pae", "pde", "contact_probs"})
 _DATA_REQUIREMENTS = _DATA_CAPABILITIES | {"confidence"}

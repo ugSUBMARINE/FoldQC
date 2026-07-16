@@ -36,6 +36,8 @@ def test_metric_keys_preserve_gui_order() -> None:
         "ensemble_plddt_std",
         "chain_iptm",
     ]
+    assert metrics.DEFAULT_METRIC_KEY == "plddt_class"
+    assert metrics.METRICS.require(metrics.DEFAULT_METRIC_KEY).label.startswith("pLDDT")
 
 
 def test_metric_registry_owns_behavioral_metadata() -> None:

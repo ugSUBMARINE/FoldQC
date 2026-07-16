@@ -111,6 +111,75 @@ class _TargetCombo:
         return self.items[row] if 0 <= row < len(self.items) else None
 
 
+class _HistoryItem:
+    def __init__(self) -> None:
+        self.tooltip = ""
+
+    def setToolTip(self, text: str) -> None:
+        self.tooltip = text
+
+
+class _HistoryLineEdit:
+    def __init__(self, text: str = "") -> None:
+        self.value = text
+
+    def text(self) -> str:
+        return self.value
+
+    def setText(self, text: str) -> None:
+        self.value = text
+
+
+class _HistoryCombo:
+    def __init__(self, line_edit: _HistoryLineEdit) -> None:
+        self.line_edit = line_edit
+        self.rows: list[tuple[str, str]] = []
+        self.items: list[_HistoryItem] = []
+        self.blocked: list[bool] = []
+        self.enabled = True
+
+    def blockSignals(self, blocked: bool) -> None:
+        self.blocked.append(blocked)
+
+    def clear(self) -> None:
+        self.rows.clear()
+        self.items.clear()
+
+    def addItem(self, text: str, data: str) -> None:
+        self.rows.append((text, data))
+        self.items.append(_HistoryItem())
+
+    def count(self) -> int:
+        return len(self.items)
+
+    def model(self):
+        return self
+
+    def item(self, row: int) -> _HistoryItem | None:
+        return self.items[row] if 0 <= row < len(self.items) else None
+
+    def setCurrentIndex(self, _index: int) -> None:
+        pass
+
+    def setEditText(self, text: str) -> None:
+        self.line_edit.setText(text)
+
+    def setEnabled(self, enabled: bool) -> None:
+        self.enabled = enabled
+
+
+class _EnabledWidget:
+    def __init__(self) -> None:
+        self.enabled = True
+        self.tooltip = ""
+
+    def setEnabled(self, enabled: bool) -> None:
+        self.enabled = enabled
+
+    def setToolTip(self, tooltip: str) -> None:
+        self.tooltip = tooltip
+
+
 def test_active_ensemble_group_is_bold_and_italic_in_target_combo() -> None:
     combo = _TargetCombo()
 
@@ -124,6 +193,49 @@ def test_active_ensemble_group_is_bold_and_italic_in_target_combo() -> None:
     assert combo.items[0].value.italic is False
     assert combo.items[1].value.bold is True
     assert combo.items[1].value.italic is True
+
+
+def test_recent_prediction_rendering_preserves_edit_text_and_blocks_activation() -> (
+    None
+):
+    line_edit = _HistoryLineEdit("currently edited")
+    combo = _HistoryCombo(line_edit)
+    view = QtDialogView.__new__(QtDialogView)
+    view.widgets = types.SimpleNamespace(
+        _recent_combo=combo,
+        _dir_edit=line_edit,
+    )
+    paths = ("/long/path/first", "/long/path/second")
+
+    view._set_recent_predictions(paths)
+
+    assert combo.rows == [(path, path) for path in paths]
+    assert [item.tooltip for item in combo.items] == list(paths)
+    assert line_edit.text() == "currently edited"
+    assert combo.blocked == [True, False]
+
+
+def test_busy_state_disables_the_complete_editable_history_control() -> None:
+    line_edit = _HistoryLineEdit()
+    combo = _HistoryCombo(line_edit)
+    button = _EnabledWidget()
+    model_combo = _EnabledWidget()
+    ensemble_button = _EnabledWidget()
+    widgets = types.SimpleNamespace(
+        _recent_combo=combo,
+        _dir_edit=line_edit,
+        _dir_btn=button,
+        _file_btn=_EnabledWidget(),
+        _model_combo=model_combo,
+        _ensemble_btn=ensemble_button,
+    )
+    view = QtDialogView(None, widgets)
+
+    view.set_busy(types.SimpleNamespace(busy=True, prediction_controls_enabled=False))
+
+    assert combo.enabled is False
+    assert button.enabled is False
+    assert model_combo.enabled is False
 
 
 class PlotViewerSelectionTests(unittest.TestCase):

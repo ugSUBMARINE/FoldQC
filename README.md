@@ -64,7 +64,10 @@ Development of FoldQC has included coding assistance from OpenAI's Codex.
 ## Usage
 
 1. Open FoldQC from the PyMOL plugin menu.
-2. Choose a prediction folder, archive, or single `.cif`/`.pdb` structure file.
+2. Choose a prediction folder, archive, or single `.cif`/`.pdb` structure file,
+   or select one of the last 10 successfully loaded predictions from the editable
+   path history. FoldQC restores this history across sessions but starts with an
+   empty path and never loads a saved prediction automatically.
 3. Select the model, target object, metric, and color palette.
    When FoldQC must create a model object in PyMOL, it initially applies the
    familiar pLDDT quality-class coloring. If the named object already exists,
@@ -116,8 +119,8 @@ workflow abandons its result safely; user cancellation and stale results stay
 silent, while genuine provider or viewer failures are presented once.
 
 Transient interaction is centralized: workflow notices, confirmations,
-candidate/alignment choices, progress, statistics, window titles, and plot
-windows are presented by the Qt presentation adapter. Ordinary control state
+candidate/alignment choices, progress, statistics, and plot windows are
+presented by the Qt presentation adapter. Ordinary control state
 and previews are rendered separately from a typed context view state. Native
 open/save dialogs remain in the main dialog because their paths are captured
 before a workflow is submitted.

@@ -144,9 +144,6 @@ class QtPresenter:
             if hasattr(dialog, "deleteLater"):
                 dialog.deleteLater()
 
-    def set_window_title(self, title: str) -> None:
-        self.dialog.setWindowTitle(title)
-
     def show_statistics(self, text: str) -> None:
         self.dialog.widgets._stats_browser.setPlainText(text)
 

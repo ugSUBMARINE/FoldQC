@@ -109,28 +109,26 @@ class QtDialogView:
         self.widgets._cutoff_edit.setToolTip(state.cutoff_tooltip)
 
     def apply_context(self, state: ContextViewState) -> None:
-        if state.model_choices:
-            combo = self.widgets._model_combo
-            combo.blockSignals(True)
-            try:
-                combo.clear()
-                for model_choice in state.model_choices:
-                    combo.addItem(model_choice.label, model_choice.rank)
-                if state.selected_rank is not None:
-                    self.select_model_rank(state.selected_rank)
-            finally:
-                combo.blockSignals(False)
-        if state.target_choices:
-            combo = self.widgets._obj_combo
-            combo.blockSignals(True)
-            try:
-                combo.clear()
-                for target_choice in state.target_choices:
-                    self._add_target_choice(combo, target_choice)
-                if state.selected_target:
-                    self.select_object(state.selected_target)
-            finally:
-                combo.blockSignals(False)
+        combo = self.widgets._model_combo
+        combo.blockSignals(True)
+        try:
+            combo.clear()
+            for model_choice in state.model_choices:
+                combo.addItem(model_choice.label, model_choice.rank)
+            if state.selected_rank is not None:
+                self.select_model_rank(state.selected_rank)
+        finally:
+            combo.blockSignals(False)
+        combo = self.widgets._obj_combo
+        combo.blockSignals(True)
+        try:
+            combo.clear()
+            for target_choice in state.target_choices:
+                self._add_target_choice(combo, target_choice)
+            if state.selected_target:
+                self.select_object(state.selected_target)
+        finally:
+            combo.blockSignals(False)
         for row, available in state.metric_availability:
             self.set_metric_available(row, available)
         self.set_plot_availability(state.plot_availability)
@@ -144,9 +142,11 @@ class QtDialogView:
             self.widgets._stats_browser.setPlainText(state.statistics_text)
 
     def apply_lifecycle(self, update: LifecycleUiUpdate) -> None:
+        if update.recent_predictions is not None:
+            self._set_recent_predictions(update.recent_predictions)
         if update.display_path is not None:
             self.widgets._dir_edit.setText(update.display_path)
-        if update.model_choices:
+        if update.model_choices is not None:
             combo = self.widgets._model_combo
             combo.blockSignals(True)
             try:
@@ -157,7 +157,7 @@ class QtDialogView:
                     self.select_model_rank(update.selected_rank)
             finally:
                 combo.blockSignals(False)
-        if update.target_choices:
+        if update.target_choices is not None:
             combo = self.widgets._obj_combo
             combo.blockSignals(True)
             try:
@@ -169,13 +169,29 @@ class QtDialogView:
             finally:
                 combo.blockSignals(False)
 
+    def _set_recent_predictions(self, paths: tuple[str, ...]) -> None:
+        combo = self.widgets._recent_combo
+        edit_text = self.widgets._dir_edit.text()
+        combo.blockSignals(True)
+        try:
+            combo.clear()
+            for path in paths:
+                combo.addItem(path, path)
+                item = combo.model().item(combo.count() - 1)
+                if item is not None and hasattr(item, "setToolTip"):
+                    item.setToolTip(path)
+            combo.setCurrentIndex(-1)
+            combo.setEditText(edit_text)
+        finally:
+            combo.blockSignals(False)
+
     def set_busy(self, state: BusyViewState) -> None:
         self._busy = state.busy
         enabled = state.prediction_controls_enabled
         for widget in (
             self.widgets._dir_btn,
             self.widgets._file_btn,
-            self.widgets._dir_edit,
+            self.widgets._recent_combo,
             self.widgets._model_combo,
         ):
             widget.setEnabled(enabled)

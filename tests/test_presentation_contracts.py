@@ -43,7 +43,7 @@ def test_presentation_requests_are_immutable_and_validate_stable_keys() -> None:
 def test_typed_presentation_and_view_results_preserve_payload_identity() -> None:
     figure = object()
     assert PreparedPlot(figure, "PAE").figure is figure
-    assert LifecycleUiUpdate(selected_rank=2, save_session=True).selected_rank == 2
+    assert LifecycleUiUpdate(selected_rank=2).selected_rank == 2
     state = ContextViewState(
         metric_availability=((3, False),),
         plot_availability=(("matrix", False, "PAE is unavailable"),),
@@ -206,6 +206,67 @@ def test_native_browse_paths_remain_provisional_until_lifecycle_commit() -> None
             and ast.unparse(call.args[0]) == "path"
             for call in calls
         )
+
+
+def test_startup_restores_history_without_loading_and_path_control_is_editable() -> (
+    None
+):
+    root = Path(__file__).resolve().parents[1]
+    gui_tree = ast.parse((root / "gui.py").read_text())
+    dialog = next(
+        node
+        for node in gui_tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "FoldQCPluginDialog"
+    )
+    restore = next(
+        node
+        for node in dialog.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "_restore_session_settings"
+    )
+    assert "load_prediction" not in ast.unparse(restore)
+    lifecycle_call = next(
+        node
+        for node in ast.walk(restore)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "LifecycleUiUpdate"
+    )
+    keywords = {keyword.arg: keyword.value for keyword in lifecycle_call.keywords}
+    assert isinstance(keywords["display_path"], ast.Constant)
+    assert keywords["display_path"].value == ""
+    assert "recent_predictions=state.recent_predictions" in ast.unparse(restore)
+
+    layout = (root / "gui_layout.py").read_text()
+    assert "self._recent_combo = QtWidgets.QComboBox()" in layout
+    assert "self._recent_combo.setEditable(True)" in layout
+    assert "self._recent_combo.setInsertPolicy(ComboBoxNoInsert)" in layout
+    assert "self._recent_combo.view().setTextElideMode(ElideLeft)" in layout
+    assert "RecentPredictionItemDelegate(self._recent_combo)" in layout
+
+    populate = next(
+        node
+        for node in dialog.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "_populate_property_combo_for"
+    )
+    assert "combo.setCurrentIndex(rows[metrics.DEFAULT_METRIC_KEY])" in ast.unparse(
+        populate
+    )
+
+
+def test_dialog_title_is_constant_and_coloring_does_not_mutate_it() -> None:
+    root = Path(__file__).resolve().parents[1]
+    gui_source = (root / "gui.py").read_text()
+    coloring_source = (root / "gui_coloring.py").read_text()
+    presenter_source = (root / "gui_presenter.py").read_text()
+    protocol_source = (root / "presentation.py").read_text()
+
+    assert 'DIALOG_TITLE = f"{APP_TITLE} — Structure Prediction Quality"' in gui_source
+    assert "self.setWindowTitle(DIALOG_TITLE)" in gui_source
+    assert "set_window_title" not in coloring_source
+    assert "set_window_title" not in presenter_source
+    assert "set_window_title" not in protocol_source
 
 
 def test_plot_actions_are_parented_to_the_real_qt_menu() -> None:

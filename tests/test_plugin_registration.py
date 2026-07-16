@@ -173,9 +173,10 @@ class PluginRegistrationTests(unittest.TestCase):
         harness = _dialog_lifecycle_harness()()
         calls: list[str] = []
         harness._shutdown_complete = False
-        harness._save_session_settings = lambda: calls.append("save")
+        harness._session = types.SimpleNamespace(
+            save_geometry=lambda: calls.append("save")
+        )
         harness.services = types.SimpleNamespace(
-            operations=types.SimpleNamespace(is_busy=False),
             close=lambda: calls.append("close"),
         )
 

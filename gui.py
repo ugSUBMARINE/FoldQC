@@ -29,7 +29,7 @@ from .gui_application import GuiApplicationServices
 from .gui_dependencies import QtDependencyService
 from .gui_layout import build_dialog_ui
 from .gui_presenter import QtGuiScheduler, QtPresenter
-from .gui_services import ContextSelection
+from .gui_services import ContextSelection, LifecycleUiUpdate
 from .gui_session import QtSessionAdapter
 from .gui_state import PluginState
 from .gui_view import QtDialogView
@@ -37,6 +37,7 @@ from .mol_viewer import PyMOLViewer, get_selection_examples, get_viewer_name
 from .presentation import Notice
 
 APP_TITLE = "FoldQC"
+DIALOG_TITLE = f"{APP_TITLE} — Structure Prediction Quality"
 VIEWER_NAME = get_viewer_name()
 SELECTION_EXAMPLES = get_selection_examples()
 PREDICTION_FILE_FILTER = (
@@ -60,14 +61,14 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
     ) -> None:
         super().__init__(parent)
         self._shutdown_complete = False
-        self.setWindowTitle(APP_TITLE)
-        self.setMinimumWidth(480)
+        self.setWindowTitle(DIALOG_TITLE)
+        self.setMinimumSize(600, 800)
 
         self._build_ui()
         self._presenter = QtPresenter(self)
         self._scheduler = QtGuiScheduler()
         self._view = QtDialogView(self, self.widgets)
-        self._session = QtSessionAdapter(self, self.widgets)
+        self._session = QtSessionAdapter(self)
         self._dependencies = QtDependencyService(self)
 
         # Non-widget state is shared with the injected workflow coordinators.
@@ -128,6 +129,7 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
                 current_group = group
             combo.addItem(metrics.property_combo_label(spec), spec.key)
             rows[spec.key] = combo.count() - 1
+        combo.setCurrentIndex(rows[metrics.DEFAULT_METRIC_KEY])
 
     def _disable_combo_row(self, combo, row: int) -> None:
         """Disable one combo row when the backing model item is available."""
@@ -139,32 +141,15 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
         self.widgets._dir_btn.clicked.connect(self._browse_directory)
         self.widgets._file_btn.clicked.connect(self._browse_file)
         self.widgets._dir_edit.returnPressed.connect(self._load_entered_prediction)
-        self.widgets._dir_edit.textChanged.connect(self._save_session_settings)
+        self.widgets._recent_combo.activated.connect(self._load_recent_prediction)
         self.widgets._model_combo.currentIndexChanged.connect(self._model_changed)
-        self.widgets._model_combo.currentIndexChanged.connect(
-            self._save_session_settings
-        )
         self.widgets._obj_refresh_btn.clicked.connect(
             self.services.context.refresh_objects
         )
         self.widgets._obj_combo.currentIndexChanged.connect(self._context_changed)
-        self.widgets._obj_combo.currentIndexChanged.connect(self._save_session_settings)
         self.widgets._prop_combo.currentIndexChanged.connect(self._context_changed)
-        self.widgets._prop_combo.currentIndexChanged.connect(
-            self._save_session_settings
-        )
         self.widgets._ref_edit.textChanged.connect(self._context_changed)
-        self.widgets._ref_edit.textChanged.connect(self._save_session_settings)
         self.widgets._cutoff_edit.textChanged.connect(self._context_changed)
-        self.widgets._cutoff_edit.textChanged.connect(self._save_session_settings)
-        self.widgets._palette_combo.currentIndexChanged.connect(
-            self._save_session_settings
-        )
-        self.widgets._palette_reverse_chk.stateChanged.connect(
-            self._save_session_settings
-        )
-        self.widgets._vmin_edit.textChanged.connect(self._save_session_settings)
-        self.widgets._vmax_edit.textChanged.connect(self._save_session_settings)
         self.widgets._palette_combo.currentIndexChanged.connect(
             self.services.analysis.invalidate_ui
         )
@@ -245,48 +230,20 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
     # Session settings
     # -----------------------------------------------------------------------
 
-    def _save_session_settings(self, *_args) -> None:
-        if not self.services.operations.is_busy:
+    def _restore_session_settings(self) -> None:
+        """Restore recent predictions and geometry without loading a prediction."""
+        state = self._session.restore()
+        self._view.apply_lifecycle(
+            LifecycleUiUpdate(
+                display_path="",
+                recent_predictions=state.recent_predictions,
+            )
+        )
+        if state.geometry and hasattr(self, "restoreGeometry"):
             try:
-                self._session.save()
+                self.restoreGeometry(state.geometry)
             except Exception:
                 pass
-
-    def _restore_session_settings(self) -> None:
-        """Restore saved lightweight GUI state and reload a valid last path."""
-        self._session.set_restoring(True)
-        try:
-            state = self._session.restore()
-
-            self.widgets._dir_edit.setText(state.path)
-            self.widgets._ref_edit.setText(state.reference_text)
-            if state.cutoff_text:
-                self.widgets._cutoff_edit.setText(state.cutoff_text)
-            self.widgets._vmin_edit.setText(state.scale_min)
-            self.widgets._vmax_edit.setText(state.scale_max)
-            self.widgets._palette_reverse_chk.setChecked(state.palette_reversed)
-            if state.palette_key:
-                self._view.select_combo_data(
-                    self.widgets._palette_combo, state.palette_key
-                )
-            if state.metric_key:
-                self._view.select_property_if_available(state.metric_key)
-
-            if state.geometry and hasattr(self, "restoreGeometry"):
-                try:
-                    self.restoreGeometry(state.geometry)
-                except Exception:
-                    pass
-
-            if state.path and Path(state.path).exists():
-                self.services.context.set_selection(self._capture_context_selection())
-                self.services.lifecycle.load_prediction(
-                    state.path,
-                    preferred_rank=state.model_rank,
-                    preferred_target=state.target_name,
-                )
-        finally:
-            self._session.set_restoring(False)
 
     def _connect_shutdown(self) -> None:
         """Release session-owned resources only when the Qt application exits."""
@@ -300,8 +257,10 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
         if self._shutdown_complete:
             return
         self._shutdown_complete = True
-        if not self.services.operations.is_busy:
-            self._save_session_settings()
+        try:
+            self._session.save_geometry()
+        except Exception:
+            pass
         self.services.close()
 
     def closeEvent(self, event) -> None:
@@ -400,6 +359,11 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
 
     def _load_entered_prediction(self) -> None:
         self.services.lifecycle.load_prediction(self.widgets._dir_edit.text())
+
+    def _load_recent_prediction(self, index: int) -> None:
+        path = self.widgets._recent_combo.itemData(index)
+        if path is not None:
+            self.services.lifecycle.load_recent_prediction(str(path))
 
     def _apply_coloring(self) -> None:
         try:

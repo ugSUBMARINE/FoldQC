@@ -14,7 +14,6 @@ from .gui_services import (
     JobRunner,
     OperationCoordinatorPort,
     OperationLease,
-    SessionPort,
     ViewerPort,
 )
 from .gui_state import PluginState
@@ -41,7 +40,6 @@ class EnsembleLifecycleService:
         operations: OperationCoordinatorPort,
         prediction: PredictionLifecycleService,
         context: ContextService,
-        session: SessionPort,
     ) -> None:
         self._state = state
         self._viewer = viewer
@@ -51,7 +49,6 @@ class EnsembleLifecycleService:
         self._operations = operations
         self._prediction = prediction
         self._context = context
-        self._session = session
         self._transaction: EnsembleActivationTransaction | None = None
 
     def activate(self, previous_target: str = "") -> None:
@@ -274,8 +271,6 @@ class EnsembleLifecycleService:
         lease = self._operations.active
         if lease is not None:
             self._operations.finish(lease)
-        if not self._session.restoring:
-            self._session.save()
         mode = (
             "current coordinates"
             if prepared.skip_alignment
