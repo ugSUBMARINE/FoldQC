@@ -59,6 +59,7 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
         job_runner=None,
     ) -> None:
         super().__init__(parent)
+        self._shutdown_complete = False
         self.setWindowTitle(APP_TITLE)
         self.setMinimumWidth(480)
 
@@ -92,6 +93,7 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
         self._connect_signals()
         self._restore_session_settings()
         self.services.context.refresh(self._capture_context_selection())
+        self._connect_shutdown()
 
     # -----------------------------------------------------------------------
     # UI construction
@@ -286,17 +288,26 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
         finally:
             self._session.set_restoring(False)
 
-    def closeEvent(self, event) -> None:
-        """Persist session state when the dialog closes."""
-        if self._dependencies.close_is_blocked(event):
+    def _connect_shutdown(self) -> None:
+        """Release session-owned resources only when the Qt application exits."""
+        application = QtWidgets.QApplication.instance()
+        about_to_quit = getattr(application, "aboutToQuit", None)
+        if about_to_quit is not None:
+            about_to_quit.connect(self.shutdown)
+
+    def shutdown(self) -> None:
+        """Persist lightweight state and release resources at PyMOL shutdown."""
+        if self._shutdown_complete:
             return
+        self._shutdown_complete = True
         if not self.services.operations.is_busy:
             self._save_session_settings()
         self.services.close()
-        try:
-            super().closeEvent(event)
-        except AttributeError:
-            pass
+
+    def closeEvent(self, event) -> None:
+        """Hide the dialog while retaining its in-session state and services."""
+        event.ignore()
+        self.hide()
 
     # -----------------------------------------------------------------------
     # Slots

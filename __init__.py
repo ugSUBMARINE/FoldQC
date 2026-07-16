@@ -23,8 +23,12 @@ Then open the plugin via Plugins → FoldQC…
 
 from __future__ import annotations
 
+import logging
+
 __version__ = "0.1.0"
 __author__ = "Karl Gruber"
+
+logger = logging.getLogger(__name__)
 
 # Singleton: keep the dialog alive so it survives garbage collection
 _dialog_instance = None
@@ -41,28 +45,28 @@ def run_plugin_gui():
     """Open (or raise) the main FoldQC plugin dialog."""
     global _dialog_instance
 
-    # Re-use the existing window if it is still open
-    if _dialog_instance is not None and _dialog_instance.isVisible():
-        _dialog_instance.raise_()
-        _dialog_instance.activateWindow()
-        return
+    if _dialog_instance is None:
+        try:
+            from .gui import FoldQCPluginDialog
+        except Exception as exc:
+            logger.exception("Could not initialize the FoldQC GUI")
+            from pymol.Qt import QtWidgets
 
-    try:
-        from .gui import FoldQCPluginDialog
-    except Exception as exc:
-        from pymol.Qt import QtWidgets
+            QtWidgets.QMessageBox.critical(
+                None,
+                "FoldQC - GUI initialization failed",
+                (
+                    "FoldQC could not initialize its dialog.\n\n"
+                    f"{type(exc).__name__}: {exc}\n\n"
+                    "See the PyMOL console for the full traceback. If the problem "
+                    "persists after restarting PyMOL, include that traceback when "
+                    "reporting the issue."
+                ),
+            )
+            return
 
-        QtWidgets.QMessageBox.critical(
-            None,
-            "FoldQC - import error",
-            (
-                "Could not load the plugin GUI:\n\n"
-                f"{exc}\n\n"
-                "Run install_deps.py from PyMOL to install missing dependencies,\n"
-                "then restart PyMOL."
-            ),
-        )
-        return
+        _dialog_instance = FoldQCPluginDialog()
 
-    _dialog_instance = FoldQCPluginDialog()
     _dialog_instance.show()
+    _dialog_instance.raise_()
+    _dialog_instance.activateWindow()

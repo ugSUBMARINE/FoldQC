@@ -28,9 +28,6 @@ class QtDependencyService:
     def ensure(self, dependency_keys, *, feature_label: str) -> bool:
         return self._ensure_dependencies(dependency_keys, feature_label=feature_label)
 
-    def close_is_blocked(self, event) -> bool:
-        return self._dependency_close_is_blocked(event)
-
     def close(self) -> None:
         dialog = self._dependency_progress_dialog
         if dialog is not None:
@@ -365,16 +362,3 @@ class QtDependencyService:
         )
         box.setDetailedText(details)
         box.exec()
-
-    def _dependency_close_is_blocked(self, event) -> bool:
-        if not getattr(self, "_dependency_install_active", False):
-            return False
-        QtWidgets.QMessageBox.information(
-            self._dialog,
-            APP_TITLE,
-            "Dependency installation is still running. Wait for it to finish before "
-            "closing FoldQC.",
-        )
-        if hasattr(event, "ignore"):
-            event.ignore()
-        return True
