@@ -5,6 +5,9 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from .compat import (
+    AbstractItemViewNoEditTriggers,
+    AbstractItemViewSelectRows,
+    AbstractItemViewSingleSelection,
     MessageBoxButtonRole,
     MessageBoxStandardButton,
     QtCore,
@@ -13,6 +16,7 @@ from .compat import (
 )
 from .presentation import (
     ChoiceRequest,
+    ModelComparisonRequest,
     Notice,
     PreparedPlot,
     ProgressRequest,
@@ -92,6 +96,67 @@ class QtPresenter:
             return None
         index = labels.index(str(label))
         return request.items[index].key
+
+    def select_comparison_model(self, request: ModelComparisonRequest) -> int | None:
+        dialog = QtWidgets.QDialog(self.dialog)
+        dialog.setWindowTitle(request.title)
+        dialog.setModal(True)
+
+        layout = QtWidgets.QVBoxLayout(dialog)
+        description = QtWidgets.QLabel(
+            f"{request.provider_label} scalar confidence summaries. "
+            "Select a row to switch to that model."
+        )
+        description.setWordWrap(True)
+        layout.addWidget(description)
+
+        table = QtWidgets.QTableWidget(
+            len(request.rows), len(request.columns) + 1, dialog
+        )
+        table.setHorizontalHeaderLabels(
+            ["Model", *(column.label for column in request.columns)]
+        )
+        table.setEditTriggers(AbstractItemViewNoEditTriggers)
+        table.setSelectionBehavior(AbstractItemViewSelectRows)
+        table.setSelectionMode(AbstractItemViewSingleSelection)
+        table.setAlternatingRowColors(True)
+        for row_index, row in enumerate(request.rows):
+            table.setItem(row_index, 0, QtWidgets.QTableWidgetItem(row.label))
+            for column_index, value in enumerate(row.values, start=1):
+                table.setItem(
+                    row_index,
+                    column_index,
+                    QtWidgets.QTableWidgetItem(value),
+                )
+            if row.rank == request.selected_rank:
+                table.setCurrentCell(row_index, 0)
+        if table.currentRow() < 0:
+            table.setCurrentCell(0, 0)
+        table.resizeColumnsToContents()
+        table.horizontalHeader().setStretchLastSection(True)
+        layout.addWidget(table)
+
+        buttons = QtWidgets.QHBoxLayout()
+        buttons.addStretch()
+        use_button = QtWidgets.QPushButton("Use selected model")
+        use_button.setAutoDefault(True)
+        use_button.setDefault(True)
+        close_button = QtWidgets.QPushButton("Close")
+        close_button.setAutoDefault(False)
+        buttons.addWidget(use_button)
+        buttons.addWidget(close_button)
+        layout.addLayout(buttons)
+        use_button.clicked.connect(dialog.accept)
+        close_button.clicked.connect(dialog.reject)
+        table.doubleClicked.connect(lambda _index: dialog.accept())
+
+        header_width = table.horizontalHeader().length()
+        dialog.resize(min(max(header_width + 70, 560), 1100), 300)
+        accepted = bool(dialog.exec())
+        row_index = table.currentRow()
+        if not accepted or row_index < 0:
+            return None
+        return request.rows[row_index].rank
 
     def start_progress(
         self,

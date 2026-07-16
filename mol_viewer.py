@@ -1331,6 +1331,14 @@ class PyMOLViewer:
     ) -> None:
         transform_object(obj_name, rotation, translation)
 
+    def update_token_selection(
+        self,
+        selection_name: str,
+        token_indices: Sequence[int],
+        object_token_maps: Sequence[tuple[str, TokenMap]],
+    ) -> None:
+        update_token_selection(selection_name, token_indices, object_token_maps)
+
     def selection_token_indices(
         self, token_map: TokenMap, selection: str, *, obj_name: str
     ) -> list[int]:

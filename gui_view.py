@@ -18,6 +18,8 @@ class QtDialogView:
         self._busy = False
         self._ensemble_enabled = False
         self._ensemble_tooltip = "Load a prediction with at least two models first."
+        self._comparison_enabled = False
+        self._comparison_tooltip = "Load a prediction with at least two models first."
 
     def select_object(self, name: str) -> None:
         combo = self.widgets._obj_combo
@@ -144,6 +146,9 @@ class QtDialogView:
         self._ensemble_enabled = state.ensemble_enabled
         self._ensemble_tooltip = state.ensemble_tooltip
         self._render_ensemble_button()
+        self._comparison_enabled = state.model_comparison_enabled
+        self._comparison_tooltip = state.model_comparison_tooltip
+        self._render_comparison_button()
         if state.statistics_text is not None:
             self.widgets._stats_browser.setPlainText(state.statistics_text)
 
@@ -202,6 +207,7 @@ class QtDialogView:
         ):
             widget.setEnabled(enabled)
         self._render_ensemble_button()
+        self._render_comparison_button()
 
     def _render_ensemble_button(self) -> None:
         button = self.widgets._ensemble_btn
@@ -210,6 +216,15 @@ class QtDialogView:
             "Ensemble loading is unavailable while another task is running."
             if self._busy
             else self._ensemble_tooltip
+        )
+
+    def _render_comparison_button(self) -> None:
+        button = self.widgets._compare_models_btn
+        button.setEnabled(self._comparison_enabled and not self._busy)
+        button.setToolTip(
+            "Model comparison is unavailable while another task is running."
+            if self._busy
+            else self._comparison_tooltip
         )
 
     def close(self) -> None:

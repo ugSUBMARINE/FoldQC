@@ -128,6 +128,7 @@ class ConfidenceFieldSpec:
     suffix: str = ""
     source: ConfidenceValueSource = "confidence"
     omit_when_missing: bool = False
+    include_in_model_comparison: bool = True
 
     def __post_init__(self) -> None:
         if self.precision < 0:
@@ -188,6 +189,15 @@ COMMON_CONFIDENCE_SUMMARY = ConfidenceSummarySpec(
     ),
 )
 
+CHAI_CONFIDENCE_SUMMARY = ConfidenceSummarySpec(
+    fields=tuple(
+        field
+        for field in COMMON_CONFIDENCE_SUMMARY.fields
+        if field.attribute != "fraction_disordered"
+    ),
+    sections=COMMON_CONFIDENCE_SUMMARY.sections,
+)
+
 PROTENIX_CONFIDENCE_SUMMARY = ConfidenceSummarySpec(
     fields=COMMON_CONFIDENCE_SUMMARY.fields
     + (ConfidenceFieldSpec("gpde", "gpde", omit_when_missing=True),),
@@ -212,12 +222,14 @@ BOLTZ_CONFIDENCE_SUMMARY = ConfidenceSummarySpec(
             suffix="  (log₁₀[IC₅₀/μM])",
             source="affinity",
             omit_when_missing=True,
+            include_in_model_comparison=False,
         ),
         ConfidenceFieldSpec(
             "probability",
             "affinity_probability",
             source="affinity",
             omit_when_missing=True,
+            include_in_model_comparison=False,
         ),
     ),
     sections=(
@@ -325,6 +337,42 @@ def parse_prediction_confidence(
 
     result = PredictionConfidence(**values)
     return result if result.has_values else None
+
+
+def parse_prediction_confidence_summary(
+    payload: dict | None,
+    *,
+    provider: str,
+    model_label: str,
+    source: Path | str | None,
+    affinity_payload: dict | None = None,
+) -> PredictionConfidence | None:
+    """Parse scalar summary fields without requiring a structure index.
+
+    Model comparison is available immediately after discovery, before the
+    corresponding structures have been indexed.  Chain vectors and matrices
+    therefore remain part of the full per-model load; this helper deliberately
+    retains only recognized scalar and affinity fields.
+    """
+    if payload is not None and not isinstance(payload, dict):
+        context = _context(provider, model_label, source)
+        raise ProviderContractError(f"{context}: confidence data must be an object.")
+    scalar_keys = {
+        alias for aliases in _SCALAR_ALIASES.values() for alias in aliases
+    } | {"has_clash", "has_inter_chain_clashes"}
+    scalar_payload = (
+        None
+        if payload is None
+        else {key: value for key, value in payload.items() if key in scalar_keys}
+    )
+    return parse_prediction_confidence(
+        scalar_payload,
+        chain_count=0,
+        provider=provider,
+        model_label=model_label,
+        source=source,
+        affinity_payload=affinity_payload,
+    )
 
 
 def merge_prediction_confidence(

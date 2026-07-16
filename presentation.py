@@ -90,6 +90,45 @@ class PreparedPlot:
     title: str
 
 
+@dataclass(frozen=True)
+class ModelComparisonColumn:
+    """One scalar confidence field shown in the model comparison table."""
+
+    label: str
+
+
+@dataclass(frozen=True)
+class ModelComparisonRow:
+    """One ranked model and its formatted scalar confidence values."""
+
+    rank: int
+    label: str
+    values: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ModelComparisonRequest:
+    """Read-only comparison table with an optional initially selected rank."""
+
+    title: str
+    provider_label: str
+    columns: tuple[ModelComparisonColumn, ...]
+    rows: tuple[ModelComparisonRow, ...]
+    selected_rank: int | None = None
+
+    def __post_init__(self) -> None:
+        width = len(self.columns)
+        if not self.rows:
+            raise ValueError("Model comparison requires at least one row.")
+        if any(len(row.values) != width for row in self.rows):
+            raise ValueError("Model comparison rows must match the table columns.")
+        ranks = tuple(row.rank for row in self.rows)
+        if len(ranks) != len(set(ranks)):
+            raise ValueError("Model comparison ranks must be unique.")
+        if self.selected_rank is not None and self.selected_rank not in ranks:
+            raise ValueError("Selected comparison rank must name a table row.")
+
+
 @runtime_checkable
 class PresentationPort(Protocol):
     def present_notice(self, notice: Notice) -> None: ...
@@ -97,6 +136,10 @@ class PresentationPort(Protocol):
     def choose(self, request: ChoiceRequest) -> str | None: ...
 
     def select_item(self, request: SelectionRequest) -> str | None: ...
+
+    def select_comparison_model(
+        self, request: ModelComparisonRequest
+    ) -> int | None: ...
 
     def start_progress(
         self,

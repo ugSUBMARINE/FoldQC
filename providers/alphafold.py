@@ -116,7 +116,11 @@ def _scan_af3_dir(pred_dir: Path, provider: BaseProvider) -> PredictionFiles:
                         if item.confidence_path is not None
                         else {"plddt"}
                     ),
-                    metadata={"seed": item.seed, "sample": item.sample},
+                    metadata={
+                        "seed": item.seed,
+                        "sample": item.sample,
+                        "ranking_score": item.ranking_score,
+                    },
                 )
             )
     else:
@@ -342,6 +346,19 @@ class AlphaFold3Provider(BaseProvider):
             if np.isfinite(numeric) and numeric in (0.0, 1.0):
                 normalized[key] = bool(numeric)
         return normalized
+
+    def load_model_confidence_summary(self, pred_files, model):
+        payload = (
+            _load_json(model.summary_path) if model.summary_path is not None else {}
+        )
+        ranking_score = model.metadata.get("ranking_score")
+        if ranking_score is not None:
+            payload["ranking_score"] = ranking_score
+        return self.parse_model_confidence_summary(
+            payload,
+            model=model,
+            source=model.summary_path or _af3_ranking_scores_path(pred_files.pred_dir),
+        )
 
     def load_model_data(self, pred_files, model, data, options, *, structure_index):
         confidence_payload = _load_af3_model_data(

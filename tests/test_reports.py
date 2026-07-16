@@ -12,7 +12,11 @@ from FoldQC.confidence import (  # noqa: E402
     AffinityConfidence,
     PredictionConfidence,
 )
-from FoldQC.loader_models import PredictionData  # noqa: E402
+from FoldQC.loader_models import (  # noqa: E402
+    ModelFiles,
+    PredictionData,
+    PredictionFiles,
+)
 from FoldQC.providers.registry import BUILTIN_PROVIDERS  # noqa: E402
 from FoldQC.token_map import TokenInfo, TokenMap  # noqa: E402
 
@@ -242,7 +246,6 @@ def test_confidence_summary_common_fields_and_chain_arrays() -> None:
     for provider_key, provider_label in (
         ("alphafold3", "AlphaFold 3"),
         ("af3_server", "AlphaFold 3 Server"),
-        ("chai1", "Chai-1 Discovery"),
     ):
         text = reports.format_confidence_summary(
             _confidence_data(provider_key, confidence)
@@ -253,6 +256,25 @@ def test_confidence_summary_common_fields_and_chain_arrays() -> None:
         assert "has_clash        : False" in text
         assert "  chain 0: 0.1000" in text
         assert "  chain 1: 0.4000" in text
+
+
+def test_chai_confidence_summary_omits_unsupported_disorder_fraction() -> None:
+    text = reports.format_confidence_summary(
+        _confidence_data(
+            "chai1",
+            PredictionConfidence(
+                ranking_score=0.91,
+                ptm=0.82,
+                iptm=0.73,
+                fraction_disordered=0.12,
+                has_clash=False,
+            ),
+        )
+    )
+
+    assert "provider         : Chai-1 Discovery" in text
+    assert "ranking_score    : 0.9100" in text
+    assert "fraction_disord." not in text
 
 
 def test_confidence_summary_protenix_adds_gpde() -> None:
@@ -296,3 +318,43 @@ def test_confidence_summary_missing_values() -> None:
     text = reports.format_confidence_summary(_confidence_data("boltz"))
     assert "provider         : Boltz" in text
     assert "No confidence data loaded." in text
+
+
+def test_model_comparison_uses_provider_columns_and_formats_missing_values() -> None:
+    provider = BUILTIN_PROVIDERS.get("boltz").info
+    files = PredictionFiles(
+        name="prediction",
+        pred_dir=Path("/tmp/prediction"),
+        provider=provider,
+        models=[
+            ModelFiles(0, Path("/tmp/model_0.cif"), "model_0", "model_0"),
+            ModelFiles(1, Path("/tmp/model_1.cif"), "model_1", "model_1"),
+        ],
+    )
+
+    request = reports.build_model_comparison(
+        files,
+        (
+            PredictionConfidence(
+                confidence_score=0.92,
+                ptm=0.81,
+                iptm=0.74,
+                affinity=AffinityConfidence(
+                    predicted_value=-1.2,
+                    probability=0.91,
+                ),
+            ),
+            PredictionConfidence(confidence_score=0.88, ptm=0.79),
+        ),
+        selected_rank=1,
+    )
+
+    assert request.selected_rank == 1
+    assert [column.label for column in request.columns[:3]] == [
+        "confidence_score",
+        "ptm",
+        "iptm",
+    ]
+    assert "affinity_probability" not in [column.label for column in request.columns]
+    assert request.rows[0].values[:3] == ("0.9200", "0.8100", "0.7400")
+    assert request.rows[1].values[:3] == ("0.8800", "0.7900", "n/a")

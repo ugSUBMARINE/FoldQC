@@ -271,6 +271,27 @@ def test_dialog_title_is_constant_and_coloring_does_not_mutate_it() -> None:
     assert "set_window_title" not in protocol_source
 
 
+def test_model_comparison_uses_selected_model_as_default_button() -> None:
+    source = (
+        Path(__file__).resolve().parents[1].joinpath("gui_presenter.py").read_text()
+    )
+
+    assert 'use_button = QtWidgets.QPushButton("Use selected model")' in source
+    assert "use_button.setDefault(True)" in source
+    assert "close_button.setAutoDefault(False)" in source
+
+
+def test_compare_models_button_shares_model_row_and_summary_is_full_width() -> None:
+    source = Path(__file__).resolve().parents[1].joinpath("gui_layout.py").read_text()
+
+    assert "model_row.addWidget(self._model_combo, 1)" in source
+    assert "model_row.addWidget(self._compare_models_btn)" in source
+    assert 'form.addRow("Model:", model_row)' in source
+    assert "conf_layout = QtWidgets.QVBoxLayout(conf_group)" in source
+    assert "conf_layout.addWidget(self._conf_browser)" in source
+    assert "compare_controls" not in source
+
+
 def test_plot_actions_are_parented_to_the_real_qt_menu() -> None:
     root = Path(__file__).resolve().parents[1]
     tree = ast.parse((root / "gui_layout.py").read_text())

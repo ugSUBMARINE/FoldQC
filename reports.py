@@ -12,8 +12,17 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from . import metrics
-from .confidence import AffinityConfidence, PredictionConfidence
-from .loader_models import ProviderInfo
+from .confidence import (
+    AffinityConfidence,
+    ConfidenceFieldSpec,
+    PredictionConfidence,
+)
+from .loader_models import PredictionFiles, ProviderInfo
+from .presentation import (
+    ModelComparisonColumn,
+    ModelComparisonRequest,
+    ModelComparisonRow,
+)
 
 if TYPE_CHECKING:
     from .token_map import TokenMap
@@ -68,6 +77,70 @@ def format_confidence_summary(pred_data) -> str:
         for index, value in enumerate(values):
             lines.append(f"  chain {index}: {format_optional_float(value)}")
     return "\n".join(lines)
+
+
+def build_model_comparison(
+    pred_files: PredictionFiles,
+    confidences: tuple[PredictionConfidence | None, ...],
+    *,
+    selected_rank: int | None,
+) -> ModelComparisonRequest:
+    """Build a compact provider-schema table for all discovered model ranks."""
+    if len(confidences) != len(pred_files.models):
+        raise ValueError("Confidence summaries must correspond to discovered models.")
+    spec = pred_files.provider.confidence_summary
+    fields = tuple(
+        field
+        for field in spec.fields
+        if field.include_in_model_comparison
+        and (
+            not field.omit_when_missing
+            or any(
+                _comparison_value(confidence, field) is not None
+                for confidence in confidences
+            )
+        )
+    )
+    columns = tuple(ModelComparisonColumn(field.label) for field in fields)
+    rows = tuple(
+        ModelComparisonRow(
+            model.rank,
+            model.display_label,
+            tuple(
+                _format_comparison_value(_comparison_value(confidence, field), field)
+                for field in fields
+            ),
+        )
+        for model, confidence in zip(pred_files.models, confidences)
+    )
+    return ModelComparisonRequest(
+        title="Compare ranked models",
+        provider_label=pred_files.provider.label,
+        columns=columns,
+        rows=rows,
+        selected_rank=selected_rank,
+    )
+
+
+def _comparison_value(
+    confidence: PredictionConfidence | None,
+    field: ConfidenceFieldSpec,
+) -> object | None:
+    if confidence is None:
+        return None
+    source = confidence.affinity if field.source == "affinity" else confidence
+    return None if source is None else getattr(source, field.attribute)
+
+
+def _format_comparison_value(
+    value: object | None,
+    field: ConfidenceFieldSpec,
+) -> str:
+    if isinstance(value, (bool, np.bool_)):
+        formatted = str(bool(value))
+    else:
+        formatted = format_optional_float(value, precision=field.precision)
+    return f"{formatted}{field.suffix}" if value is not None else formatted
 
 
 def format_value(value: float) -> str:

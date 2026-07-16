@@ -372,7 +372,7 @@ def test_coordinates_transform_and_plot_selection_are_viewer_operations(
     mol_viewer.transform_object("model", np.eye(3), np.array([1.0, 0.0, 0.0]))
     assert cmd.altered[0][0:2] == (1, "model")
 
-    mol_viewer.update_token_selection(
+    mol_viewer.PyMOLViewer().update_token_selection(
         "foldqc_plot_selection", [0], [("model", token_map)]
     )
     assert cmd.selections == [

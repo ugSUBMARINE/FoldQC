@@ -16,6 +16,7 @@ from FoldQC.confidence import (
     PredictionConfidence,
     merge_prediction_confidence,
     parse_prediction_confidence,
+    parse_prediction_confidence_summary,
     validate_prediction_confidence,
 )
 from FoldQC.provider_errors import ProviderContractError
@@ -105,6 +106,23 @@ def test_parser_rejects_non_object_sources_and_ignores_empty_unknown_payload() -
     assert _parse({"unknown": 1}) is None
 
 
+def test_scalar_summary_parser_does_not_require_chain_shape_context() -> None:
+    confidence = parse_prediction_confidence_summary(
+        {
+            "ranking_score": 0.91,
+            "ptm": 0.82,
+            "chains_ptm": [0.8, 0.7, 0.6],
+        },
+        provider="test_provider",
+        model_label="rank 1",
+        source=Path("/tmp/summary.json"),
+    )
+
+    assert confidence.ranking_score == 0.91
+    assert confidence.ptm == 0.82
+    assert confidence.chain_ptm is None
+
+
 def test_typed_confidence_validates_direct_values_and_chain_shapes() -> None:
     confidence = PredictionConfidence(
         ptm=1,
@@ -144,6 +162,12 @@ def test_confidence_presentation_schemas_validate_typed_attributes() -> None:
         ConfidenceFieldSpec("probability", "Affinity", source="affinity").source
         == "affinity"
     )
+    assert not ConfidenceFieldSpec(
+        "probability",
+        "Affinity",
+        source="affinity",
+        include_in_model_comparison=False,
+    ).include_in_model_comparison
     with pytest.raises(ValueError, match="Unknown confidence presentation field"):
         ConfidenceFieldSpec("unknown", "Unknown")
     with pytest.raises(ValueError, match="Unknown confidence section field"):

@@ -239,6 +239,7 @@ def test_busy_state_disables_the_complete_editable_history_control() -> None:
     button = _EnabledWidget()
     model_combo = _EnabledWidget()
     ensemble_button = _EnabledWidget()
+    comparison_button = _EnabledWidget()
     widgets = types.SimpleNamespace(
         _recent_combo=combo,
         _dir_edit=line_edit,
@@ -246,6 +247,7 @@ def test_busy_state_disables_the_complete_editable_history_control() -> None:
         _file_btn=_EnabledWidget(),
         _model_combo=model_combo,
         _ensemble_btn=ensemble_button,
+        _compare_models_btn=comparison_button,
     )
     view = QtDialogView(None, widgets)
 
@@ -254,6 +256,7 @@ def test_busy_state_disables_the_complete_editable_history_control() -> None:
     assert combo.enabled is False
     assert button.enabled is False
     assert model_combo.enabled is False
+    assert comparison_button.enabled is False
 
 
 class PlotViewerSelectionTests(unittest.TestCase):

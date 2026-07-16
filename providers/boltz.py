@@ -415,6 +415,18 @@ class BoltzProvider(BaseProvider):
     def scan(self, path: Path) -> PredictionFiles:
         return _scan_boltz_dir(path, self)
 
+    def load_model_confidence_summary(self, pred_files, model):
+        confidence = (
+            _load_json(model.confidence_path)
+            if model.confidence_path is not None
+            else _boltz_metrics_confidence(pred_files, model)
+        )
+        return self.parse_model_confidence_summary(
+            confidence,
+            model=model,
+            source=_boltz_confidence_source(pred_files, model),
+        )
+
     def load_model_data(self, pred_files, model, data, options, *, structure_index):
         confidence_payload, affinity_payload = _load_boltz_model_data(
             pred_files,

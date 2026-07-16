@@ -9,7 +9,7 @@ from typing import Any
 
 import numpy as np
 
-from ..confidence import COMMON_CONFIDENCE_SUMMARY
+from ..confidence import CHAI_CONFIDENCE_SUMMARY
 from ..loader_models import ModelFiles, PredictionData, PredictionFiles
 from ..loader_utils import (
     STRUCTURE_SUFFIXES,
@@ -287,11 +287,20 @@ def _chai_first_sample(value):
 
 class ChaiProvider(BaseProvider):
     key, label = "chai1", "Chai-1 Discovery"
-    confidence_summary = COMMON_CONFIDENCE_SUMMARY
+    confidence_summary = CHAI_CONFIDENCE_SUMMARY
     detect = staticmethod(_looks_like_chai)
 
     def scan(self, path: Path) -> PredictionFiles:
         return _scan_chai_dir(path, self)
+
+    def load_model_confidence_summary(self, pred_files, model):
+        if model.confidence_path is None:
+            return None
+        return self.parse_model_confidence_summary(
+            _normalise_chai_confidence(_load_chai_scores(model.confidence_path)),
+            model=model,
+            source=model.confidence_path,
+        )
 
     def load_model_data(self, pred_files, model, data, options, *, structure_index):
         confidence_payload = _load_chai_model_data(

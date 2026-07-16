@@ -28,6 +28,8 @@ from .presentation import ChoiceOption, ChoiceRequest, Notice, PresentationPort
 
 logger = logging.getLogger(__name__)
 
+ALIGNMENT_CORE_SELECTION_NAME = "foldqc_alignment_core"
+
 
 class EnsembleLifecycleService:
     def __init__(
@@ -264,6 +266,16 @@ class EnsembleLifecycleService:
                 )
             )
             self._context.refresh_objects(prepared.group_name)
+            reference = next(
+                member
+                for member in prepared.members
+                if member.rank == prepared.reference_rank
+            )
+            self._viewer.update_token_selection(
+                ALIGNMENT_CORE_SELECTION_NAME,
+                () if prepared.skip_alignment else prepared.core_indices,
+                ((reference.obj_name, reference.token_map),),
+            )
         except Exception as exc:
             self._fail_transaction(transaction, exc)
             return
@@ -276,11 +288,17 @@ class EnsembleLifecycleService:
             if prepared.skip_alignment
             else "automatic core alignment"
         )
+        selection_note = (
+            ""
+            if prepared.skip_alignment
+            else f"\nAlignment core: '{ALIGNMENT_CORE_SELECTION_NAME}'."
+        )
         self._presenter.present_notice(
             Notice(
                 "ensemble_loaded",
                 f"Loaded {len(members)} ensemble models into group "
-                f"'{prepared.group_name}'.\nRMSD was computed using {mode}.",
+                f"'{prepared.group_name}'.\nRMSD was computed using {mode}."
+                f"{selection_note}",
                 severity="information",
                 title=APP_TITLE,
             )

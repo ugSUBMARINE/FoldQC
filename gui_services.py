@@ -126,6 +126,13 @@ class ViewerPort(Protocol):
         self, obj_name: str, rotation: np.ndarray, translation: np.ndarray
     ) -> None: ...
 
+    def update_token_selection(
+        self,
+        selection_name: str,
+        token_indices: Sequence[int],
+        object_token_maps: Sequence[tuple[str, TokenMap]],
+    ) -> None: ...
+
     def selection_token_indices(
         self, token_map: TokenMap, selection: str, *, obj_name: str
     ) -> list[int]: ...
@@ -370,6 +377,8 @@ class ContextViewState:
     statistics_text: str | None = None
     ensemble_enabled: bool = False
     ensemble_tooltip: str = "Load a prediction with at least two models first."
+    model_comparison_enabled: bool = False
+    model_comparison_tooltip: str = "Load a prediction with at least two models first."
     model_choices: tuple[ModelChoice, ...] = ()
     target_choices: tuple[TargetChoice, ...] = ()
     selected_rank: int | None = None

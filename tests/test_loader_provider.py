@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from FoldQC.data_contracts import ProviderContractError  # noqa: E402
 from FoldQC.loader import (  # noqa: E402
     discover_prediction_candidates,
+    load_prediction_confidence_summaries,
     load_prediction_data,
     scan_prediction_candidate,
     scan_prediction_path,
@@ -89,6 +90,29 @@ def _npz_bytes(**arrays) -> bytes:
 
 
 class LoaderProviderTests(unittest.TestCase):
+    def test_confidence_comparison_does_not_index_or_load_all_models(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "server_job"
+            root.mkdir()
+            for rank, score in enumerate((0.93, 0.81)):
+                (root / f"server_job_model_{rank}.cif").write_text(CIF_TEXT)
+                _write_json(
+                    root / f"server_job_summary_confidences_{rank}.json",
+                    {"ranking_score": score, "ptm": score - 0.1},
+                )
+                _write_json(root / f"server_job_full_data_{rank}.json", {})
+            files = scan_prediction_path(root)
+
+            with mock.patch.object(
+                StructureIndex,
+                "from_path",
+                side_effect=AssertionError("comparison must not index structures"),
+            ):
+                summaries = load_prediction_confidence_summaries(files)
+
+        self.assertEqual([item.ranking_score for item in summaries], [0.93, 0.81])
+        np.testing.assert_allclose([item.ptm for item in summaries], [0.83, 0.71])
+
     def test_single_structure_file_scans_as_structure_only(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             structure = Path(tmp) / "model.cif"

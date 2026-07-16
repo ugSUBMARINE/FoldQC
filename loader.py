@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from .confidence import PredictionConfidence
 from .loader_discovery import (
     discover_prediction_candidates,
     scan_prediction_candidate,
@@ -92,4 +93,15 @@ def load_prediction_data(
         model,
         options,
         structure_index=structure_index,
+    )
+
+
+def load_prediction_confidence_summaries(
+    pred_files: PredictionFiles,
+) -> tuple[PredictionConfidence | None, ...]:
+    """Load compact scalar confidence summaries without loading model data."""
+    provider = BUILTIN_PROVIDERS.get(pred_files.provider.key)
+    return tuple(
+        provider.load_model_confidence_summary(pred_files, model)
+        for model in pred_files.models
     )

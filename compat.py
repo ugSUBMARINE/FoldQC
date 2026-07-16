@@ -95,6 +95,24 @@ MessageBoxButtonRole = getattr(
 )
 MessageBoxIcon = getattr(QtWidgets.QMessageBox, "Icon", QtWidgets.QMessageBox)
 
+# Read-only single-row table behavior used by model comparison.
+_AbstractItemView = getattr(QtWidgets, "QAbstractItemView", object)
+AbstractItemViewNoEditTriggers = getattr(
+    getattr(_AbstractItemView, "EditTrigger", _AbstractItemView),
+    "NoEditTriggers",
+    0,
+)
+AbstractItemViewSelectRows = getattr(
+    getattr(_AbstractItemView, "SelectionBehavior", _AbstractItemView),
+    "SelectRows",
+    0,
+)
+AbstractItemViewSingleSelection = getattr(
+    getattr(_AbstractItemView, "SelectionMode", _AbstractItemView),
+    "SingleSelection",
+    0,
+)
+
 # QProcess error enum
 _QProcess = getattr(QtCore, "QProcess", object)
 QProcessError = getattr(_QProcess, "ProcessError", _QProcess)

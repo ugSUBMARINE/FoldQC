@@ -18,9 +18,10 @@ from .gui_services import (
     ViewerPort,
 )
 from .gui_state import PluginState
+from .loader import load_prediction_confidence_summaries
 from .loader_models import DataCapability, PlddtSource
 from .model_state import ModelState
-from .presentation import PresentationPort
+from .presentation import Notice, PresentationPort
 from .token_map import TokenMap
 
 TargetKind = Literal["none", "single", "ensemble_member", "ensemble_group"]
@@ -188,6 +189,39 @@ class ContextService:
             "Load all ranked models as an ensemble and compute ensemble-level metrics.",
         )
 
+    def model_comparison_action_state(self) -> tuple[bool, str]:
+        files = self._state.pred_files
+        if files is None or files.n_models < 2:
+            return False, "Load a prediction with at least two models first."
+        return (
+            True,
+            "Compare scalar confidence summaries without loading all model structures.",
+        )
+
+    def select_comparison_model(self) -> int | None:
+        """Show all discovered scalar summaries and return the chosen rank."""
+        files = self._state.pred_files
+        if files is None or files.n_models < 2:
+            return None
+        try:
+            confidences = load_prediction_confidence_summaries(files)
+            request = reports.build_model_comparison(
+                files,
+                confidences,
+                selected_rank=self._state.active_model_rank,
+            )
+            return self._presenter.select_comparison_model(request)
+        except Exception as exc:
+            self._presenter.present_notice(
+                Notice(
+                    "model_comparison_failed",
+                    f"Could not read the model confidence summaries.\n\n{exc}",
+                    severity="error",
+                    title="FoldQC - model comparison error",
+                )
+            )
+            return None
+
     def metric_availability(self) -> tuple[tuple[int, bool], ...]:
         if self._state.active_model_state is None or self._state.pred_files is None:
             return ()
@@ -317,6 +351,7 @@ class ContextService:
         )
         files = self._state.pred_files
         ensemble_enabled, ensemble_tooltip = self.ensemble_action_state()
+        comparison_enabled, comparison_tooltip = self.model_comparison_action_state()
         model_choices = (
             ()
             if files is None
@@ -347,6 +382,8 @@ class ContextService:
             ),
             ensemble_enabled=ensemble_enabled,
             ensemble_tooltip=ensemble_tooltip,
+            model_comparison_enabled=comparison_enabled,
+            model_comparison_tooltip=comparison_tooltip,
             model_choices=model_choices,
             target_choices=targets,
             selected_rank=self._state.active_model_rank,

@@ -9,8 +9,10 @@ from pathlib import Path
 
 from ..confidence import (
     ConfidenceSummarySpec,
+    PredictionConfidence,
     merge_prediction_confidence,
     parse_prediction_confidence,
+    parse_prediction_confidence_summary,
 )
 from ..data_contracts import (
     normalize_and_validate_prediction_data,
@@ -171,6 +173,37 @@ class BaseProvider(ABC):
     def normalize_confidence_payload(self, payload: dict | None) -> dict | None:
         """Normalize provider-specific JSON encodings before typed parsing."""
         return payload
+
+    def load_model_confidence_summary(
+        self,
+        pred_files: PredictionFiles,
+        model: ModelFiles,
+    ) -> PredictionConfidence | None:
+        """Load only scalar comparison fields for one discovered model."""
+        if model.summary_path is None:
+            return None
+        return self.parse_model_confidence_summary(
+            _load_json(model.summary_path),
+            model=model,
+            source=model.summary_path,
+        )
+
+    def parse_model_confidence_summary(
+        self,
+        payload: dict | None,
+        *,
+        model: ModelFiles,
+        source: Path | str | None,
+        affinity_payload: dict | None = None,
+    ) -> PredictionConfidence | None:
+        """Normalize provider data into a structure-independent summary."""
+        return parse_prediction_confidence_summary(
+            self.normalize_confidence_payload(payload),
+            provider=self.key,
+            model_label=model.display_label,
+            source=source,
+            affinity_payload=affinity_payload,
+        )
 
     def load_model_data(
         self,

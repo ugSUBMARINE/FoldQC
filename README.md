@@ -72,6 +72,12 @@ Development of FoldQC has included coding assistance from OpenAI's Codex.
    When FoldQC must create a model object in PyMOL, it initially applies the
    familiar pLDDT quality-class coloring. If the named object already exists,
    FoldQC reuses it without overwriting its current colors.
+   For predictions with multiple ranks, `Compare models…` opens a read-only
+   table of provider summary scores for every rank. Selecting a row switches to
+   that model. The table reads compact scalar summaries such as ranking score,
+   pTM, ipTM, and complex pLDDT without loading every structure or lazy PAE/PDE
+   matrix; columns remain provider- and file-dependent. Prediction-level Boltz
+   affinity values are intentionally excluded from this per-model table.
 4. Click the paint/color action to write the metric into B-factors and color the
    structure in PyMOL.
 5. For selection-based metrics or site-focused plots, enter a PyMOL selection
@@ -87,6 +93,9 @@ makes the action unavailable.
 The active ensemble group is shown in bold italic text in the PyMOL target
 selector, distinguishing analyses that use ensemble data from member-object
 analyses.
+Automatic ensemble alignment also creates the named PyMOL selection
+`foldqc_alignment_core`. It contains the rank-0 reference-object residues used
+for the fit; choosing current coordinates leaves this selection empty.
 
 `PAE summary` and `PDE summary` are (experimental) speciality line plots for multi-chain
 targets. They plot the gap between each token's mean error to other chains and
@@ -151,6 +160,8 @@ pairwise chain ipTM, and affinity value/probability. Provider aliases such as
 field spellings are accepted only at the provider boundary.
 AF3's numeric `has_clash` values are accepted only when they are exactly `0`
 or `1` and are converted immediately to the canonical boolean.
+Chai-1 score outputs do not provide `fraction_disordered`, so FoldQC omits that
+field from Chai summaries and comparisons.
 
 Unknown provider JSON fields are deliberately discarded. Missing recognized
 values remain unavailable; malformed recognized values report the provider,

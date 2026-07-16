@@ -83,6 +83,9 @@ class FakePresenter:
             else self.selection_response
         )
 
+    def select_comparison_model(self, request):
+        return request.selected_rank
+
     def start_progress(self, request, on_cancel=None) -> None:
         self.progress.append((request.operation_id, request.label))
         self.cancel_callbacks.append(on_cancel)
@@ -892,12 +895,14 @@ def test_context_reports_ensemble_button_availability_and_tooltips() -> None:
     empty = empty_context.derive_view_state(target_names=[])
     assert not empty.ensemble_enabled
     assert empty.ensemble_tooltip == "Load a prediction with at least two models first."
+    assert not empty.model_comparison_enabled
 
     state, files = _state()
     context = ContextService(state, TargetListViewer(), presenter, view, {})
     single = context.derive_view_state(target_names=["model_0"])
     assert not single.ensemble_enabled
     assert single.ensemble_tooltip == "Ensemble mode requires at least two model files."
+    assert not single.model_comparison_enabled
 
     files.models.append(
         ModelFiles(
@@ -911,6 +916,8 @@ def test_context_reports_ensemble_button_availability_and_tooltips() -> None:
     available = context.derive_view_state(target_names=["model_0"])
     assert available.ensemble_enabled
     assert available.ensemble_tooltip.startswith("Load all ranked models")
+    assert available.model_comparison_enabled
+    assert "without loading all model structures" in available.model_comparison_tooltip
 
     state.ensemble = ensemble.EnsembleState(
         "prediction_ensemble",

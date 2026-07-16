@@ -41,6 +41,7 @@ class GuiWidgets:
 
     _apply_btn: QtWidgets.QPushButton
     _close_btn: QtWidgets.QPushButton
+    _compare_models_btn: QtWidgets.QPushButton
     _conf_browser: QtWidgets.QTextBrowser
     _cutoff_edit: QtWidgets.QLineEdit
     _cutoff_label: QtWidgets.QLabel
@@ -74,6 +75,7 @@ class GuiWidgets:
         return cls(
             _apply_btn=dialog._apply_btn,
             _close_btn=dialog._close_btn,
+            _compare_models_btn=dialog._compare_models_btn,
             _conf_browser=dialog._conf_browser,
             _cutoff_edit=dialog._cutoff_edit,
             _cutoff_label=dialog._cutoff_label,
@@ -163,7 +165,17 @@ def build_dialog_ui(dialog) -> GuiWidgets:
     self._model_combo.setToolTip(
         "Select the ranked model to load, summarize, and use for single-model coloring."
     )
-    form.addRow("Model:", self._model_combo)
+    self._compare_models_btn = QtWidgets.QPushButton("Compare models…")
+    dialog._disable_default_button(self._compare_models_btn)
+    self._compare_models_btn.setEnabled(False)
+    self._compare_models_btn.setToolTip(
+        "Compare scalar confidence summaries for every discovered rank without "
+        "loading all model structures."
+    )
+    model_row = QtWidgets.QHBoxLayout()
+    model_row.addWidget(self._model_combo, 1)
+    model_row.addWidget(self._compare_models_btn)
+    form.addRow("Model:", model_row)
 
     root.addLayout(form)
 

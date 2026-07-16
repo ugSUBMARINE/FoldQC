@@ -143,6 +143,7 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
         self.widgets._dir_edit.returnPressed.connect(self._load_entered_prediction)
         self.widgets._recent_combo.activated.connect(self._load_recent_prediction)
         self.widgets._model_combo.currentIndexChanged.connect(self._model_changed)
+        self.widgets._compare_models_btn.clicked.connect(self._compare_models)
         self.widgets._obj_refresh_btn.clicked.connect(
             self.services.context.refresh_objects
         )
@@ -356,6 +357,11 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
         rank = self.widgets._model_combo.currentData()
         if rank is not None:
             self.services.lifecycle.select_model(int(rank))
+
+    def _compare_models(self) -> None:
+        rank = self.services.context.select_comparison_model()
+        if rank is not None and rank != self.state.active_model_rank:
+            self._view.select_model_rank(rank)
 
     def _load_entered_prediction(self) -> None:
         self.services.lifecycle.load_prediction(self.widgets._dir_edit.text())
