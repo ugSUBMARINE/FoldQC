@@ -12,12 +12,19 @@ from .compat import (
     FormFieldGrowthPolicy,
     QAction,
     QtWidgets,
+    ScrollBarAlwaysOff,
+    ScrollBarAsNeeded,
 )
 from .mol_viewer import get_selection_examples, get_viewer_name
 from .palettes import iter_gui_palettes
 
 VIEWER_NAME = get_viewer_name()
 SELECTION_EXAMPLES = get_selection_examples()
+
+# Main-dialog text-box height limits. Adjust these two values to tune the
+# vertical balance without changing the surrounding layouts.
+CONFIDENCE_SUMMARY_MAX_HEIGHT = 120
+STATISTICS_TEXT_MAX_HEIGHT = 188
 
 
 class RecentPredictionItemDelegate(QtWidgets.QStyledItemDelegate):
@@ -33,6 +40,20 @@ class RecentPredictionItemDelegate(QtWidgets.QStyledItemDelegate):
             available_width,
         )
         super().paint(painter, item_option, index)
+
+
+class VerticalScrollContent(QtWidgets.QWidget):
+    """Preserve layout height while remaining shrinkable to the viewport width."""
+
+    def sizeHint(self):
+        hint = super().sizeHint()
+        hint.setWidth(0)
+        return hint
+
+    def minimumSizeHint(self):
+        hint = super().minimumSizeHint()
+        hint.setWidth(0)
+        return hint
 
 
 @dataclass(frozen=True)
@@ -67,6 +88,10 @@ class GuiWidgets:
     _ref_edit: QtWidgets.QLineEdit
     _ref_label: QtWidgets.QLabel
     _stats_browser: QtWidgets.QTextBrowser
+    _stats_select_ge_btn: QtWidgets.QPushButton
+    _stats_select_le_btn: QtWidgets.QPushButton
+    _stats_selection_status: QtWidgets.QLabel
+    _stats_threshold_spin: QtWidgets.QDoubleSpinBox
     _vmax_edit: QtWidgets.QLineEdit
     _vmin_edit: QtWidgets.QLineEdit
 
@@ -101,6 +126,10 @@ class GuiWidgets:
             _ref_edit=dialog._ref_edit,
             _ref_label=dialog._ref_label,
             _stats_browser=dialog._stats_browser,
+            _stats_select_ge_btn=dialog._stats_select_ge_btn,
+            _stats_select_le_btn=dialog._stats_select_le_btn,
+            _stats_selection_status=dialog._stats_selection_status,
+            _stats_threshold_spin=dialog._stats_threshold_spin,
             _vmax_edit=dialog._vmax_edit,
             _vmin_edit=dialog._vmin_edit,
         )
@@ -119,8 +148,20 @@ def build_plot_actions(menu) -> dict[metrics.PlotType, QAction]:
 def build_dialog_ui(dialog) -> GuiWidgets:
     """Build widgets into one registry without mutating the dialog namespace."""
     self = SimpleNamespace()
-    root = QtWidgets.QVBoxLayout(dialog)
+    outer_layout = QtWidgets.QVBoxLayout(dialog)
+    outer_layout.setSpacing(6)
+
+    scroll_area = QtWidgets.QScrollArea()
+    scroll_area.setWidgetResizable(True)
+    scroll_area.setHorizontalScrollBarPolicy(ScrollBarAlwaysOff)
+    scroll_area.setVerticalScrollBarPolicy(ScrollBarAsNeeded)
+    scroll_area.setFrameStyle(0)
+    scroll_content = VerticalScrollContent()
+    root = QtWidgets.QVBoxLayout(scroll_content)
     root.setSpacing(6)
+    root.setContentsMargins(0, 0, 0, 0)
+    scroll_area.setWidget(scroll_content)
+    outer_layout.addWidget(scroll_area, 1)
 
     # --- Input row ---
     dir_group = QtWidgets.QGroupBox("Prediction output or structure")
@@ -186,7 +227,7 @@ def build_dialog_ui(dialog) -> GuiWidgets:
     )
     conf_layout = QtWidgets.QVBoxLayout(conf_group)
     self._conf_browser = QtWidgets.QTextBrowser()
-    self._conf_browser.setMaximumHeight(150)
+    self._conf_browser.setMaximumHeight(CONFIDENCE_SUMMARY_MAX_HEIGHT)
     self._conf_browser.setReadOnly(True)
     self._conf_browser.setToolTip(
         "Read-only confidence metadata for the selected model, such as "
@@ -221,7 +262,14 @@ def build_dialog_ui(dialog) -> GuiWidgets:
     self._prop_combo.setToolTip(
         "Confidence metric to write into B-factors and display on the selected target."
     )
-    prop_form.addRow("Color by:", self._prop_combo)
+    self._guide_btn = QtWidgets.QPushButton("?")
+    dialog._disable_default_button(self._guide_btn)
+    self._guide_btn.setFixedWidth(28)
+    self._guide_btn.setToolTip("Open a quick guide to common FoldQC workflows.")
+    metric_row = QtWidgets.QHBoxLayout()
+    metric_row.addWidget(self._prop_combo)
+    metric_row.addWidget(self._guide_btn)
+    prop_form.addRow("Color by:", metric_row)
 
     self._ref_label = QtWidgets.QLabel("Reference:")
     self._ref_edit = QtWidgets.QLineEdit()
@@ -253,14 +301,7 @@ def build_dialog_ui(dialog) -> GuiWidgets:
     self._preview_label.setToolTip(
         "Compact summary of what the selected metric will do."
     )
-    self._guide_btn = QtWidgets.QPushButton("?")
-    dialog._disable_default_button(self._guide_btn)
-    self._guide_btn.setFixedWidth(28)
-    self._guide_btn.setToolTip("Open a quick guide to common FoldQC workflows.")
-    preview_row = QtWidgets.QHBoxLayout()
-    preview_row.addWidget(self._preview_label)
-    preview_row.addWidget(self._guide_btn)
-    prop_form.addRow(self._preview_caption, preview_row)
+    prop_form.addRow(self._preview_caption, self._preview_label)
 
     self._palette_combo = QtWidgets.QComboBox()
     for spec in iter_gui_palettes():
@@ -307,16 +348,58 @@ def build_dialog_ui(dialog) -> GuiWidgets:
     # --- Statistics text box ---
     stats_group = QtWidgets.QGroupBox("Statistics")
     stats_group.setToolTip("Summary statistics for the most recently applied metric.")
-    stats_layout = QtWidgets.QVBoxLayout(stats_group)
+    stats_layout = QtWidgets.QHBoxLayout(stats_group)
     self._stats_browser = QtWidgets.QTextBrowser()
-    self._stats_browser.setMaximumHeight(235)
+    self._stats_browser.setMaximumHeight(STATISTICS_TEXT_MAX_HEIGHT)
+    self._stats_browser.setMinimumWidth(280)
     self._stats_browser.setReadOnly(True)
     self._stats_browser.setPlainText("No property applied yet.")
     self._stats_browser.setToolTip(
         "Read-only metric statistics for the selected target after coloring "
         "or plot preparation."
     )
-    stats_layout.addWidget(self._stats_browser)
+    stats_layout.addWidget(self._stats_browser, 1)
+
+    selection_panel = QtWidgets.QWidget()
+    selection_panel.setMaximumWidth(190)
+    selection_layout = QtWidgets.QVBoxLayout(selection_panel)
+    selection_layout.setContentsMargins(6, 0, 0, 0)
+    threshold_label = QtWidgets.QLabel("Threshold:")
+    selection_layout.addWidget(threshold_label)
+    self._stats_threshold_spin = QtWidgets.QDoubleSpinBox()
+    self._stats_threshold_spin.setDecimals(3)
+    self._stats_threshold_spin.setRange(-1_000_000.0, 1_000_000.0)
+    self._stats_threshold_spin.setKeyboardTracking(False)
+    self._stats_threshold_spin.setEnabled(False)
+    self._stats_threshold_spin.setToolTip(
+        "Threshold applied to FoldQC's stored metric values, not current "
+        f"{VIEWER_NAME} B-factors."
+    )
+    selection_layout.addWidget(self._stats_threshold_spin)
+    selection_buttons = QtWidgets.QHBoxLayout()
+    self._stats_select_ge_btn = QtWidgets.QPushButton("Select ≥")
+    self._stats_select_le_btn = QtWidgets.QPushButton("Select ≤")
+    for button in (self._stats_select_ge_btn, self._stats_select_le_btn):
+        dialog._disable_default_button(button)
+        button.setEnabled(False)
+        selection_buttons.addWidget(button)
+    self._stats_select_ge_btn.setToolTip(
+        "Create or replace a named selection for finite metric values at or above "
+        "the threshold."
+    )
+    self._stats_select_le_btn.setToolTip(
+        "Create or replace a named selection for finite metric values at or below "
+        "the threshold."
+    )
+    selection_layout.addLayout(selection_buttons)
+    self._stats_selection_status = QtWidgets.QLabel("Apply a metric coloring first.")
+    self._stats_selection_status.setWordWrap(True)
+    self._stats_selection_status.setToolTip(
+        "The named selection remains available in the PyMOL object manager."
+    )
+    selection_layout.addWidget(self._stats_selection_status)
+    selection_layout.addStretch()
+    stats_layout.addWidget(selection_panel)
     root.addWidget(stats_group)
 
     # --- Button row ---
@@ -354,5 +437,5 @@ def build_dialog_ui(dialog) -> GuiWidgets:
         dialog._disable_default_button(btn)
         btn_layout.addWidget(btn)
 
-    root.addLayout(btn_layout)
+    outer_layout.addLayout(btn_layout)
     return GuiWidgets.capture(self)

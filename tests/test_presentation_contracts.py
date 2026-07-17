@@ -180,6 +180,18 @@ def test_dialog_and_application_have_no_dynamic_workflow_bridge() -> None:
     assert not (root / "gui_plots.py").exists()
 
 
+def test_dialog_content_scrolls_instead_of_compressing_form_rows() -> None:
+    source = Path(__file__).resolve().parents[1].joinpath("gui_layout.py").read_text()
+
+    assert "scroll_area = QtWidgets.QScrollArea()" in source
+    assert "scroll_content = VerticalScrollContent()" in source
+    assert "hint.setWidth(0)" in source
+    assert "scroll_area.setVerticalScrollBarPolicy(ScrollBarAsNeeded)" in source
+    assert "scroll_area.setHorizontalScrollBarPolicy(ScrollBarAlwaysOff)" in source
+    assert "outer_layout.addWidget(scroll_area, 1)" in source
+    assert "outer_layout.addLayout(btn_layout)" in source
+
+
 def test_native_browse_paths_remain_provisional_until_lifecycle_commit() -> None:
     tree = ast.parse(Path(__file__).resolve().parents[1].joinpath("gui.py").read_text())
     dialog = next(

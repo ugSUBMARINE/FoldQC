@@ -55,6 +55,33 @@ class PaintTarget:
 
 
 @dataclass(frozen=True)
+class ObjectTokenSelection:
+    """FoldQC-owned token indices selected independently in one viewer object."""
+
+    obj_name: str
+    token_map: TokenMap
+    token_indices: tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class StatisticsSelectionTarget:
+    """One immutable metric array available for statistics thresholding."""
+
+    obj_name: str
+    token_map: TokenMap
+    values: np.ndarray
+
+    def __post_init__(self) -> None:
+        values = np.ascontiguousarray(np.asarray(self.values, dtype=np.float32))
+        if values.shape != (len(self.token_map),):
+            raise ValueError(
+                f"Metric values for {self.obj_name!r} do not match its token map."
+            )
+        values.setflags(write=False)
+        object.__setattr__(self, "values", values)
+
+
+@dataclass(frozen=True)
 class PaintBatchResult:
     """Resolved range and mappings from a viewer paint operation."""
 
@@ -131,6 +158,12 @@ class ViewerPort(Protocol):
         selection_name: str,
         token_indices: Sequence[int],
         object_token_maps: Sequence[tuple[str, TokenMap]],
+    ) -> None: ...
+
+    def update_object_token_selection(
+        self,
+        selection_name: str,
+        targets: Sequence[ObjectTokenSelection],
     ) -> None: ...
 
     def selection_token_indices(
@@ -240,6 +273,8 @@ class DialogViewPort(Protocol):
     def apply_lifecycle(self, update: LifecycleUiUpdate) -> None: ...
 
     def set_busy(self, state: BusyViewState) -> None: ...
+
+    def set_statistics_selection(self, state: StatisticsSelectionViewState) -> None: ...
 
     def close(self) -> None: ...
 
@@ -383,3 +418,14 @@ class ContextViewState:
     target_choices: tuple[TargetChoice, ...] = ()
     selected_rank: int | None = None
     selected_target: str | None = None
+
+
+@dataclass(frozen=True)
+class StatisticsSelectionViewState:
+    """Deterministic state for the statistics threshold-selection controls."""
+
+    enabled: bool = False
+    threshold: float = 0.0
+    minimum: float = 0.0
+    maximum: float = 0.0
+    status_text: str = "Apply a metric coloring first."

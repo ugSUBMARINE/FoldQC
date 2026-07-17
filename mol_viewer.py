@@ -20,6 +20,7 @@ import numpy as np
 from .gui_services import (
     ObjectPaintMapping,
     ObjectTokenInspection,
+    ObjectTokenSelection,
     PaintBatchResult,
     PaintTarget,
 )
@@ -1222,6 +1223,30 @@ def update_token_selection(
         cmd.refresh()
 
 
+def update_object_token_selection(
+    selection_name: str,
+    targets: Sequence[ObjectTokenSelection],
+    *,
+    enable: bool = True,
+    refresh_view: bool = True,
+) -> None:
+    """Create one named selection from independently thresholded objects."""
+    from pymol import cmd
+
+    expressions = [
+        compact_selection_expression(
+            target.token_indices, [(target.obj_name, target.token_map)]
+        )
+        for target in targets
+    ]
+    expression = " or ".join(part for part in expressions if part)
+    cmd.select(selection_name, expression or "none")
+    if enable:
+        cmd.enable(selection_name)
+    if refresh_view:
+        cmd.refresh()
+
+
 def show_token_selection(
     selection_name: str,
     token_indices: Iterable[int],
@@ -1338,6 +1363,13 @@ class PyMOLViewer:
         object_token_maps: Sequence[tuple[str, TokenMap]],
     ) -> None:
         update_token_selection(selection_name, token_indices, object_token_maps)
+
+    def update_object_token_selection(
+        self,
+        selection_name: str,
+        targets: Sequence[ObjectTokenSelection],
+    ) -> None:
+        update_object_token_selection(selection_name, targets)
 
     def selection_token_indices(
         self, token_map: TokenMap, selection: str, *, obj_name: str

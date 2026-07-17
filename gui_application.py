@@ -23,6 +23,7 @@ from .plot_coordinator import PlotCoordinator
 from .plot_preparation import PlotPreparationService
 from .prediction_lifecycle import PredictionLifecycleService
 from .presentation import PresentationPort
+from .statistics_selection import StatisticsSelectionService
 
 
 class GuiApplicationServices:
@@ -63,11 +64,13 @@ class GuiApplicationServices:
             presenter,
             accepted_overlap_warnings,
         )
+        self.statistics_selection = StatisticsSelectionService(viewer, presenter, view)
         self.coloring = ColoringCoordinator(
             viewer,
             presenter,
             self.context,
             self.metric_computation,
+            self.statistics_selection,
         )
         self.plot_preparation = PlotPreparationService()
         self.plots = PlotCoordinator(self.plot_preparation)

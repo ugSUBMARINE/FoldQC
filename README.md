@@ -80,10 +80,17 @@ Development of FoldQC has included coding assistance from OpenAI's Codex.
    affinity values are intentionally excluded from this per-model table.
 4. Click the paint/color action to write the metric into B-factors and color the
    structure in PyMOL.
-5. For selection-based metrics or site-focused plots, enter a PyMOL selection
+5. Use the statistics panel's threshold control and `Select ≥` / `Select ≤`
+   buttons to create a persistent named PyMOL selection from the metric values
+   that were just colored. FoldQC uses its stored token map and metric array,
+   not the object's current B-factors. For ensemble targets, each member is
+   thresholded against its own values and combined into one selection. Reusing
+   a metric/direction pair replaces its stable `foldqc_<metric>_ge` or
+   `foldqc_<metric>_le` selection.
+6. For selection-based metrics or site-focused plots, enter a PyMOL selection
    in the contextual Reference / Ligand-site field. The cutoff field is enabled
    for metrics that use it, such as contact-filtered PAE/PDE and PAE domain labels.
-6. Use the `Plot` dropdown and ensemble actions for heatmaps, line plots,
+7. Use the `Plot` dropdown and ensemble actions for heatmaps, line plots,
    PAE/PDE summary plots, binding-site fingerprints, and multi-model summaries.
 
 `Load Ensemble...` is enabled only for predictions containing at least two

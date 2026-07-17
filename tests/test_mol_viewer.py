@@ -7,7 +7,7 @@ from pathlib import Path
 
 import numpy as np
 from FoldQC import mol_viewer
-from FoldQC.gui_services import ManagedColorbar
+from FoldQC.gui_services import ManagedColorbar, ObjectTokenSelection
 from FoldQC.token_map import ResidueId, TokenInfo, TokenMap
 
 
@@ -379,4 +379,31 @@ def test_coordinates_transform_and_plot_selection_are_viewer_operations(
         ("foldqc_plot_selection", "(%model and polymer and chain A)")
     ]
     assert cmd.enabled == ["foldqc_plot_selection"]
+    assert cmd.refreshes == 1
+
+
+def test_object_specific_token_selection_builds_one_consolidated_expression(
+    monkeypatch,
+) -> None:
+    cmd = types.SimpleNamespace(selections=[], enabled=[], refreshes=0)
+    cmd.select = lambda *args: cmd.selections.append(args)
+    cmd.enable = lambda name: cmd.enabled.append(name)
+    cmd.refresh = lambda: setattr(cmd, "refreshes", cmd.refreshes + 1)
+    monkeypatch.setitem(sys.modules, "pymol", types.SimpleNamespace(cmd=cmd))
+    token_map = TokenMap((_token(0), _token(1)))
+
+    mol_viewer.PyMOLViewer().update_object_token_selection(
+        "foldqc_plddt_ge",
+        (
+            ObjectTokenSelection("model_0", token_map, (0,)),
+            ObjectTokenSelection("model_1", token_map, (1,)),
+        ),
+    )
+
+    name, expression = cmd.selections[0]
+    assert name == "foldqc_plddt_ge"
+    assert "%model_0" in expression and "resi 1" in expression
+    assert "%model_1" in expression and "resi 2" in expression
+    assert " or " in expression
+    assert cmd.enabled == ["foldqc_plddt_ge"]
     assert cmd.refreshes == 1

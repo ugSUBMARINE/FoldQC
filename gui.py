@@ -169,6 +169,16 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
             )
         self.widgets._guide_btn.clicked.connect(self._show_guide)
         self.widgets._apply_btn.clicked.connect(self._apply_coloring)
+        self.widgets._stats_select_ge_btn.clicked.connect(
+            lambda: self.services.statistics_selection.select(
+                "ge", self.widgets._stats_threshold_spin.value()
+            )
+        )
+        self.widgets._stats_select_le_btn.clicked.connect(
+            lambda: self.services.statistics_selection.select(
+                "le", self.widgets._stats_threshold_spin.value()
+            )
+        )
         self.widgets._export_csv_btn.clicked.connect(self._export_csv)
         self.widgets._ensemble_btn.clicked.connect(self._activate_ensemble)
         self.widgets._close_btn.clicked.connect(self.close)

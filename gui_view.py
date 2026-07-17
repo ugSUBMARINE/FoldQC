@@ -7,6 +7,7 @@ from .gui_services import (
     BusyViewState,
     ContextViewState,
     LifecycleUiUpdate,
+    StatisticsSelectionViewState,
     TargetChoice,
 )
 
@@ -208,6 +209,22 @@ class QtDialogView:
             widget.setEnabled(enabled)
         self._render_ensemble_button()
         self._render_comparison_button()
+
+    def set_statistics_selection(self, state: StatisticsSelectionViewState) -> None:
+        spin = self.widgets._stats_threshold_spin
+        spin.blockSignals(True)
+        try:
+            span = max(state.maximum - state.minimum, 0.0)
+            bound = max(abs(state.minimum), abs(state.maximum), 1.0) * 10.0
+            spin.setRange(-bound, bound)
+            spin.setSingleStep(max(span / 100.0, 0.001))
+            spin.setValue(state.threshold)
+            spin.setEnabled(state.enabled)
+        finally:
+            spin.blockSignals(False)
+        self.widgets._stats_select_ge_btn.setEnabled(state.enabled)
+        self.widgets._stats_select_le_btn.setEnabled(state.enabled)
+        self.widgets._stats_selection_status.setText(state.status_text)
 
     def _render_ensemble_button(self) -> None:
         button = self.widgets._ensemble_btn

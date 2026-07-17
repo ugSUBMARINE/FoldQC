@@ -5,8 +5,9 @@ from __future__ import annotations
 from .analysis import ColorOptions, ComputedMetric, ResolvedAnalysis
 from .context_service import ContextService
 from .gui_metrics import MetricComputationService
-from .gui_services import PaintTarget, ViewerPort
+from .gui_services import PaintTarget, StatisticsSelectionTarget, ViewerPort
 from .presentation import PresentationPort
+from .statistics_selection import StatisticsSelectionService
 from .viewer_transactions import ColorbarChange, PaintTransaction
 
 
@@ -19,11 +20,13 @@ class ColoringCoordinator:
         presenter: PresentationPort,
         context: ContextService,
         metrics_service: MetricComputationService,
+        statistics_selection: StatisticsSelectionService,
     ) -> None:
         self._viewer = viewer
         self._presenter = presenter
         self._context = context
         self._metrics = metrics_service
+        self._statistics_selection = statistics_selection
 
     def execute(
         self,
@@ -135,3 +138,14 @@ class ColoringCoordinator:
                 include_chain_stats=spec.key == "pde_chain_mean",
                 include_domain_labels=spec.is_domain_label,
             )
+        self._statistics_selection.set_coloring_result(
+            spec.key,
+            tuple(
+                StatisticsSelectionTarget(
+                    item.obj_name,
+                    item.model_state.token_map,
+                    item.values,
+                )
+                for item in entries
+            ),
+        )
