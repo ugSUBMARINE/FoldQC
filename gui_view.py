@@ -21,6 +21,11 @@ class QtDialogView:
         self._ensemble_tooltip = "Load a prediction with at least two models first."
         self._comparison_enabled = False
         self._comparison_tooltip = "Load a prediction with at least two models first."
+        self._preview_details_text = ""
+
+    @property
+    def preview_details_text(self) -> str:
+        return self._preview_details_text
 
     def select_object(self, name: str) -> None:
         combo = self.widgets._obj_combo
@@ -89,8 +94,11 @@ class QtDialogView:
     def set_confidence_text(self, text: str) -> None:
         self.widgets._conf_browser.setPlainText(text)
 
-    def set_preview_text(self, text: str) -> None:
+    def set_preview_text(self, text: str, details: str) -> None:
         self.widgets._preview_label.setText(text)
+        self.widgets._preview_label.setToolTip(details)
+        self._preview_details_text = details
+        self.widgets._preview_details_btn.setEnabled(bool(details))
 
     @staticmethod
     def _add_target_choice(combo, choice: TargetChoice) -> None:
@@ -143,7 +151,7 @@ class QtDialogView:
         self.set_plot_availability(state.plot_availability)
         self.apply_field_context(state)
         self.set_confidence_text(state.confidence_text)
-        self.set_preview_text(state.preview_text)
+        self.set_preview_text(state.preview_text, state.preview_details_text)
         self._ensemble_enabled = state.ensemble_enabled
         self._ensemble_tooltip = state.ensemble_tooltip
         self._render_ensemble_button()

@@ -393,6 +393,31 @@ def test_metric_preview_text_handles_no_metric() -> None:
     )
 
 
+def test_metric_preview_summary_preserves_meaning_without_variable_details() -> None:
+    reference = "chain B and resi 10-250"
+    summary = gui_rules.metric_preview_summary(
+        "pae_to_sel",
+        "target_model_0",
+        reference,
+        "5.0",
+        False,
+    )
+    details = gui_rules.metric_preview_text(
+        "pae_to_sel",
+        "target_model_0",
+        reference,
+        "5.0",
+        False,
+    )
+
+    assert "directional PAE" in summary
+    assert '"the reference selection"' in summary
+    assert reference not in summary
+    assert reference in details
+    assert "Matrix plot columns" in details
+    assert "Matrix plot columns" not in summary
+
+
 def test_metric_preview_text_appends_reference_plot_restriction() -> None:
     text = gui_rules.metric_preview_text(
         "plddt",

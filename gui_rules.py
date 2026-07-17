@@ -231,14 +231,15 @@ def preview_cutoff_text(cutoff_text: str | None) -> str:
     return f"{value:g} Å"
 
 
-def metric_preview_text(
+def _metric_preview_base(
     metric_key: str | None,
     target_kind: str,
     reference_selection: str,
     cutoff_text: str | None,
     has_ensemble: bool,
+    *,
+    generalize_reference: bool,
 ) -> str:
-    """Return compact practical text for the selected metric and inputs."""
     if not metric_key:
         return "Select a Color by metric."
 
@@ -251,8 +252,7 @@ def metric_preview_text(
     )
 
     if spec is not None and spec.ensemble_level and not has_ensemble:
-        preview = 'Load an ensemble with "Load Ensemble..." to use this metric.'
-        return _append_reference_plot_guidance(preview, metric_key, ref_sel)
+        return 'Load an ensemble with "Load Ensemble..." to use this metric.'
 
     if spec is not None and spec.needs_reference and not ref_sel:
         if spec.needs_contact_shell:
@@ -268,13 +268,57 @@ def metric_preview_text(
     if template:
         preview = template.format(
             target_text=target_text,
-            ref_sel=ref_sel,
+            ref_sel=(
+                "the reference selection"
+                if generalize_reference and ref_sel
+                else ref_sel
+            ),
             cutoff=preview_cutoff_text(cutoff_text),
         )
     else:
         preview = f"Colors {target_text} by {metrics.metric_label(metric_key)}."
 
+    return preview
+
+
+def metric_preview_summary(
+    metric_key: str | None,
+    target_kind: str,
+    reference_selection: str,
+    cutoff_text: str | None,
+    has_ensemble: bool,
+) -> str:
+    """Return a short meaning-focused explanation for the stable preview row."""
+    return _metric_preview_base(
+        metric_key,
+        target_kind,
+        reference_selection,
+        cutoff_text,
+        has_ensemble,
+        generalize_reference=True,
+    )
+
+
+def metric_preview_text(
+    metric_key: str | None,
+    target_kind: str,
+    reference_selection: str,
+    cutoff_text: str | None,
+    has_ensemble: bool,
+) -> str:
+    """Return the complete practical explanation for preview details."""
+    preview = _metric_preview_base(
+        metric_key,
+        target_kind,
+        reference_selection,
+        cutoff_text,
+        has_ensemble,
+        generalize_reference=False,
+    )
+    if not metric_key:
+        return preview
     preview = _append_ensemble_plot_guidance(preview, metric_key, target_kind)
+    ref_sel = reference_selection.strip()
     return _append_reference_plot_guidance(preview, metric_key, ref_sel)
 
 

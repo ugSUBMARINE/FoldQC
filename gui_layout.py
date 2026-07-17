@@ -23,8 +23,8 @@ SELECTION_EXAMPLES = get_selection_examples()
 
 # Main-dialog text-box height limits. Adjust these two values to tune the
 # vertical balance without changing the surrounding layouts.
-CONFIDENCE_SUMMARY_MAX_HEIGHT = 120
-STATISTICS_TEXT_MAX_HEIGHT = 188
+CONFIDENCE_SUMMARY_MAX_HEIGHT = 90
+STATISTICS_TEXT_MAX_HEIGHT = 120
 
 
 class RecentPredictionItemDelegate(QtWidgets.QStyledItemDelegate):
@@ -81,6 +81,7 @@ class GuiWidgets:
     _plot_btn: QtWidgets.QPushButton
     _plot_menu: QtWidgets.QMenu
     _preview_caption: QtWidgets.QLabel
+    _preview_details_btn: QtWidgets.QPushButton
     _preview_label: QtWidgets.QLabel
     _prop_combo: QtWidgets.QComboBox
     _prop_combo_rows: dict[str, int]
@@ -119,6 +120,7 @@ class GuiWidgets:
             _plot_btn=dialog._plot_btn,
             _plot_menu=dialog._plot_menu,
             _preview_caption=dialog._preview_caption,
+            _preview_details_btn=dialog._preview_details_btn,
             _preview_label=dialog._preview_label,
             _prop_combo=dialog._prop_combo,
             _prop_combo_rows=dialog._prop_combo_rows,
@@ -299,9 +301,16 @@ def build_dialog_ui(dialog) -> GuiWidgets:
         self._preview_label,
     )
     self._preview_label.setToolTip(
-        "Compact summary of what the selected metric will do."
+        "Compact explanation of what the selected metric means."
     )
-    prop_form.addRow(self._preview_caption, self._preview_label)
+    self._preview_details_btn = QtWidgets.QPushButton("?")
+    dialog._disable_default_button(self._preview_details_btn)
+    self._preview_details_btn.setFixedWidth(28)
+    self._preview_details_btn.setToolTip("Show the complete preview explanation.")
+    preview_row = QtWidgets.QHBoxLayout()
+    preview_row.addWidget(self._preview_label, 1)
+    preview_row.addWidget(self._preview_details_btn)
+    prop_form.addRow(self._preview_caption, preview_row)
 
     self._palette_combo = QtWidgets.QComboBox()
     for spec in iter_gui_palettes():

@@ -40,6 +40,7 @@ APP_TITLE = "FoldQC"
 DIALOG_TITLE = f"{APP_TITLE} — Structure Prediction Quality"
 VIEWER_NAME = get_viewer_name()
 SELECTION_EXAMPLES = get_selection_examples()
+PREVIEW_VISIBLE_LINES = 3
 PREDICTION_FILE_FILTER = (
     "Prediction files (*.cif *.pdb *.zip *.tar *.tar.gz *.tgz);;All files (*)"
 )
@@ -62,7 +63,7 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
         super().__init__(parent)
         self._shutdown_complete = False
         self.setWindowTitle(DIALOG_TITLE)
-        self.setMinimumSize(600, 800)
+        self.setMinimumSize(600, 890)
 
         self._build_ui()
         self._presenter = QtPresenter(self)
@@ -75,6 +76,7 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
         self.state = PluginState()
         self._viewer = PyMOLViewer()
         self._guide_dialog = None  # Lightweight first-run guide dialog
+        self._preview_details_dialog = None
         if job_runner is None:
             from .gui_jobs import QtJobRunner
 
@@ -109,13 +111,13 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
         btn.setDefault(False)
 
     def _configure_preview_widgets(self, caption, preview) -> None:
-        """Apply the shared alignment and reserved height for preview text."""
-        minimum_height = preview.fontMetrics().lineSpacing() * 5 + 8
+        """Keep the concise preview at a stable three-line height."""
+        fixed_height = preview.fontMetrics().lineSpacing() * PREVIEW_VISIBLE_LINES + 8
         alignment = AlignLeft | AlignVCenter
         preview.setWordWrap(True)
-        preview.setMinimumHeight(minimum_height)
+        preview.setFixedHeight(fixed_height)
         preview.setAlignment(alignment)
-        caption.setMinimumHeight(minimum_height)
+        caption.setFixedHeight(fixed_height)
         caption.setAlignment(alignment)
 
     def _populate_property_combo_for(self, combo, rows: dict[str, int]) -> None:
@@ -168,6 +170,7 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
                 lambda _checked=False, key=plot_type: self._submit_plot(key)
             )
         self.widgets._guide_btn.clicked.connect(self._show_guide)
+        self.widgets._preview_details_btn.clicked.connect(self._show_preview_details)
         self.widgets._apply_btn.clicked.connect(self._apply_coloring)
         self.widgets._stats_select_ge_btn.clicked.connect(
             lambda: self.services.statistics_selection.select(
@@ -231,6 +234,35 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
             dialog._foldqc_guide_text = self._guide_text()
             self._guide_dialog = dialog
 
+        dialog.show()
+        if hasattr(dialog, "raise_"):
+            dialog.raise_()
+        if hasattr(dialog, "activateWindow"):
+            dialog.activateWindow()
+
+    def _show_preview_details(self) -> None:
+        """Open or refresh the complete explanation for the current preview."""
+        text = self._view.preview_details_text
+        if not text:
+            return
+        dialog = self._preview_details_dialog
+        if dialog is None:
+            dialog = QtWidgets.QDialog(self)
+            dialog.setWindowTitle("FoldQC — Preview details")
+            dialog.setModal(False)
+            dialog.setMinimumWidth(440)
+            layout = QtWidgets.QVBoxLayout(dialog)
+            browser = QtWidgets.QTextBrowser()
+            browser.setReadOnly(True)
+            browser.setMinimumHeight(140)
+            layout.addWidget(browser)
+            close_btn = QtWidgets.QPushButton("Close")
+            self._disable_default_button(close_btn)
+            close_btn.clicked.connect(dialog.close)
+            layout.addWidget(close_btn)
+            dialog._foldqc_preview_browser = browser
+            self._preview_details_dialog = dialog
+        dialog._foldqc_preview_browser.setPlainText(text)
         dialog.show()
         if hasattr(dialog, "raise_"):
             dialog.raise_()

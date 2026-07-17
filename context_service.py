@@ -373,7 +373,14 @@ class ContextService:
             confidence_text=reports.format_confidence_summary(
                 None if active is None else active.data
             ),
-            preview_text=gui_rules.metric_preview_text(
+            preview_text=gui_rules.metric_preview_summary(
+                selection.metric_key,
+                target_kind,
+                selection.reference_selection,
+                selection.cutoff_text,
+                self._state.ensemble is not None,
+            ),
+            preview_details_text=gui_rules.metric_preview_text(
                 selection.metric_key,
                 target_kind,
                 selection.reference_selection,

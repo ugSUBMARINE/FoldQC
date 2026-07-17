@@ -409,6 +409,7 @@ class ContextViewState:
     cutoff_enabled: bool = True
     confidence_text: str = ""
     preview_text: str = ""
+    preview_details_text: str = ""
     statistics_text: str | None = None
     ensemble_enabled: bool = False
     ensemble_tooltip: str = "Load a prediction with at least two models first."
