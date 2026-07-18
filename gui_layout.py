@@ -36,15 +36,17 @@ SMALL_BUTTON_HEIGHT = 25
 CONFIDENCE_SUMMARY_MIN_HEIGHT = 90
 STATISTICS_TEXT_MIN_HEIGHT = 120
 
-PREDICTION_PATH_MIN_WIDTH = 380
-MODEL_SELECTION_BOX_MIN_WIDTH = 250
-ANALYSIS_COMBO_MIN_WIDTH = 300
-REFERENCE_EDIT_MIN_WIDTH = 400
-PALETTE_COMBO_MIN_WIDTH = 180
+# Set the minimum widths of expanding widgets to unrealistically small values;
+# the min. width of the window is then determined by the width of the button row
+PREDICTION_PATH_MIN_WIDTH = 100  # 380
+MODEL_SELECTION_BOX_MIN_WIDTH = 100  # 250
+ANALYSIS_COMBO_MIN_WIDTH = 100  # 300
+REFERENCE_EDIT_MIN_WIDTH = 100  # 400
+PALETTE_COMBO_MIN_WIDTH = 100  # 180
 NUMERIC_EDIT_MIN_WIDTH = 70
 CUTOFF_SPINBOX_WIDTH = 100
-STATISTICS_TEXT_MIN_WIDTH = 360
-STATISTICS_SELECTION_PANEL_WIDTH = 190
+STATISTICS_TEXT_MIN_WIDTH = 100  # 360
+STATISTICS_SELECTION_PANEL_WIDTH = 200
 
 BASE_LAYOUT_SPACING = 6
 
@@ -405,7 +407,7 @@ def build_dialog_ui(dialog) -> GuiWidgets:
     self._palette_reverse_chk.setToolTip(
         "Reverse the selected continuous color palette."
     )
-    reverse_label = QtWidgets.QLabel("Reverse:")
+    reverse_label = QtWidgets.QLabel("rev:")
     reverse_label.setToolTip(self._palette_reverse_chk.toolTip())
     palette_range_row = QtWidgets.QHBoxLayout()
     palette_range_row.addWidget(self._palette_combo, 3)
