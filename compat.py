@@ -75,6 +75,17 @@ _QComboBox = getattr(QtWidgets, "QComboBox", object)
 ComboBoxNoInsert = getattr(
     getattr(_QComboBox, "InsertPolicy", _QComboBox), "NoInsert", 0
 )
+ComboBoxAdjustToMinimumContentsLengthWithIcon = getattr(
+    getattr(_QComboBox, "SizeAdjustPolicy", _QComboBox),
+    "AdjustToMinimumContentsLengthWithIcon",
+    0,
+)
+
+# QSizePolicy values used by the main-dialog layout.
+_QSizePolicy = getattr(QtWidgets, "QSizePolicy", object)
+_SizePolicy = getattr(_QSizePolicy, "Policy", _QSizePolicy)
+SizePolicyExpanding = getattr(_SizePolicy, "Expanding", 0)
+SizePolicyFixed = getattr(_SizePolicy, "Fixed", 0)
 
 # Qt.ItemIsEnabled flag
 # Qt5: QtCore.Qt.ItemIsEnabled

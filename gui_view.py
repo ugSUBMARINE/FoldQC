@@ -121,8 +121,8 @@ class QtDialogView:
         self.widgets._ref_edit.setToolTip(state.reference_tooltip)
         self.widgets._cutoff_label.setText(state.cutoff_label)
         self.widgets._cutoff_label.setToolTip(state.cutoff_tooltip)
-        self.widgets._cutoff_edit.setEnabled(state.cutoff_enabled)
-        self.widgets._cutoff_edit.setToolTip(state.cutoff_tooltip)
+        self.widgets._cutoff_spin.setEnabled(state.cutoff_enabled)
+        self.widgets._cutoff_spin.setToolTip(state.cutoff_tooltip)
 
     def apply_context(self, state: ContextViewState) -> None:
         combo = self.widgets._model_combo

@@ -63,7 +63,6 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
         super().__init__(parent)
         self._shutdown_complete = False
         self.setWindowTitle(DIALOG_TITLE)
-        self.setMinimumSize(600, 890)
 
         self._build_ui()
         self._presenter = QtPresenter(self)
@@ -152,7 +151,7 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
         self.widgets._obj_combo.currentIndexChanged.connect(self._context_changed)
         self.widgets._prop_combo.currentIndexChanged.connect(self._context_changed)
         self.widgets._ref_edit.textChanged.connect(self._context_changed)
-        self.widgets._cutoff_edit.textChanged.connect(self._context_changed)
+        self.widgets._cutoff_spin.valueChanged.connect(self._context_changed)
         self.widgets._palette_combo.currentIndexChanged.connect(
             self.services.analysis.invalidate_ui
         )
@@ -169,6 +168,7 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
             action.triggered.connect(
                 lambda _checked=False, key=plot_type: self._submit_plot(key)
             )
+        self.widgets._plot_btn.clicked.connect(self._show_plot_menu)
         self.widgets._guide_btn.clicked.connect(self._show_guide)
         self.widgets._preview_details_btn.clicked.connect(self._show_preview_details)
         self.widgets._apply_btn.clicked.connect(self._apply_coloring)
@@ -282,11 +282,17 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
                 recent_predictions=state.recent_predictions,
             )
         )
+        geometry_restored = False
         if state.geometry and hasattr(self, "restoreGeometry"):
             try:
-                self.restoreGeometry(state.geometry)
+                geometry_restored = bool(self.restoreGeometry(state.geometry))
             except Exception:
                 pass
+        if not geometry_restored:
+            layout = self.layout()
+            if layout is not None:
+                layout.activate()
+            self.resize(self.minimumSizeHint())
 
     def _connect_shutdown(self) -> None:
         """Release session-owned resources only when the Qt application exits."""
@@ -321,7 +327,7 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
             target_name=self.widgets._obj_combo.currentText().strip(),
             metric_key=None if metric is None else str(metric),
             reference_selection=self.widgets._ref_edit.text().strip(),
-            cutoff_text=self.widgets._cutoff_edit.text().strip(),
+            cutoff_text=str(self.widgets._cutoff_spin.value()),
         )
 
     @staticmethod
@@ -424,6 +430,11 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
             self.services.analysis.submit(self._capture_action(plot_type))
         except ValueError as exc:
             self._presenter.present_notice(Notice("plot_preflight", str(exc)))
+
+    def _show_plot_menu(self) -> None:
+        """Open the plot menu below the centered, menu-indicator-free button."""
+        button = self.widgets._plot_btn
+        self.widgets._plot_menu.popup(button.mapToGlobal(button.rect().bottomLeft()))
 
     def _activate_ensemble(self) -> None:
         self.services.ensemble.activate(self.widgets._obj_combo.currentText().strip())

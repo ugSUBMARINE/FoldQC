@@ -72,7 +72,7 @@ Development of FoldQC has included coding assistance from OpenAI's Codex.
    When FoldQC must create a model object in PyMOL, it initially applies the
    familiar pLDDT quality-class coloring. If the named object already exists,
    FoldQC reuses it without overwriting its current colors.
-   For predictions with multiple ranks, `Compare models…` opens a read-only
+   For predictions with multiple ranks, `Compare` opens a read-only
    table of provider summary scores for every rank. Selecting a row switches to
    that model. The table reads compact scalar summaries such as ranking score,
    pTM, ipTM, and complex pLDDT without loading every structure or lazy PAE/PDE
@@ -90,10 +90,10 @@ Development of FoldQC has included coding assistance from OpenAI's Codex.
 6. For selection-based metrics or site-focused plots, enter a PyMOL selection
    in the contextual Reference / Ligand-site field. The cutoff field is enabled
    for metrics that use it, such as contact-filtered PAE/PDE and PAE domain labels.
-7. Use the `Plot` dropdown and ensemble actions for heatmaps, line plots,
+7. Use the `Plot` menu and ensemble actions for heatmaps, line plots,
    PAE/PDE summary plots, binding-site fingerprints, and multi-model summaries.
 
-`Load Ensemble...` is enabled only for predictions containing at least two
+`Load Ensemble` is enabled only for predictions containing at least two
 models and only until that prediction's ensemble has been activated. Its
 tooltip explains when a single-model prediction or an already-loaded ensemble
 makes the action unavailable.
@@ -184,7 +184,7 @@ baseline.
 
 ## CSV Export Schema
 
-Use `Export CSV...` to write token-level scalar values for the currently
+Use `Export CSV` to write token-level scalar values for the currently
 selected metric, target, reference selection, and cutoff/threshold. The export
 does not require the metric to be colored first. It is intended for downstream
 analysis, so it includes biological token metadata and provenance, but omits

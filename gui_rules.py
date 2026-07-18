@@ -252,7 +252,7 @@ def _metric_preview_base(
     )
 
     if spec is not None and spec.ensemble_level and not has_ensemble:
-        return 'Load an ensemble with "Load Ensemble..." to use this metric.'
+        return 'Load an ensemble with "Load Ensemble" to use this metric.'
 
     if spec is not None and spec.needs_reference and not ref_sel:
         if spec.needs_contact_shell:

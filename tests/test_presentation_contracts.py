@@ -180,16 +180,54 @@ def test_dialog_and_application_have_no_dynamic_workflow_bridge() -> None:
     assert not (root / "gui_plots.py").exists()
 
 
-def test_dialog_content_scrolls_instead_of_compressing_form_rows() -> None:
+def test_dialog_uses_content_derived_resize_policy() -> None:
+    root = Path(__file__).resolve().parents[1]
+    layout_source = (root / "gui_layout.py").read_text()
+    dialog_source = (root / "gui.py").read_text()
+
+    assert "QScrollArea" not in layout_source
+    assert "VerticalScrollContent" not in layout_source
+    assert "root = NaturalDialogLayout(dialog)" in layout_source
+    assert "root.addGrowingWidget(model_group)" in layout_source
+    assert "root.addGrowingWidget(stats_group)" in layout_source
+    assert "growth, remainder = divmod(surplus" in layout_source
+    assert layout_source.count("_fix_height_to_content(") == 4
+    assert (
+        layout_source.count("setSizePolicy(SizePolicyExpanding, SizePolicyFixed)") >= 4
+    )
+    assert "setMinimumSize(600, 890)" not in dialog_source
+    assert "self.resize(self.minimumSizeHint())" in dialog_source
+
+
+def test_dialog_button_and_text_panel_geometry_is_centralized() -> None:
     source = Path(__file__).resolve().parents[1].joinpath("gui_layout.py").read_text()
 
-    assert "scroll_area = QtWidgets.QScrollArea()" in source
-    assert "scroll_content = VerticalScrollContent()" in source
-    assert "hint.setWidth(0)" in source
-    assert "scroll_area.setVerticalScrollBarPolicy(ScrollBarAsNeeded)" in source
-    assert "scroll_area.setHorizontalScrollBarPolicy(ScrollBarAlwaysOff)" in source
-    assert "outer_layout.addWidget(scroll_area, 1)" in source
-    assert "outer_layout.addLayout(btn_layout)" in source
+    for constant in (
+        "PRIMARY_BUTTON_WIDTH = 127",
+        "PRIMARY_BUTTON_HEIGHT = 25",
+        "STATISTICS_BUTTON_WIDTH = 80",
+        "STATISTICS_BUTTON_HEIGHT = 25",
+        "SMALL_BUTTON_WIDTH = 28",
+        "SMALL_BUTTON_HEIGHT = 25",
+        "CONFIDENCE_SUMMARY_MIN_HEIGHT = 90",
+        "STATISTICS_TEXT_MIN_HEIGHT = 120",
+    ):
+        assert constant in source
+
+    assert "class FixedMainButton(QtWidgets.QPushButton):" in source
+    assert source.count("FixedMainButton(") == 9  # Definition plus eight buttons.
+    assert source.count("setFixedSize(SMALL_BUTTON_WIDTH, SMALL_BUTTON_HEIGHT)") == 3
+    assert "button.setFixedSize(STATISTICS_BUTTON_WIDTH" in source
+    assert "setMaximumHeight" not in source
+    assert source.count("setVerticalScrollBarPolicy(ScrollBarAsNeeded)") == 2
+    for label in (
+        'FixedMainButton("Folder")',
+        'FixedMainButton("File")',
+        'FixedMainButton("Compare")',
+        'FixedMainButton("Export CSV")',
+        'FixedMainButton("Load Ensemble")',
+    ):
+        assert label in source
 
 
 def test_native_browse_paths_remain_provisional_until_lifecycle_commit() -> None:
@@ -293,15 +331,67 @@ def test_model_comparison_uses_selected_model_as_default_button() -> None:
     assert "close_button.setAutoDefault(False)" in source
 
 
-def test_compare_models_button_shares_model_row_and_summary_is_full_width() -> None:
+def test_model_selection_panel_stacks_controls_beside_equal_width_summary() -> None:
     source = Path(__file__).resolve().parents[1].joinpath("gui_layout.py").read_text()
 
-    assert "model_row.addWidget(self._model_combo, 1)" in source
-    assert "model_row.addWidget(self._compare_models_btn)" in source
-    assert 'form.addRow("Model:", model_row)' in source
-    assert "conf_layout = QtWidgets.QVBoxLayout(conf_group)" in source
-    assert "conf_layout.addWidget(self._conf_browser)" in source
-    assert "compare_controls" not in source
+    assert 'model_group = QtWidgets.QGroupBox("Model selection")' in source
+    assert "model_controls_layout = QtWidgets.QVBoxLayout(model_controls)" in source
+    assert 'model_label = QtWidgets.QLabel("Model:")' in source
+    assert "MODEL_SELECTION_BOX_MIN_WIDTH = 300" in source
+    assert (
+        "_configure_flexible_combo(self._model_combo, MODEL_SELECTION_BOX_MIN_WIDTH)"
+    ) in source
+    assert "self._conf_browser.setMinimumWidth(MODEL_SELECTION_BOX_MIN_WIDTH)" in source
+    assert "model_layout.addWidget(model_controls, 1)" in source
+    assert "model_layout.addWidget(self._conf_browser, 1)" in source
+    assert "model_container" not in source
+
+
+def test_palette_and_scale_range_share_one_ordered_row() -> None:
+    source = Path(__file__).resolve().parents[1].joinpath("gui_layout.py").read_text()
+    row_start = source.index("palette_range_row = QtWidgets.QHBoxLayout()")
+    row_end = source.index(
+        'prop_form.addRow("Palette/Scale range:", palette_range_row)'
+    )
+    row = source[row_start:row_end]
+
+    expected = (
+        "palette_range_row.addWidget(self._palette_combo, 3)",
+        "palette_range_row.addWidget(reverse_label)",
+        "palette_range_row.addWidget(self._palette_reverse_chk)",
+        "palette_range_row.addWidget(min_label)",
+        "palette_range_row.addWidget(self._vmin_edit, 1)",
+        "palette_range_row.addWidget(max_label)",
+        "palette_range_row.addWidget(self._vmax_edit, 1)",
+    )
+    positions = [row.index(statement) for statement in expected]
+    assert positions == sorted(positions)
+    assert "PALETTE_COMBO_MIN_WIDTH = 180" in source
+
+
+def test_cutoff_uses_a_fixed_width_numeric_spinbox() -> None:
+    root = Path(__file__).resolve().parents[1]
+    layout_source = (root / "gui_layout.py").read_text()
+    dialog_source = (root / "gui.py").read_text()
+
+    assert "CUTOFF_SPINBOX_WIDTH = 100" in layout_source
+    assert "self._cutoff_spin = QtWidgets.QDoubleSpinBox()" in layout_source
+    assert "self._cutoff_spin.setFixedWidth(CUTOFF_SPINBOX_WIDTH)" in layout_source
+    assert "self.widgets._cutoff_spin.valueChanged.connect" in dialog_source
+    assert "cutoff_text=str(self.widgets._cutoff_spin.value())" in dialog_source
+
+
+def test_plot_button_opens_unattached_menu_from_centered_button() -> None:
+    root = Path(__file__).resolve().parents[1]
+    layout_source = (root / "gui_layout.py").read_text()
+    dialog_source = (root / "gui.py").read_text()
+
+    assert "self._plot_btn.setMenu" not in layout_source
+    assert (
+        "self.widgets._plot_btn.clicked.connect(self._show_plot_menu)" in dialog_source
+    )
+    assert "self.widgets._plot_menu.popup(" in dialog_source
+    assert "button.mapToGlobal(button.rect().bottomLeft())" in dialog_source
 
 
 def test_plot_actions_are_parented_to_the_real_qt_menu() -> None:
