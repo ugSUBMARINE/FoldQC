@@ -119,6 +119,7 @@ def test_registry_rejects_duplicates_and_invalid_combinations() -> None:
         "higher_is_better",
         "pLDDT",
         "{target_text}",
+        "Details for {target_text}.",
         needs_contact_shell=True,
     )
     with pytest.raises(ValueError, match="contact shell"):
@@ -138,6 +139,12 @@ def test_registry_values_are_immutable_and_validate_cross_field_contracts() -> N
         metrics.MetricRegistry(
             (replace(spec, preview_template="{target_text} {ref_sel} {unknown}"),)
         )
+    with pytest.raises(ValueError, match="details are missing required fields"):
+        metrics.MetricRegistry((replace(spec, details_template="{target_text}"),))
+    with pytest.raises(ValueError, match="unknown details fields"):
+        metrics.MetricRegistry(
+            (replace(spec, details_template="{target_text} {ref_sel} {unknown}"),)
+        )
     with pytest.raises(ValueError, match="not one of its data requirements"):
         metrics.MetricRegistry((replace(spec, requirements=frozenset({"pde"})),))
     with pytest.raises(ValueError, match="Unknown plot key"):
@@ -147,6 +154,9 @@ def test_registry_values_are_immutable_and_validate_cross_field_contracts() -> N
 def test_preview_templates_and_dispatch_are_complete() -> None:
     for spec in metrics.METRICS:
         assert spec.preview_template.format(
+            target_text="T", ref_sel="R", cutoff="5.0 Å"
+        )
+        assert spec.details_template.format(
             target_text="T", ref_sel="R", cutoff="5.0 Å"
         )
     compute.validate_dispatch_registry()

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from .compat import ItemIsEnabled
 from .gui_services import (
+    PREVIEW_DETAILS_TOOLTIP,
     BusyViewState,
     ContextViewState,
     LifecycleUiUpdate,
@@ -96,7 +97,7 @@ class QtDialogView:
 
     def set_preview_text(self, text: str, details: str) -> None:
         self.widgets._preview_label.setText(text)
-        self.widgets._preview_label.setToolTip(details)
+        self.widgets._preview_label.setToolTip(PREVIEW_DETAILS_TOOLTIP)
         self._preview_details_text = details
         self.widgets._preview_details_btn.setEnabled(bool(details))
 

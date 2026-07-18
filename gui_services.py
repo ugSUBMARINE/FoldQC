@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     from .session import SessionState
 
 T = TypeVar("T")
+PREVIEW_DETAILS_TOOLTIP = 'Press the "?" button to show details.'
 
 
 @dataclass(frozen=True)

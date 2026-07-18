@@ -81,6 +81,7 @@ class MetricSpec:
     value_semantics: ValueSemantics
     line_ylabel: str
     preview_template: str
+    details_template: str
     tier: MetricTier = "normal"
     needs_reference: bool = False
     needs_contact_shell: bool = False
@@ -250,6 +251,27 @@ def _validate_metric_specs(specs: tuple[MetricSpec, ...]) -> dict[str, MetricSpe
                 f"Metric {spec.key!r} preview is missing required fields: "
                 f"{sorted(missing_preview_fields)!r}."
             )
+        if not spec.details_template:
+            raise ValueError(f"Metric {spec.key!r} requires a details template.")
+        details_fields = {
+            name
+            for _literal, name, _format_spec, _conversion in Formatter().parse(
+                spec.details_template
+            )
+            if name is not None
+        }
+        unknown_details_fields = details_fields - _PREVIEW_FIELDS
+        if unknown_details_fields:
+            raise ValueError(
+                f"Metric {spec.key!r} has unknown details fields: "
+                f"{sorted(unknown_details_fields)!r}."
+            )
+        missing_details_fields = required_preview_fields - details_fields
+        if missing_details_fields:
+            raise ValueError(
+                f"Metric {spec.key!r} details are missing required fields: "
+                f"{sorted(missing_details_fields)!r}."
+            )
         if spec.needs_contact_shell and not (
             spec.needs_reference and spec.needs_cutoff
         ):
@@ -307,6 +329,12 @@ METRICS = MetricRegistry(
             "higher_is_better",
             "pLDDT",
             "Applies AlphaFold pLDDT confidence classes to {target_text}.",
+            "Uses the canonical token-level pLDDT values for {target_text} and "
+            "applies the four AlphaFold confidence classes: very high (at least "
+            "90), high (70 to below 90), low (50 to below 70), and very low "
+            "(below 50). Blue and light-blue regions have higher predicted local "
+            "accuracy; yellow and orange regions should be interpreted more "
+            "cautiously.",
             reference_scoped_plots=_LINE_DISTRIBUTION,
         ),
         MetricSpec(
@@ -318,6 +346,10 @@ METRICS = MetricRegistry(
             "higher_is_better",
             "pLDDT",
             "Colors {target_text} by continuous local confidence (pLDDT).",
+            "Colors {target_text} with its canonical token-level pLDDT values on "
+            "a continuous scale. Higher values indicate greater confidence in "
+            "the local structure around a residue or ligand atom; low values can "
+            "mark flexible, disordered, or inaccurately modeled regions.",
             reference_scoped_plots=_LINE_DISTRIBUTION,
         ),
         MetricSpec(
@@ -329,6 +361,11 @@ METRICS = MetricRegistry(
             "lower_is_better",
             "PAE (Å)",
             "Colors each token in {target_text} by how well the rest of the model is positioned when aligned on that token.",
+            "For every token i in {target_text}, calculates the mean of PAE[i, :] "
+            "over the other tokens. This is the average uncertainty in the rest "
+            "of the model when the predicted and true structures are aligned on "
+            "token i. Lower values identify better-anchored tokens; higher values "
+            "often identify flexible or poorly positioned regions.",
             plot_modes=_LINE_DISTRIBUTION_MATRIX,
             reference_scoped_plots=_LINE_DISTRIBUTION_MATRIX,
             matrix=PAE_MATRIX,
@@ -342,6 +379,11 @@ METRICS = MetricRegistry(
             "lower_is_better",
             "PAE (Å)",
             "Colors each token in {target_text} by its average positional uncertainty across all alignment frames.",
+            "For every token j in {target_text}, calculates the mean of PAE[:, j] "
+            "over all alignment frames. This estimates how uncertain token j's "
+            "position is from the perspective of all other tokens. Lower values "
+            "indicate more globally consistent placement. Because PAE is "
+            "directional, this can differ from the row mean.",
             plot_modes=_LINE_DISTRIBUTION_MATRIX,
             reference_scoped_plots=_LINE_DISTRIBUTION_MATRIX,
             matrix=PAE_MATRIX,
@@ -355,6 +397,12 @@ METRICS = MetricRegistry(
             "lower_is_better",
             "PAE (Å)",
             'Colors each token in {target_text} by directional PAE from that token to "{ref_sel}".',
+            "For every token i in {target_text}, calculates mean PAE[i, reference] "
+            'using the tokens selected by "{ref_sel}". It measures how confidently '
+            "the reference is positioned when alignment is based on token i. "
+            "Lower values indicate more confident relative placement. PAE is "
+            "directional, so this is not interchangeable with the column-mean "
+            "variant.",
             tier="advanced",
             needs_reference=True,
             plot_modes=_LINE_DISTRIBUTION_MATRIX,
@@ -370,6 +418,11 @@ METRICS = MetricRegistry(
             "lower_is_better",
             "PAE (Å)",
             'Colors each token in {target_text} by directional PAE from "{ref_sel}" to that token.',
+            "For every token j in {target_text}, calculates mean PAE[reference, j] "
+            'using the tokens selected by "{ref_sel}". It measures how confidently '
+            "token j is positioned in alignment frames based on the reference. "
+            "Lower values indicate more confident placement from the reference "
+            "frame. This is the opposite PAE direction from row mean to selection.",
             tier="advanced",
             needs_reference=True,
             plot_modes=_LINE_DISTRIBUTION_MATRIX,
@@ -385,6 +438,11 @@ METRICS = MetricRegistry(
             "lower_is_better",
             "PAE (Å)",
             'Colors {target_text} by bidirectional mean PAE between each token and "{ref_sel}".',
+            "Averages both PAE directions between every token in {target_text} and "
+            'the tokens selected by "{ref_sel}". Reference tokens are scored '
+            "against non-reference tokens. Lower values indicate more mutually "
+            "confident relative placement and make the result less sensitive to "
+            "PAE directionality than either one-way selection mean.",
             tier="advanced",
             needs_reference=True,
             plot_modes=_LINE_DISTRIBUTION_MATRIX,
@@ -400,6 +458,11 @@ METRICS = MetricRegistry(
             "lower_is_better",
             "PAE (Å)",
             'Colors only tokens in "{ref_sel}" within {target_text} by their internal symmetric PAE.',
+            'For only the tokens selected by "{ref_sel}" in {target_text}, '
+            "calculates mean symmetric PAE against the same selected token set. "
+            "Lower values indicate that the selected ligand, residue set, or "
+            "chain is predicted as a more coherent internal arrangement. "
+            "Non-selected tokens are undefined and remain grey.",
             tier="advanced",
             needs_reference=True,
             plot_modes=_LINE_DISTRIBUTION_MATRIX,
@@ -415,6 +478,12 @@ METRICS = MetricRegistry(
             "lower_is_better",
             "PAE (Å)",
             'Colors polymer binding-site residues in {target_text} within {cutoff} of "{ref_sel}" by mean PAE to the reference.',
+            "Finds non-reference polymer residues in {target_text} with any atom "
+            'within {cutoff} of "{ref_sel}", then calculates their symmetric mean '
+            "PAE to the reference tokens. This focuses the result on predicted "
+            "binding-site contacts, including for outputs without PDE. Lower "
+            "values indicate more reliable relative placement; residues outside "
+            "the contact shell or without a value remain grey.",
             tier="advanced",
             needs_reference=True,
             needs_contact_shell=True,
@@ -432,6 +501,12 @@ METRICS = MetricRegistry(
             "categorical_label",
             "Domain label",
             "Colors {target_text} with categorical rigid-domain labels by grouping tokens whose pairwise symmetric PAE stays within the {cutoff} threshold.",
+            "Builds a hierarchy from pairwise symmetric PAE distances in "
+            "{target_text}, then cuts it at the {cutoff} threshold using complete "
+            "linkage. Tokens share a domain only when all pairwise distances "
+            "within that cluster satisfy the threshold. The labels are categorical: "
+            "their numbers and colors do not rank confidence. Ensemble members "
+            "are clustered independently. Requires SciPy.",
             tier="experimental",
             needs_cutoff=True,
             plot_modes=_DISTRIBUTION_MATRIX,
@@ -448,6 +523,12 @@ METRICS = MetricRegistry(
             "categorical_label",
             "Domain label",
             "Colors {target_text} with categorical heuristic PAE domain labels by spectral clustering of a symmetric PAE affinity graph using the {cutoff} threshold as a scale.",
+            "Converts symmetric PAE for {target_text} into an affinity graph using "
+            "{cutoff} as its scale, estimates up to 12 clusters from the normalized-"
+            "Laplacian eigengap, and applies spectral clustering. This heuristic can "
+            "find softer domain boundaries than complete linkage. Labels are "
+            "categorical rather than ordered confidence values, and ensemble "
+            "members are clustered independently. Requires SciPy and scikit-learn.",
             tier="experimental",
             needs_cutoff=True,
             plot_modes=_DISTRIBUTION_MATRIX,
@@ -464,6 +545,10 @@ METRICS = MetricRegistry(
             "lower_is_better",
             "Distance / error (Å)",
             "Colors each token in {target_text} by its average predicted distance error to all other tokens.",
+            "For every token i in {target_text}, calculates mean PDE[i, :] over all "
+            "tokens. This summarizes the predicted error in pairwise distances "
+            "between token i and the whole model. Lower values indicate that its "
+            "distances to the surrounding structure are predicted more reliably.",
             plot_modes=_LINE_DISTRIBUTION_MATRIX,
             reference_scoped_plots=_LINE_DISTRIBUTION_MATRIX,
             matrix=PDE_MATRIX,
@@ -477,6 +562,10 @@ METRICS = MetricRegistry(
             "lower_is_better",
             "Distance / error (Å)",
             "Colors each token in {target_text} by predicted distance error within its own chain.",
+            "For every token in {target_text}, calculates mean PDE only against "
+            "tokens belonging to the same chain. It isolates intra-chain distance "
+            "confidence from inter-chain placement. Lower values identify chain "
+            "regions with more reliably predicted internal geometry.",
             plot_modes=_LINE_DISTRIBUTION_MATRIX,
             reference_scoped_plots=_LINE_DISTRIBUTION_MATRIX,
             matrix=PDE_MATRIX,
@@ -490,6 +579,11 @@ METRICS = MetricRegistry(
             "lower_is_better",
             "Distance / error (Å)",
             'Colors each token in {target_text} by predicted distance error to "{ref_sel}".',
+            "For every token i in {target_text}, calculates mean PDE[i, reference] "
+            'using the tokens selected by "{ref_sel}". It summarizes predicted '
+            "distance error between each token and the chosen ligand, residue set, "
+            "or chain. Lower values indicate more reliable distances to the "
+            "reference.",
             tier="advanced",
             needs_reference=True,
             plot_modes=_LINE_DISTRIBUTION_MATRIX,
@@ -505,6 +599,10 @@ METRICS = MetricRegistry(
             "lower_is_better",
             "Distance / error (Å)",
             'Colors only tokens in "{ref_sel}" within {target_text} by their internal predicted distance error.',
+            'For only the tokens selected by "{ref_sel}" in {target_text}, '
+            "calculates mean PDE against the same selected token set. Lower values "
+            "indicate that the selected region has more reliably predicted internal "
+            "distances. Non-selected tokens are undefined and remain grey.",
             tier="advanced",
             needs_reference=True,
             plot_modes=_LINE_DISTRIBUTION_MATRIX,
@@ -520,6 +618,11 @@ METRICS = MetricRegistry(
             "lower_is_better",
             "Distance / error (Å)",
             'Colors polymer binding-site residues in {target_text} within {cutoff} of "{ref_sel}" by mean PDE to the reference.',
+            "Finds non-reference polymer residues in {target_text} with any atom "
+            'within {cutoff} of "{ref_sel}", then calculates their mean PDE to the '
+            "reference tokens. This isolates predicted distance confidence in the "
+            "binding-site contact shell. Lower values indicate more reliable "
+            "contacts; residues outside the shell or without a value remain grey.",
             tier="advanced",
             needs_reference=True,
             needs_contact_shell=True,
@@ -537,6 +640,11 @@ METRICS = MetricRegistry(
             "higher_is_better",
             "Interaction probability",
             "Colors each token in {target_text} by its average predicted interaction probability across the model.",
+            "For every token in {target_text}, calculates the mean predicted "
+            "interaction or contact probability against all other tokens. Higher "
+            "values indicate broader predicted participation in contacts or "
+            "interactions; they do not by themselves distinguish a specific "
+            "binding partner or prove physical binding.",
             plot_modes=_LINE_DISTRIBUTION_MATRIX,
             reference_scoped_plots=_LINE_DISTRIBUTION_MATRIX,
             matrix=CONTACT_MATRIX,
@@ -550,6 +658,11 @@ METRICS = MetricRegistry(
             "higher_is_better",
             "Interaction probability",
             'Colors each token in {target_text} by predicted interaction probability with "{ref_sel}".',
+            "For every non-reference token in {target_text}, calculates mean "
+            "predicted interaction or contact probability with the tokens selected "
+            'by "{ref_sel}". Higher values indicate a stronger predicted interaction '
+            "with that ligand, chain, or residue set. Reference tokens are undefined "
+            "and remain grey so within-reference contacts do not dominate the scale.",
             tier="advanced",
             needs_reference=True,
             plot_modes=_LINE_DISTRIBUTION_MATRIX,
@@ -565,6 +678,12 @@ METRICS = MetricRegistry(
             "lower_is_better",
             "Distance / error (Å)",
             "Colors {target_text} by per-token coordinate variation in the loaded ensemble after alignment.",
+            "After ensemble setup and alignment, calculates coordinate RMSD for "
+            "each token across the loaded models and colors {target_text} with the "
+            "shared result. Lower values indicate structural agreement between "
+            "models; higher values indicate conformational variability or uncertain "
+            "placement. The default setup aligns models on a high-confidence polymer "
+            "core, while expert mode can use current viewer coordinates.",
             ensemble_level=True,
             reference_scoped_plots=_LINE_DISTRIBUTION,
             aggregate_kind="ensemble_rmsd",
@@ -578,6 +697,11 @@ METRICS = MetricRegistry(
             "higher_is_better",
             "pLDDT",
             "Colors {target_text} by the mean pLDDT at each token across models in the loaded ensemble.",
+            "Calculates the arithmetic mean of canonical pLDDT at every token across "
+            "the loaded ensemble and colors {target_text} with that aggregate. Higher "
+            "values indicate local structure that is consistently assigned high "
+            "confidence across models. A mean can conceal member-to-member variation, "
+            "which is shown by the ensemble pLDDT standard deviation.",
             ensemble_level=True,
             reference_scoped_plots=_LINE_DISTRIBUTION,
             aggregate_kind="ensemble_mean",
@@ -591,6 +715,11 @@ METRICS = MetricRegistry(
             "lower_is_better",
             "pLDDT",
             "Colors {target_text} by how much pLDDT varies at each token across models in the loaded ensemble.",
+            "Calculates the standard deviation of canonical pLDDT at every token "
+            "across the loaded ensemble and colors {target_text} with that aggregate. "
+            "Lower values indicate stable confidence estimates; higher values mark "
+            "positions where confidence varies between models. This measures "
+            "variation in predicted confidence, not coordinate variation.",
             ensemble_level=True,
             reference_scoped_plots=_LINE_DISTRIBUTION,
             aggregate_kind="ensemble_std",
@@ -604,6 +733,12 @@ METRICS = MetricRegistry(
             "higher_is_better",
             "ipTM",
             "Colors chains in {target_text} by chain-level ipTM; use Plot > Matrix for pairwise chain ipTM.",
+            "Assigns every token in each chain of {target_text} that chain's normalized "
+            "ipTM score, falling back to per-chain pTM when needed. Higher values "
+            "indicate greater confidence in chain-level placement or interactions. "
+            "The matrix plot shows pairwise chain ipTM: off-diagonal cells describe "
+            "chain pairs, while diagonal cells are chain-restricted pTM or self "
+            "scores and should not be interpreted as interfaces.",
             plot_modes=frozenset({"line", "matrix"}),
             reference_scoped_plots=frozenset({"line"}),
             matrix=CHAIN_IPTM_MATRIX,

@@ -306,20 +306,48 @@ def metric_preview_text(
     cutoff_text: str | None,
     has_ensemble: bool,
 ) -> str:
-    """Return the complete practical explanation for preview details."""
-    preview = _metric_preview_base(
-        metric_key,
-        target_kind,
-        reference_selection,
-        cutoff_text,
-        has_ensemble,
-        generalize_reference=False,
-    )
+    """Return the detailed metric explanation and contextual plot warnings."""
     if not metric_key:
-        return preview
-    preview = _append_ensemble_plot_guidance(preview, metric_key, target_kind)
+        return "Select a Color by metric."
+
+    spec = metrics.METRICS.find(metric_key)
+    if spec is None:
+        details = f"Colors the target by {metrics.metric_label(metric_key)}."
+    else:
+        ref_sel = reference_selection.strip()
+        target_text = (
+            "all members of the ensemble"
+            if target_kind == "ensemble_group"
+            else "the target"
+        )
+        template_values = {
+            "target_text": target_text,
+            "ref_sel": ref_sel or "the reference selection",
+            "cutoff": preview_cutoff_text(cutoff_text),
+        }
+        summary = spec.preview_template.format(**template_values)
+        explanation = spec.details_template.format(**template_values)
+        details = f"{summary}\n\n{explanation}"
+        requirement = ""
+        if spec.ensemble_level and not has_ensemble:
+            requirement = 'Load an ensemble with "Load Ensemble" to use this metric.'
+        elif spec.needs_reference and not ref_sel:
+            if spec.needs_contact_shell:
+                requirement = (
+                    "Requires a reference selection and contact cutoff, such as a "
+                    "chain, ligand, or residue set."
+                )
+            else:
+                requirement = (
+                    "Requires a reference selection, such as a chain, ligand, or "
+                    "residue set."
+                )
+        if requirement:
+            details = f"{requirement}\n\n{details}"
+
+    details = _append_ensemble_plot_guidance(details, metric_key, target_kind)
     ref_sel = reference_selection.strip()
-    return _append_reference_plot_guidance(preview, metric_key, ref_sel)
+    return _append_reference_plot_guidance(details, metric_key, ref_sel)
 
 
 def _append_ensemble_plot_guidance(
@@ -332,14 +360,17 @@ def _append_ensemble_plot_guidance(
         return preview
 
     if metric_key == "ensemble_rmsd":
-        return f"{preview} Plots show the shared ensemble RMSD values."
+        return f"{preview}\n\nAttention: Plots show the shared ensemble RMSD values."
     if metric_key == "ensemble_plddt_mean":
         return (
-            f"{preview} Line plots show ensemble mean pLDDT with standard "
+            f"{preview}\n\nAttention: Line plots show ensemble mean pLDDT with standard "
             "deviation; distribution plots use the mean values."
         )
     if metric_key == "ensemble_plddt_std":
-        return f"{preview} Plots show the ensemble pLDDT standard-deviation values."
+        return (
+            f"{preview}\n\nAttention: Plots show the ensemble pLDDT "
+            "standard-deviation values."
+        )
 
     plot_details = []
     spec = metrics.METRICS.find(metric_key)
@@ -357,7 +388,7 @@ def _append_ensemble_plot_guidance(
 
     if not plot_details:
         return preview
-    return f"{preview} For ensemble plots, {'; '.join(plot_details)}."
+    return f"{preview}\n\nAttention: For ensemble plots, {'; '.join(plot_details)}."
 
 
 def _append_reference_plot_guidance(
@@ -401,6 +432,6 @@ def _append_reference_plot_guidance(
         plot_text = ", ".join(restricted_plots[:-1])
         plot_text += f", and {restricted_plots[-1]}"
     return (
-        f"{preview} {plot_text.capitalize()} are restricted to tokens selected by "
+        f"{preview}\n\nAttention: {plot_text.capitalize()} are restricted to tokens selected by "
         f'"{reference_selection}".'
     )

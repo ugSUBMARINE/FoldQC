@@ -8,6 +8,7 @@ All Qt imports go through :mod:`compat` to handle Qt5/Qt6 differences.
 
 from __future__ import annotations
 
+from html import escape
 from pathlib import Path
 
 from . import metrics
@@ -262,7 +263,15 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
             layout.addWidget(close_btn)
             dialog._foldqc_preview_browser = browser
             self._preview_details_dialog = dialog
-        dialog._foldqc_preview_browser.setPlainText(text)
+        paragraphs = []
+        for paragraph in text.split("\n\n"):
+            rendered = escape(paragraph).replace("\n", "<br>")
+            if rendered.startswith("Attention:"):
+                rendered = rendered.replace(
+                    "Attention:", "<strong>Attention:</strong>", 1
+                )
+            paragraphs.append(f"<p>{rendered}</p>")
+        dialog._foldqc_preview_browser.setHtml("".join(paragraphs))
         dialog.show()
         if hasattr(dialog, "raise_"):
             dialog.raise_()

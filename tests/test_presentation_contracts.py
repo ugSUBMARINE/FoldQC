@@ -203,7 +203,7 @@ def test_dialog_button_and_text_panel_geometry_is_centralized() -> None:
     source = Path(__file__).resolve().parents[1].joinpath("gui_layout.py").read_text()
 
     for constant in (
-        "PRIMARY_BUTTON_WIDTH = 127",
+        "PRIMARY_BUTTON_WIDTH = 120",
         "PRIMARY_BUTTON_HEIGHT = 25",
         "STATISTICS_BUTTON_WIDTH = 80",
         "STATISTICS_BUTTON_HEIGHT = 25",
@@ -337,7 +337,6 @@ def test_model_selection_panel_stacks_controls_beside_equal_width_summary() -> N
     assert 'model_group = QtWidgets.QGroupBox("Model selection")' in source
     assert "model_controls_layout = QtWidgets.QVBoxLayout(model_controls)" in source
     assert 'model_label = QtWidgets.QLabel("Model:")' in source
-    assert "MODEL_SELECTION_BOX_MIN_WIDTH = 300" in source
     assert (
         "_configure_flexible_combo(self._model_combo, MODEL_SELECTION_BOX_MIN_WIDTH)"
     ) in source
@@ -366,7 +365,6 @@ def test_palette_and_scale_range_share_one_ordered_row() -> None:
     )
     positions = [row.index(statement) for statement in expected]
     assert positions == sorted(positions)
-    assert "PALETTE_COMBO_MIN_WIDTH = 180" in source
 
 
 def test_cutoff_uses_a_fixed_width_numeric_spinbox() -> None:

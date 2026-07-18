@@ -433,6 +433,20 @@ def test_metric_preview_text_appends_reference_plot_restriction() -> None:
         'to tokens selected by "chain B".'
     ) in text
     assert "matrix plot x-ranges" not in text
+    assert "\n\nAttention: Line plot x-ranges" in text
+
+
+def test_metric_details_extend_the_compact_preview() -> None:
+    summary = gui_rules.metric_preview_summary(
+        "pae_row_mean", "target_model_0", "", "5.0", False
+    )
+    details = gui_rules.metric_preview_text(
+        "pae_row_mean", "target_model_0", "", "5.0", False
+    )
+
+    assert details.startswith(summary)
+    assert "mean of PAE[i, :]" in details
+    assert "Lower values identify better-anchored tokens" in details
 
 
 def test_domain_preview_restriction_excludes_unavailable_line_plot() -> None:

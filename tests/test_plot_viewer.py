@@ -63,7 +63,7 @@ def _install_fake_pymol() -> None:
 
 _install_fake_pymol()
 
-from FoldQC.gui_services import TargetChoice  # noqa: E402
+from FoldQC.gui_services import PREVIEW_DETAILS_TOOLTIP, TargetChoice  # noqa: E402
 from FoldQC.gui_view import QtDialogView  # noqa: E402
 from FoldQC.plot_viewer import PlotDialog  # noqa: E402
 from FoldQC.token_map import ResidueId, TokenInfo  # noqa: E402
@@ -186,6 +186,32 @@ class _EnabledWidget:
 
     def setToolTip(self, tooltip: str) -> None:
         self.tooltip = tooltip
+
+
+class _PreviewLabel(_EnabledWidget):
+    def __init__(self) -> None:
+        super().__init__()
+        self.text = ""
+
+    def setText(self, text: str) -> None:
+        self.text = text
+
+
+def test_preview_tooltip_points_to_details_button() -> None:
+    label = _PreviewLabel()
+    button = _EnabledWidget()
+    widgets = types.SimpleNamespace(
+        _preview_label=label,
+        _preview_details_btn=button,
+    )
+    view = QtDialogView(None, widgets)
+
+    view.set_preview_text("Compact preview", "A much longer metric explanation.")
+
+    assert label.text == "Compact preview"
+    assert label.tooltip == PREVIEW_DETAILS_TOOLTIP
+    assert "longer metric explanation" not in label.tooltip
+    assert button.enabled is True
 
 
 def test_active_ensemble_group_is_bold_and_italic_in_target_combo() -> None:

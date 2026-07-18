@@ -18,6 +18,7 @@ from .compat import (
     SizePolicyExpanding,
     SizePolicyFixed,
 )
+from .gui_services import PREVIEW_DETAILS_TOOLTIP
 from .mol_viewer import get_selection_examples, get_viewer_name
 from .palettes import iter_gui_palettes
 
@@ -383,13 +384,11 @@ def build_dialog_ui(dialog) -> GuiWidgets:
         self._preview_caption,
         self._preview_label,
     )
-    self._preview_label.setToolTip(
-        "Compact explanation of what the selected metric means."
-    )
+    self._preview_label.setToolTip(PREVIEW_DETAILS_TOOLTIP)
     self._preview_details_btn = QtWidgets.QPushButton("?")
     dialog._disable_default_button(self._preview_details_btn)
     self._preview_details_btn.setFixedSize(SMALL_BUTTON_WIDTH, SMALL_BUTTON_HEIGHT)
-    self._preview_details_btn.setToolTip("Show the complete preview explanation.")
+    self._preview_details_btn.setToolTip("Show detailed information about the metric.")
     preview_row = QtWidgets.QHBoxLayout()
     preview_row.addWidget(self._preview_label, 1)
     preview_row.addWidget(self._preview_details_btn)
