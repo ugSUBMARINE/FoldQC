@@ -2,9 +2,9 @@
 
 FoldQC is a PyMOL plugin for visualizing confidence metrics from predicted
 protein structures. It supports Boltz (local) prediction folders, Boltz Lab and Boltz
-API outputs, AlphaFold 3 local and server outputs, Chai-1 Discovery and
-Protenix prediction folders, zip/tar archives containing one supported
-prediction folder, and single CIF/PDB files with pLDDT values stored in
+API outputs, AlphaFold 3 local and server outputs, OpenFold3, Chai-1 Discovery,
+and Protenix prediction folders, zip/tar archives containing supported
+prediction folders, and single CIF/PDB files with pLDDT values stored in
 B-factors.
 
 FoldQC can color structures by pLDDT, PAE, PDE, contact probability, chain
@@ -162,11 +162,12 @@ one immutable provider-neutral confidence object with these recognized fields
 when available: `ranking_score`, `confidence_score`, `ptm`, `iptm`,
 `ligand_iptm`, `protein_iptm`, `complex_plddt`, `complex_iplddt`, `complex_pde`,
 `complex_ipde`, `fraction_disordered`, `gpde`, `has_clash`, per-chain pTM/ipTM,
-pairwise chain ipTM, and affinity value/probability. Provider aliases such as
+pairwise chain ipTM, OpenFold3 pairwise bespoke ipTM, and affinity
+value/probability. Provider aliases such as
 `aggregate_score`, `structure_confidence`, `disorder`, and the various chain
 field spellings are accepted only at the provider boundary.
-AF3's numeric `has_clash` values are accepted only when they are exactly `0`
-or `1` and are converted immediately to the canonical boolean.
+AF3 and OpenFold3 numeric `has_clash` values are accepted only when they are
+exactly `0` or `1` and are converted immediately to the canonical boolean.
 Chai-1 score outputs do not provide `fraction_disordered`, so FoldQC omits that
 field from Chai summaries and comparisons.
 
@@ -202,7 +203,7 @@ Base columns:
 | Column | Meaning |
 | --- | --- |
 | `export_schema_version` | CSV schema version. Currently `2`. |
-| `provider` | Prediction provider, such as `boltz`, `boltz_lab`, `boltz_api`, `alphafold3`, `af3_server`, `chai1`, `protenix`, or `structure_only`. |
+| `provider` | Prediction provider, such as `boltz`, `boltz_lab`, `boltz_api`, `alphafold3`, `af3_server`, `openfold3`, `chai1`, `protenix`, or `structure_only`. |
 | `prediction_name` | Provider-scanned prediction name. |
 | `input_path` | Original selected folder, zip, CIF, or PDB path. |
 | `structure_path` | Structure file used for token mapping in this session. |
@@ -281,9 +282,10 @@ Each provider resolves one canonical token-level pLDDT array when it loads a
 model. Boltz uses its token NPZ when present. All atom-level sources, including
 provider confidence arrays and structure B-factors, average finite polymer atom
 values by residue in prediction token order; ligand heavy atoms remain individual
-tokens. Standalone structures, Chai, Boltz Lab, and Boltz API use structure
-B-factors. Missing provider arrays fall back to structure B-factors; malformed
-explicit arrays are reported as errors. Coloring, plots, exports, alignment, and
+tokens. OpenFold3 uses its full-confidence per-atom pLDDT when available.
+Standalone structures, Chai, Boltz Lab, and Boltz API use structure B-factors.
+Missing provider arrays fall back to structure B-factors; malformed explicit
+arrays are reported as errors. Coloring, plots, exports, alignment, and
 ensemble consensus all consume this same canonical array. This follows AlphaFold
 3's documented
 [`atom_plddts` per-atom semantics](https://github.com/google-deepmind/alphafold3/blob/main/docs/output.md#metrics-in-confidences-json).
@@ -321,6 +323,18 @@ and made read-only before entering model state.
 | Ensemble pLDDT std | After ensemble setup, computes the per-token standard deviation of pLDDT across loaded models. | Lower values indicate stable confidence estimates across models; higher values mark positions where model confidence varies between predictions. |
 | Chain ipTM | Uses FoldQC's normalized per-chain ipTM (falling back to per-chain pTM) and assigns each token the score at that chain's position in canonical `TokenMap.chain_order`. Matrix plots use the normalized pairwise chain ipTM matrix. | Higher values indicate higher confidence in chain-level placement or interactions. Off-diagonal cells describe confidence for a chain pair; diagonal cells are chain-restricted pTM/self scores, not interfaces. |
 
+OpenFold3 output roots contain one directory per query and one `seed_<n>`
+directory per model seed. When a selected folder or archive contains multiple
+queries, FoldQC lists each query as a separate prediction candidate, including
+queries below an additional wrapper/output directory. Within a query, all seed
+and diffusion-sample structures are ranked by `sample_ranking_score`. Full
+confidence JSON files provide per-atom pLDDT, PAE, and PDE lazily; when a full
+file is absent, pLDDT falls back to the structure B-factors and PAE/PDE remain
+unavailable. Aggregated confidence supplies average pLDDT, pTM, ipTM, gPDE,
+disorder, clashes, chain pTM, pair-chain ipTM, and bespoke ipTM. Bespoke ipTM is
+shown for finite chain pairs in the confidence summary and is not currently a
+color or plot metric.
+
 Chai-1 Discovery folders provide structure B-factor pLDDT, PAE matrices, and
 score JSON/NPZ files with global pTM/ipTM, per-chain pTM, pairwise chain ipTM,
 and clash flags. PDE metrics are available for Chai only when matching
@@ -346,7 +360,10 @@ Do not assume every provider uses the matrix as a simple "reference chain" by
 element `(i, j)` is documented as the ipTM restricted to tokens from chains `i`
 and `j`; in the public AlphaFold 3 implementation this chain-pair score is
 written symmetrically. In that case `(A, X)` and `(X, A)` should be the same
-apart from rounding or output-version differences.
+apart from rounding or output-version differences. OpenFold3's chain-ID-keyed
+`chain_pair_iptm` and `bespoke_iptm` values are likewise mapped to the canonical
+chain order and represented symmetrically. The bespoke matrix has no diagonal
+self-score and is presented separately from the colorable chain-ipTM matrix.
 
 Boltz-style, Chai-1 Discovery, and Protenix `pair_chains_iptm` outputs can be
 asymmetric. For those matrices, read `[i][j]` as the provider's directional

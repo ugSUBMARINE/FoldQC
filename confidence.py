@@ -45,6 +45,7 @@ class PredictionConfidence:
     chain_iptm: np.ndarray | None = None
     pair_chain_iptm: np.ndarray | None = None
     affinity: AffinityConfidence | None = None
+    pair_bespoke_iptm: np.ndarray | None = None
 
     def __post_init__(self) -> None:
         """Validate directly constructed values and make chain arrays immutable."""
@@ -64,7 +65,12 @@ class PredictionConfidence:
             self.affinity, AffinityConfidence
         ):
             raise ValueError("affinity must be AffinityConfidence or None.")
-        dimensions = {"chain_ptm": 1, "chain_iptm": 1, "pair_chain_iptm": 2}
+        dimensions = {
+            "chain_ptm": 1,
+            "chain_iptm": 1,
+            "pair_chain_iptm": 2,
+            "pair_bespoke_iptm": 2,
+        }
         for attribute, ndim in dimensions.items():
             value = getattr(self, attribute)
             if value is None:
@@ -84,13 +90,16 @@ class PredictionConfidence:
         }
         if len(vector_lengths) > 1:
             raise ValueError("chain_ptm and chain_iptm must have the same length.")
-        if self.pair_chain_iptm is not None:
-            rows, columns = self.pair_chain_iptm.shape
+        for attribute in ("pair_chain_iptm", "pair_bespoke_iptm"):
+            matrix_value = getattr(self, attribute)
+            if matrix_value is None:
+                continue
+            rows, columns = matrix_value.shape
             if rows != columns:
-                raise ValueError("pair_chain_iptm must be a square matrix.")
+                raise ValueError(f"{attribute} must be a square matrix.")
             if vector_lengths and rows not in vector_lengths:
                 raise ValueError(
-                    "pair_chain_iptm dimensions must match the chain-vector length."
+                    f"{attribute} dimensions must match the chain-vector length."
                 )
         if self.pair_chain_iptm is not None and self.chain_ptm is not None:
             matrix = self.pair_chain_iptm.copy()
@@ -138,7 +147,13 @@ class ConfidenceFieldSpec:
                 item.name
                 for item in fields(PredictionConfidence)
                 if item.name
-                not in {"chain_ptm", "chain_iptm", "pair_chain_iptm", "affinity"}
+                not in {
+                    "chain_ptm",
+                    "chain_iptm",
+                    "pair_chain_iptm",
+                    "pair_bespoke_iptm",
+                    "affinity",
+                }
             }
         elif self.source == "affinity":
             allowed = {item.name for item in fields(AffinityConfidence)}
@@ -161,15 +176,31 @@ class ConfidenceSectionSpec:
 
 
 @dataclass(frozen=True)
+class ConfidenceMatrixSectionSpec:
+    attribute: Literal["pair_bespoke_iptm"]
+    label: str
+
+    def __post_init__(self) -> None:
+        if self.attribute != "pair_bespoke_iptm":
+            raise ValueError(
+                f"Unknown confidence matrix-section field: {self.attribute!r}."
+            )
+
+
+@dataclass(frozen=True)
 class ConfidenceSummarySpec:
     fields: tuple[ConfidenceFieldSpec, ...] = ()
     sections: tuple[ConfidenceSectionSpec, ...] = ()
     informational_text: str | None = None
+    matrix_sections: tuple[ConfidenceMatrixSectionSpec, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "fields", tuple(self.fields))
         object.__setattr__(self, "sections", tuple(self.sections))
-        if self.informational_text is not None and (self.fields or self.sections):
+        object.__setattr__(self, "matrix_sections", tuple(self.matrix_sections))
+        if self.informational_text is not None and (
+            self.fields or self.sections or self.matrix_sections
+        ):
             raise ValueError(
                 "Informational confidence schemas cannot also define data fields."
             )
@@ -202,6 +233,20 @@ PROTENIX_CONFIDENCE_SUMMARY = ConfidenceSummarySpec(
     fields=COMMON_CONFIDENCE_SUMMARY.fields
     + (ConfidenceFieldSpec("gpde", "gpde", omit_when_missing=True),),
     sections=COMMON_CONFIDENCE_SUMMARY.sections,
+)
+
+OPENFOLD3_CONFIDENCE_SUMMARY = ConfidenceSummarySpec(
+    fields=(
+        ConfidenceFieldSpec("ranking_score", "sample_ranking_score"),
+        ConfidenceFieldSpec("complex_plddt", "avg_plddt"),
+        ConfidenceFieldSpec("ptm", "ptm"),
+        ConfidenceFieldSpec("iptm", "iptm"),
+        ConfidenceFieldSpec("fraction_disordered", "disorder"),
+        ConfidenceFieldSpec("gpde", "gpde"),
+        ConfidenceFieldSpec("has_clash", "has_clash"),
+    ),
+    sections=(ConfidenceSectionSpec("chain_ptm", "chain_ptm"),),
+    matrix_sections=(ConfidenceMatrixSectionSpec("pair_bespoke_iptm", "bespoke_iptm"),),
 )
 
 BOLTZ_CONFIDENCE_SUMMARY = ConfidenceSummarySpec(
@@ -310,6 +355,15 @@ def parse_prediction_confidence(
     if has_pair:
         values["pair_chain_iptm"] = _chain_matrix(
             pair, "pair_chain_iptm", chain_count, context
+        )
+
+    bespoke_pair, has_bespoke_pair = _first_present(
+        payload,
+        ("pair_bespoke_iptm", "bespoke_iptm"),
+    )
+    if has_bespoke_pair:
+        values["pair_bespoke_iptm"] = _chain_matrix(
+            bespoke_pair, "pair_bespoke_iptm", chain_count, context
         )
 
     if affinity_payload is not None:
@@ -421,12 +475,13 @@ def validate_prediction_confidence(
             raise ValueError(
                 f"confidence.{name} must have shape ({chain_count},); got {value.shape}."
             )
-    pair = confidence.pair_chain_iptm
-    if pair is not None and pair.shape != (chain_count, chain_count):
-        raise ValueError(
-            "confidence.pair_chain_iptm must have shape "
-            f"({chain_count}, {chain_count}); got {pair.shape}."
-        )
+    for name in ("pair_chain_iptm", "pair_bespoke_iptm"):
+        pair = getattr(confidence, name)
+        if pair is not None and pair.shape != (chain_count, chain_count):
+            raise ValueError(
+                f"confidence.{name} must have shape "
+                f"({chain_count}, {chain_count}); got {pair.shape}."
+            )
     return confidence
 
 

@@ -40,6 +40,7 @@ def test_builtin_registry_preserves_detection_precedence() -> None:
     assert [provider.key for provider in BUILTIN_PROVIDERS.providers] == [
         "af3_server",
         "alphafold3",
+        "openfold3",
         "chai1",
         "protenix",
         "boltz_api",

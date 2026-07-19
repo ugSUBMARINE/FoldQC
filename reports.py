@@ -38,7 +38,7 @@ def format_optional_float(value, *, precision: int = 4) -> str:
         return str(value)
 
 
-def format_confidence_summary(pred_data) -> str:
+def format_confidence_summary(pred_data, token_map: TokenMap | None = None) -> str:
     """Render one provider's typed confidence data through its schema."""
     if pred_data is None:
         return "No confidence data loaded."
@@ -76,6 +76,29 @@ def format_confidence_summary(pred_data) -> str:
         lines += ["", f"{section.label}:"]
         for index, value in enumerate(values):
             lines.append(f"  chain {index}: {format_optional_float(value)}")
+
+    for section in spec.matrix_sections:
+        values = getattr(confidence, section.attribute)
+        if values is None or not np.isfinite(values).any():
+            continue
+        labels = (
+            tuple(token_map.chain_order)
+            if token_map is not None and len(token_map.chain_order) == values.shape[0]
+            else tuple(str(index) for index in range(values.shape[0]))
+        )
+        entries = [
+            (labels[row], labels[column], values[row, column])
+            for row in range(values.shape[0])
+            for column in range(row + 1, values.shape[1])
+            if np.isfinite(values[row, column])
+        ]
+        if not entries:
+            continue
+        lines += ["", f"{section.label}:"]
+        for row_label, column_label, value in entries:
+            lines.append(
+                f"  chains {row_label} / {column_label}: {format_optional_float(value)}"
+            )
     return "\n".join(lines)
 
 

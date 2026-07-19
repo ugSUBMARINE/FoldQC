@@ -288,6 +288,33 @@ def test_confidence_summary_protenix_adds_gpde() -> None:
     assert "gpde             : 0.4400" in text
 
 
+def test_openfold_confidence_summary_renders_bespoke_chain_pairs() -> None:
+    text = reports.format_confidence_summary(
+        _confidence_data(
+            "openfold3",
+            PredictionConfidence(
+                ranking_score=0.91,
+                complex_plddt=88.5,
+                pair_bespoke_iptm=np.array(
+                    [
+                        [np.nan, 0.7, np.nan],
+                        [0.7, np.nan, 0.6],
+                        [np.nan, 0.6, np.nan],
+                    ]
+                ),
+            ),
+        ),
+        _token_map("A", "B", "C"),
+    )
+
+    assert "provider         : OpenFold3" in text
+    assert "sample_ranking_score: 0.9100" in text
+    assert "avg_plddt        : 88.5000" in text
+    assert "bespoke_iptm:" in text
+    assert "chains A / B: 0.7000" in text
+    assert "chains B / C: 0.6000" in text
+
+
 def test_confidence_summary_boltz_schema_and_affinity() -> None:
     confidence = PredictionConfidence(
         confidence_score=0.67,

@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from FoldQC.confidence import (
     AffinityConfidence,
     ConfidenceFieldSpec,
+    ConfidenceMatrixSectionSpec,
     ConfidenceSectionSpec,
     ConfidenceSummarySpec,
     PredictionConfidence,
@@ -43,6 +44,7 @@ def test_parser_normalizes_aliases_chain_order_diagonal_and_affinity() -> None:
             "chains_ptm": {"1": 0.7, "0": 0.8},
             "chain_iptm": [0.6, None],
             "chain_pair_iptm": [[0.0, 0.4], [None, 0.0]],
+            "bespoke_iptm": [[None, 0.5], [0.5, None]],
             "unknown_provider_field": "discard me",
         },
         affinity={
@@ -63,12 +65,18 @@ def test_parser_normalizes_aliases_chain_order_diagonal_and_affinity() -> None:
         [[0.8, 0.4], [np.nan, 0.7]],
         equal_nan=True,
     )
+    np.testing.assert_allclose(
+        confidence.pair_bespoke_iptm,
+        [[np.nan, 0.5], [0.5, np.nan]],
+        equal_nan=True,
+    )
     assert confidence.affinity == AffinityConfidence(-1.2, 0.75)
     assert not hasattr(confidence, "unknown_provider_field")
     for array in (
         confidence.chain_ptm,
         confidence.chain_iptm,
         confidence.pair_chain_iptm,
+        confidence.pair_bespoke_iptm,
     ):
         assert array.dtype == np.float32
         assert array.flags.c_contiguous
@@ -128,6 +136,7 @@ def test_typed_confidence_validates_direct_values_and_chain_shapes() -> None:
         ptm=1,
         chain_ptm=np.array([0.8, np.nan]),
         pair_chain_iptm=np.eye(2),
+        pair_bespoke_iptm=np.array([[np.nan, 0.4], [0.4, np.nan]]),
     )
     assert confidence.ptm == 1.0
     assert validate_prediction_confidence(confidence, 2) is confidence
@@ -135,11 +144,25 @@ def test_typed_confidence_validates_direct_values_and_chain_shapes() -> None:
         PredictionConfidence(ptm=np.inf)
     with pytest.raises(ValueError, match=r"shape \(3,\)"):
         validate_prediction_confidence(confidence, 3)
+    with pytest.raises(ValueError, match="pair_bespoke_iptm must have shape"):
+        validate_prediction_confidence(
+            PredictionConfidence(pair_bespoke_iptm=np.eye(2)),
+            3,
+        )
 
 
 def test_confidence_merge_enriches_identity_and_rejects_conflicts() -> None:
-    current = PredictionConfidence(ptm=0.8, chain_ptm=np.array([0.7, 0.6]))
-    incoming = PredictionConfidence(iptm=0.9, chain_ptm=np.array([0.7, 0.6]))
+    bespoke = np.array([[np.nan, 0.5], [0.5, np.nan]])
+    current = PredictionConfidence(
+        ptm=0.8,
+        chain_ptm=np.array([0.7, 0.6]),
+        pair_bespoke_iptm=bespoke,
+    )
+    incoming = PredictionConfidence(
+        iptm=0.9,
+        chain_ptm=np.array([0.7, 0.6]),
+        pair_bespoke_iptm=bespoke,
+    )
 
     merged = merge_prediction_confidence(current, incoming)
 
@@ -147,6 +170,7 @@ def test_confidence_merge_enriches_identity_and_rejects_conflicts() -> None:
     assert merged.ptm == 0.8
     assert merged.iptm == 0.9
     assert merged.chain_ptm is current.chain_ptm
+    assert merged.pair_bespoke_iptm is current.pair_bespoke_iptm
     assert merge_prediction_confidence(current, None) is current
     with pytest.raises(ValueError, match="Conflicting model confidence field: ptm"):
         merge_prediction_confidence(
@@ -158,6 +182,10 @@ def test_confidence_merge_enriches_identity_and_rejects_conflicts() -> None:
 
 def test_confidence_presentation_schemas_validate_typed_attributes() -> None:
     assert ConfidenceFieldSpec("ptm", "pTM").attribute == "ptm"
+    assert (
+        ConfidenceMatrixSectionSpec("pair_bespoke_iptm", "Bespoke").attribute
+        == "pair_bespoke_iptm"
+    )
     assert (
         ConfidenceFieldSpec("probability", "Affinity", source="affinity").source
         == "affinity"
@@ -172,6 +200,8 @@ def test_confidence_presentation_schemas_validate_typed_attributes() -> None:
         ConfidenceFieldSpec("unknown", "Unknown")
     with pytest.raises(ValueError, match="Unknown confidence section field"):
         ConfidenceSectionSpec("pair_chain_iptm", "Pair")
+    with pytest.raises(ValueError, match="Unknown confidence matrix-section field"):
+        ConfidenceMatrixSectionSpec("pair_chain_iptm", "Pair")  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="cannot also define data fields"):
         ConfidenceSummarySpec(
             fields=(ConfidenceFieldSpec("ptm", "pTM"),),

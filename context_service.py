@@ -371,7 +371,8 @@ class ContextService:
             cutoff_tooltip=field.cutoff_tooltip,
             cutoff_enabled=field.cutoff_enabled,
             confidence_text=reports.format_confidence_summary(
-                None if active is None else active.data
+                None if active is None else active.data,
+                None if active is None else active.structure_index.token_map,
             ),
             preview_text=gui_rules.metric_preview_summary(
                 selection.metric_key,

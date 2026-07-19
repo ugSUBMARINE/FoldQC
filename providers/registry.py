@@ -9,6 +9,7 @@ from .alphafold import AF3ServerProvider, AlphaFold3Provider
 from .base import BaseProvider
 from .boltz import BoltzAPIProvider, BoltzLabProvider, BoltzProvider
 from .chai import ChaiProvider
+from .openfold import OpenFold3Provider
 from .protenix import ProtenixProvider
 from .structure import StructureProvider
 
@@ -42,6 +43,7 @@ BUILTIN_PROVIDERS = ProviderRegistry(
     (
         AF3ServerProvider(),
         AlphaFold3Provider(),
+        OpenFold3Provider(),
         ChaiProvider(),
         ProtenixProvider(),
         BoltzAPIProvider(),
