@@ -137,6 +137,9 @@ class RecentPredictionItemDelegate(QtWidgets.QStyledItemDelegate):
 class GuiWidgets:
     """All widgets created by the main dialog layout."""
 
+    _afdb_btn: QtWidgets.QPushButton
+    _afdb_combo: QtWidgets.QComboBox
+    _afdb_edit: QtWidgets.QLineEdit
     _apply_btn: QtWidgets.QPushButton
     _close_btn: QtWidgets.QPushButton
     _compare_models_btn: QtWidgets.QPushButton
@@ -176,6 +179,9 @@ class GuiWidgets:
     @classmethod
     def capture(cls, dialog) -> GuiWidgets:
         return cls(
+            _afdb_btn=dialog._afdb_btn,
+            _afdb_combo=dialog._afdb_combo,
+            _afdb_edit=dialog._afdb_edit,
             _apply_btn=dialog._apply_btn,
             _close_btn=dialog._close_btn,
             _compare_models_btn=dialog._compare_models_btn,
@@ -231,9 +237,10 @@ def build_dialog_ui(dialog) -> GuiWidgets:
     root.setSpacing(BASE_LAYOUT_SPACING)
 
     # --- Input row ---
-    dir_group = QtWidgets.QGroupBox("Prediction output or structure")
+    dir_group = QtWidgets.QGroupBox("Prediction source")
     dir_group.setSizePolicy(SizePolicyExpanding, SizePolicyFixed)
-    dir_layout = QtWidgets.QHBoxLayout(dir_group)
+    dir_layout = QtWidgets.QGridLayout(dir_group)
+    dir_layout.setColumnStretch(0, 1)
     self._recent_combo = QtWidgets.QComboBox()
     _configure_flexible_combo(self._recent_combo, PREDICTION_PATH_MIN_WIDTH)
     self._recent_combo.setEditable(True)
@@ -262,9 +269,30 @@ def build_dialog_ui(dialog) -> GuiWidgets:
     self._recent_combo.setToolTip(
         "Type a prediction path or choose one of the last 10 successfully loaded predictions."
     )
-    dir_layout.addWidget(self._recent_combo, 1)
-    dir_layout.addWidget(self._dir_btn)
-    dir_layout.addWidget(self._file_btn)
+    dir_layout.addWidget(self._recent_combo, 0, 0)
+    dir_layout.addWidget(self._dir_btn, 0, 1)
+    dir_layout.addWidget(self._file_btn, 0, 2)
+
+    self._afdb_combo = QtWidgets.QComboBox()
+    _configure_flexible_combo(self._afdb_combo, PREDICTION_PATH_MIN_WIDTH)
+    self._afdb_combo.setEditable(True)
+    self._afdb_combo.setInsertPolicy(ComboBoxNoInsert)
+    self._afdb_combo.setMaxVisibleItems(10)
+    self._afdb_combo.setCurrentIndex(-1)
+    self._afdb_edit = self._afdb_combo.lineEdit()
+    if self._afdb_edit is None:
+        raise RuntimeError("Editable AlphaFold DB history requires a line editor.")
+    self._afdb_edit.setPlaceholderText("UniProt accession or isoform ID")
+    self._afdb_combo.setToolTip(
+        "Query AlphaFold DB at EMBL-EBI for monomer and complex predictions."
+    )
+    self._afdb_btn = FixedMainButton("AFDB-EBI")
+    self._afdb_btn.setToolTip(
+        "Query AlphaFold DB and select one prediction to download and analyze."
+    )
+    dialog._disable_default_button(self._afdb_btn)
+    dir_layout.addWidget(self._afdb_combo, 1, 0)
+    dir_layout.addWidget(self._afdb_btn, 1, 1)
     _fix_height_to_content(dir_group)
     root.addWidget(dir_group)
 

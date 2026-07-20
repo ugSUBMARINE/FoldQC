@@ -4,10 +4,16 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 from . import metrics
+from .alphafold_database import (
+    AlphaFoldDatabasePort,
+    AlphaFoldDbEntry,
+    normalize_uniprot_qualifier,
+)
 from .analysis import AnalysisRequest, ColorOptions, DeferredAnalysisAction
 from .context_service import ContextService
 from .ensemble import EnsembleState
@@ -35,6 +41,7 @@ from .lifecycle_support import (
     _discover_prediction,
     _discovery_phase,
     _load_rank_data,
+    _materialize_and_load_alphafold_db,
     _scan_and_load_initial_prediction,
 )
 from .loader_models import PredictionDiscovery, PredictionFiles
@@ -60,6 +67,7 @@ class _PredictionReplacementSnapshot:
     context_selection: ContextSelection
     context_state: ContextViewState
     display_path: str
+    afdb_accession: str
 
 
 class PredictionLifecycleService:
@@ -76,6 +84,7 @@ class PredictionLifecycleService:
         job_runner: JobRunner,
         session: SessionPort,
         analysis: AnalysisSubmissionPort,
+        alphafold_database: AlphaFoldDatabasePort,
     ) -> None:
         self._state = state
         self._viewer = viewer
@@ -86,10 +95,12 @@ class PredictionLifecycleService:
         self._job_runner = job_runner
         self._session = session
         self._analysis = analysis
+        self._alphafold_database = alphafold_database
         self._preferred_rank: int | None = None
         self._preferred_target: str | None = None
         self._discovery: PredictionDiscovery | None = None
         self._display_path = ""
+        self._afdb_accession = ""
 
     @property
     def is_loading(self) -> bool:
@@ -166,6 +177,49 @@ class PredictionLifecycleService:
             return
         self._start_prediction_load(normalized, from_history=True)
 
+    def load_alphafold_accession(self, qualifier: str) -> None:
+        try:
+            normalized = normalize_uniprot_qualifier(qualifier)
+        except ValueError as exc:
+            self._restore_input_sources()
+            self._presenter.present_notice(
+                Notice(
+                    "afdb_accession_invalid",
+                    str(exc),
+                    severity="error",
+                    title=f"{APP_TITLE} - error",
+                )
+            )
+            return
+        lease = self._operations.begin(
+            "prediction",
+            title=f"{APP_TITLE} – Loading",
+            label=f"Querying AlphaFold DB for {normalized}…",
+            cancellable=True,
+            on_cancel=self._cancel_pending_load,
+        )
+        if lease is None:
+            self._restore_input_sources()
+            return
+        self._preferred_rank = 0
+        self._preferred_target = None
+        handle = self._job_runner.submit(
+            lease.request_id,
+            lambda report: self._lookup_alphafold_database(normalized, report),
+            self._on_progress,
+            lambda request_id, value: self._on_alphafold_lookup(
+                request_id, normalized, value
+            ),
+            self._on_error,
+        )
+        self._operations.attach(lease, handle)
+
+    def _lookup_alphafold_database(
+        self, qualifier: str, report: Callable[[str], None]
+    ) -> object:
+        report(f"Querying AlphaFold DB for {qualifier}…")
+        return self._alphafold_database.lookup(qualifier, include_complexes=True)
+
     def _start_prediction_load(
         self,
         path: str,
@@ -176,10 +230,10 @@ class PredictionLifecycleService:
     ) -> None:
         path = normalize_prediction_path(path)
         if not path:
-            self._restore_display_path()
+            self._restore_input_sources()
             return
         if not Path(path).exists():
-            self._restore_display_path()
+            self._restore_input_sources()
             if from_history:
                 self._handle_missing_recent_prediction(path)
             else:
@@ -200,7 +254,7 @@ class PredictionLifecycleService:
             on_cancel=self._cancel_pending_load,
         )
         if lease is None:
-            self._restore_display_path()
+            self._restore_input_sources()
             return
         self._preferred_rank = preferred_rank
         self._preferred_target = preferred_target
@@ -247,13 +301,21 @@ class PredictionLifecycleService:
             )
 
     def _restore_display_path(self) -> None:
-        self._view.apply_lifecycle(LifecycleUiUpdate(display_path=self._display_path))
+        self._restore_input_sources()
+
+    def _restore_input_sources(self) -> None:
+        self._view.apply_lifecycle(
+            LifecycleUiUpdate(
+                display_path=self._display_path,
+                afdb_accession=self._afdb_accession,
+            )
+        )
 
     def _cancel_pending_load(self) -> None:
         self._preferred_rank = None
         self._preferred_target = None
         self._discovery = None
-        self._restore_display_path()
+        self._restore_input_sources()
 
     def _on_progress(self, request_id: int, label: str) -> None:
         lease = self._operations.active
@@ -297,7 +359,7 @@ class PredictionLifecycleService:
                 self._preferred_rank = None
                 self._preferred_target = None
                 self._operations.finish(lease)
-                self._restore_display_path()
+                self._restore_input_sources()
                 return
             candidate = candidates[int(selected)]
         self._discovery = discovery
@@ -306,6 +368,75 @@ class PredictionLifecycleService:
             request_id,
             lambda report: _scan_and_load_initial_prediction(
                 discovery, candidate, self._preferred_rank, report
+            ),
+            self._on_progress,
+            self._on_initial_result,
+            self._on_error,
+        )
+        self._operations.attach(lease, handle)
+
+    def _on_alphafold_lookup(
+        self, request_id: int, qualifier: str, value: object
+    ) -> None:
+        lease = self._operations.active
+        if lease is None or lease.request_id != request_id:
+            self._job_runner.dispose(value)
+            return
+        if not isinstance(value, tuple) or not all(
+            isinstance(item, AlphaFoldDbEntry) for item in value
+        ):
+            self._job_runner.dispose(value)
+            self._fail(lease, "The AlphaFold DB worker returned an unexpected result.")
+            return
+        entries = value
+        if not entries:
+            self._fail(
+                lease,
+                f"AlphaFold DB has no monomer or complex prediction for {qualifier}.",
+            )
+            return
+        selected_index = 0
+        if len(entries) > 1:
+            default_index = next(
+                (
+                    index
+                    for index, entry in enumerate(entries)
+                    if not entry.is_complex and qualifier in entry.accessions
+                ),
+                0,
+            )
+            selected = self._presenter.select_item(
+                SelectionRequest(
+                    "afdb_prediction",
+                    "Select AlphaFold DB prediction",
+                    "Prediction:",
+                    tuple(
+                        SelectionItem(
+                            str(index),
+                            entry.display_label,
+                            entry.selection_description,
+                        )
+                        for index, entry in enumerate(entries)
+                    ),
+                    default_key=str(default_index),
+                )
+            )
+            if selected is None:
+                self._preferred_rank = None
+                self._preferred_target = None
+                self._operations.finish(lease)
+                self._restore_input_sources()
+                return
+            selected_index = int(selected)
+        entry = entries[selected_index]
+        self._operations.update(lease, f"Downloading {entry.model_id}…")
+        handle = self._job_runner.submit(
+            request_id,
+            lambda report: _materialize_and_load_alphafold_db(
+                self._alphafold_database,
+                entry,
+                qualifier,
+                report,
             ),
             self._on_progress,
             self._on_initial_result,
@@ -330,7 +461,12 @@ class PredictionLifecycleService:
             new_files = value.pred_files
             model = new_files.model(value.rank)
             object_name = model.object_name
-            new_display_path = normalize_prediction_path(value.display_path)
+            if value.origin.kind == "local_path":
+                new_display_path = normalize_prediction_path(value.origin.value)
+                new_afdb_accession = ""
+            else:
+                new_display_path = ""
+                new_afdb_accession = value.origin.value
             snapshot = _PredictionReplacementSnapshot(
                 self._state.pred_files,
                 self.capture_model_store(),
@@ -339,6 +475,7 @@ class PredictionLifecycleService:
                 self._context.selection,
                 self._context.derive_view_state(),
                 self._display_path,
+                self._afdb_accession,
             )
         except Exception as exc:
             value.close()
@@ -372,6 +509,7 @@ class PredictionLifecycleService:
                     selected_rank=value.rank,
                     selected_target=context_state.selected_target,
                     display_path=new_display_path,
+                    afdb_accession=new_afdb_accession,
                     model_choices=tuple(
                         ModelChoice(item.rank, item.display_label)
                         for item in self._state.pred_files.models
@@ -380,12 +518,23 @@ class PredictionLifecycleService:
                 )
             )
             self._display_path = new_display_path
+            self._afdb_accession = new_afdb_accession
             self._operations.finish(lease)
             if created:
                 self._submit_default_coloring(object_name)
             try:
-                recent = self._session.record_recent_prediction(self._display_path)
-                self._view.apply_lifecycle(LifecycleUiUpdate(recent_predictions=recent))
+                if value.origin.kind == "local_path":
+                    recent = self._session.record_recent_prediction(self._display_path)
+                    self._view.apply_lifecycle(
+                        LifecycleUiUpdate(recent_predictions=recent)
+                    )
+                else:
+                    recent = self._session.record_recent_afdb_accession(
+                        self._afdb_accession
+                    )
+                    self._view.apply_lifecycle(
+                        LifecycleUiUpdate(recent_afdb_accessions=recent)
+                    )
             except Exception as exc:
                 logger.exception("Could not persist the recent prediction")
                 self._presenter.present_notice(
@@ -412,6 +561,7 @@ class PredictionLifecycleService:
         created: bool,
     ) -> None:
         self._display_path = snapshot.display_path
+        self._afdb_accession = snapshot.afdb_accession
         if self._state.pred_files is not snapshot.pred_files:
             current = self._state.pred_files
             self._state.pred_files = snapshot.pred_files
@@ -437,7 +587,7 @@ class PredictionLifecycleService:
         except Exception:
             logger.exception("Could not restore the previous prediction context")
         try:
-            self._restore_display_path()
+            self._restore_input_sources()
         except Exception:
             logger.exception("Could not restore the previous prediction path")
         try:
@@ -539,7 +689,7 @@ class PredictionLifecycleService:
         if discovery is not None:
             self._job_runner.dispose(discovery)
         self._operations.finish(lease)
-        self._restore_display_path()
+        self._restore_input_sources()
         self._presenter.present_notice(
             Notice(
                 "prediction_load_failed",

@@ -6,6 +6,7 @@ from collections.abc import Iterable
 from pathlib import Path
 
 from .alphafold import AF3ServerProvider, AlphaFold3Provider
+from .alphafold_database import AlphaFoldDatabaseProvider
 from .base import BaseProvider
 from .boltz import BoltzAPIProvider, BoltzLabProvider, BoltzProvider
 from .chai import ChaiProvider
@@ -41,6 +42,7 @@ class ProviderRegistry:
 
 BUILTIN_PROVIDERS = ProviderRegistry(
     (
+        AlphaFoldDatabaseProvider(),
         AF3ServerProvider(),
         AlphaFold3Provider(),
         OpenFold3Provider(),

@@ -12,6 +12,7 @@ from html import escape
 from pathlib import Path
 
 from . import metrics
+from .alphafold_database import AlphaFoldDatabaseGateway
 from .analysis import (
     AnalysisAction,
     AnalysisRequest,
@@ -71,6 +72,7 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
         self._view = QtDialogView(self, self.widgets)
         self._session = QtSessionAdapter(self)
         self._dependencies = QtDependencyService(self)
+        self._alphafold_database = AlphaFoldDatabaseGateway()
 
         # Non-widget state is shared with the injected workflow coordinators.
         self.state = PluginState()
@@ -91,6 +93,7 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
             job_runner=self._job_runner,
             session=self._session,
             dependencies=self._dependencies,
+            alphafold_database=self._alphafold_database,
             metric_rows=self.widgets._prop_combo_rows,
         )
         self._connect_signals()
@@ -144,6 +147,9 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
         self.widgets._file_btn.clicked.connect(self._browse_file)
         self.widgets._dir_edit.returnPressed.connect(self._load_entered_prediction)
         self.widgets._recent_combo.activated.connect(self._load_recent_prediction)
+        self.widgets._afdb_btn.clicked.connect(self._load_alphafold_accession)
+        self.widgets._afdb_edit.returnPressed.connect(self._load_alphafold_accession)
+        self.widgets._afdb_combo.activated.connect(self._load_recent_afdb_accession)
         self.widgets._model_combo.currentIndexChanged.connect(self._model_changed)
         self.widgets._compare_models_btn.clicked.connect(self._compare_models)
         self.widgets._obj_refresh_btn.clicked.connect(
@@ -288,7 +294,9 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
         self._view.apply_lifecycle(
             LifecycleUiUpdate(
                 display_path="",
+                afdb_accession="",
                 recent_predictions=state.recent_predictions,
+                recent_afdb_accessions=state.recent_afdb_accessions,
             )
         )
         geometry_restored = False
@@ -427,6 +435,14 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
         path = self.widgets._recent_combo.itemData(index)
         if path is not None:
             self.services.lifecycle.load_recent_prediction(str(path))
+
+    def _load_alphafold_accession(self) -> None:
+        self.services.lifecycle.load_alphafold_accession(self.widgets._afdb_edit.text())
+
+    def _load_recent_afdb_accession(self, index: int) -> None:
+        accession = self.widgets._afdb_combo.itemData(index)
+        if accession is not None:
+            self.services.lifecycle.load_alphafold_accession(str(accession))
 
     def _apply_coloring(self) -> None:
         try:

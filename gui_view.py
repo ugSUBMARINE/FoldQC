@@ -165,8 +165,12 @@ class QtDialogView:
     def apply_lifecycle(self, update: LifecycleUiUpdate) -> None:
         if update.recent_predictions is not None:
             self._set_recent_predictions(update.recent_predictions)
+        if update.recent_afdb_accessions is not None:
+            self._set_recent_afdb_accessions(update.recent_afdb_accessions)
         if update.display_path is not None:
             self.widgets._dir_edit.setText(update.display_path)
+        if update.afdb_accession is not None:
+            self.widgets._afdb_edit.setText(update.afdb_accession)
         if update.model_choices is not None:
             combo = self.widgets._model_combo
             combo.blockSignals(True)
@@ -206,6 +210,19 @@ class QtDialogView:
         finally:
             combo.blockSignals(False)
 
+    def _set_recent_afdb_accessions(self, accessions: tuple[str, ...]) -> None:
+        combo = self.widgets._afdb_combo
+        edit_text = self.widgets._afdb_edit.text()
+        combo.blockSignals(True)
+        try:
+            combo.clear()
+            for accession in accessions:
+                combo.addItem(accession, accession)
+            combo.setCurrentIndex(-1)
+            combo.setEditText(edit_text)
+        finally:
+            combo.blockSignals(False)
+
     def set_busy(self, state: BusyViewState) -> None:
         self._busy = state.busy
         enabled = state.prediction_controls_enabled
@@ -213,6 +230,8 @@ class QtDialogView:
             self.widgets._dir_btn,
             self.widgets._file_btn,
             self.widgets._recent_combo,
+            self.widgets._afdb_btn,
+            self.widgets._afdb_combo,
             self.widgets._model_combo,
         ):
             widget.setEnabled(enabled)

@@ -38,6 +38,7 @@ class _FakeProvider(BaseProvider):
 
 def test_builtin_registry_preserves_detection_precedence() -> None:
     assert [provider.key for provider in BUILTIN_PROVIDERS.providers] == [
+        "alphafold_db",
         "af3_server",
         "alphafold3",
         "openfold3",

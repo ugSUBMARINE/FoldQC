@@ -8,9 +8,12 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
+from .alphafold_database import normalize_uniprot_qualifier
+
 SETTINGS_ORGANIZATION = "FoldQC"
 SETTINGS_APPLICATION = "FoldQC"
 SETTINGS_KEY_RECENT_PREDICTIONS = "session/recent_predictions"
+SETTINGS_KEY_RECENT_AFDB_ACCESSIONS = "session/recent_afdb_accessions"
 SETTINGS_KEY_GEOMETRY = "session/geometry"
 MAX_RECENT_PREDICTIONS = 10
 
@@ -45,6 +48,7 @@ class SessionState:
     """The only dialog state persisted across FoldQC sessions."""
 
     recent_predictions: tuple[str, ...] = ()
+    recent_afdb_accessions: tuple[str, ...] = ()
     geometry: object | None = None
 
 
@@ -98,6 +102,31 @@ def remove_recent_prediction(
     )
 
 
+def normalize_recent_afdb_accessions(values: Iterable[object]) -> tuple[str, ...]:
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if not isinstance(value, str):
+            continue
+        try:
+            accession = normalize_uniprot_qualifier(value)
+        except ValueError:
+            continue
+        if accession in seen:
+            continue
+        normalized.append(accession)
+        seen.add(accession)
+        if len(normalized) >= MAX_RECENT_PREDICTIONS:
+            break
+    return tuple(normalized)
+
+
+def add_recent_afdb_accession(
+    recent_accessions: Iterable[object], accession: str
+) -> tuple[str, ...]:
+    return normalize_recent_afdb_accessions((accession, *recent_accessions))
+
+
 def _read_recent_predictions(settings) -> tuple[str, ...]:
     raw = settings.value(SETTINGS_KEY_RECENT_PREDICTIONS, None)
     if raw is None:
@@ -115,10 +144,27 @@ def _read_recent_predictions(settings) -> tuple[str, ...]:
     return normalize_recent_predictions(decoded)
 
 
+def _read_recent_afdb_accessions(settings) -> tuple[str, ...]:
+    raw = settings.value(SETTINGS_KEY_RECENT_AFDB_ACCESSIONS, None)
+    if raw is None:
+        return ()
+    if isinstance(raw, str):
+        try:
+            decoded = json.loads(raw)
+        except (TypeError, ValueError):
+            return ()
+    else:
+        decoded = raw
+    if not isinstance(decoded, (list, tuple)):
+        return ()
+    return normalize_recent_afdb_accessions(decoded)
+
+
 def read_session_state(settings) -> SessionState:
     """Read history and geometry, including the legacy last-path migration."""
     return SessionState(
         recent_predictions=_read_recent_predictions(settings),
+        recent_afdb_accessions=_read_recent_afdb_accessions(settings),
         geometry=settings.value(SETTINGS_KEY_GEOMETRY, None),
     )
 
@@ -129,6 +175,11 @@ def write_session_state(settings, state: SessionState) -> None:
     settings.setValue(
         SETTINGS_KEY_RECENT_PREDICTIONS,
         json.dumps(recent, separators=(",", ":")),
+    )
+    recent_afdb = normalize_recent_afdb_accessions(state.recent_afdb_accessions)
+    settings.setValue(
+        SETTINGS_KEY_RECENT_AFDB_ACCESSIONS,
+        json.dumps(recent_afdb, separators=(",", ":")),
     )
     if state.geometry is not None:
         settings.setValue(SETTINGS_KEY_GEOMETRY, state.geometry)

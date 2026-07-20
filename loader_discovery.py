@@ -6,30 +6,13 @@ import shutil
 import stat
 import tarfile
 import tempfile
-import weakref
 import zipfile
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from .loader_models import PredictionCandidate, PredictionDiscovery, PredictionFiles
 from .loader_utils import ARCHIVE_EXTENSIONS, _safe_object_name
+from .ownership import TemporaryDirectoryOwner
 from .providers.registry import BUILTIN_PROVIDERS
-
-
-class _TemporaryExtraction:
-    """Keep extracted archive contents alive while PredictionFiles is referenced."""
-
-    def __init__(self, root: Path) -> None:
-        self.root = root
-        self._finalizer = weakref.finalize(
-            self,
-            shutil.rmtree,
-            root,
-            ignore_errors=True,
-        )
-
-    def close(self) -> None:
-        """Remove extracted contents now; repeated calls are harmless."""
-        self._finalizer()
 
 
 def _archive_kind(path: Path) -> str | None:
@@ -225,7 +208,7 @@ def _discover_archive_file(path: Path) -> PredictionDiscovery:
     return PredictionDiscovery(
         input_path=path,
         candidates=tuple(candidates),
-        _resource_owner=_TemporaryExtraction(temp_root),
+        _resource_owner=TemporaryDirectoryOwner(temp_root),
     )
 
 

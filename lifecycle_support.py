@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 
@@ -20,6 +21,9 @@ from .loader_models import (
 )
 from .model_state import ModelState, ModelStateSnapshot
 
+if TYPE_CHECKING:
+    from .alphafold_database import AlphaFoldDatabasePort, AlphaFoldDbEntry
+
 # These names form the intentionally private support surface consumed by the
 # four lifecycle services. Keeping the imports here avoids each service
 # depending on provider/job implementation details while leaving ownership in
@@ -33,6 +37,7 @@ __all__ = (
     "DeferredAnalysisAction",
     "EnsembleActivationTransaction",
     "InitialLoadResult",
+    "PredictionOrigin",
     "ModelState",
     "ModelStoreSnapshot",
     "ModelSwitchResult",
@@ -42,6 +47,7 @@ __all__ = (
     "_discovery_phase",
     "_load_data_batch",
     "_load_rank_data",
+    "_materialize_and_load_alphafold_db",
     "_prepare_ensemble_job",
     "_scan_and_load_initial_prediction",
     "_session_path_for_candidate",
@@ -62,7 +68,7 @@ class InitialLoadResult:
 
     _pred_files: PredictionFiles | None
     model_state: ModelState
-    display_path: Path
+    origin: PredictionOrigin
 
     @property
     def rank(self) -> int:
@@ -83,6 +89,16 @@ class InitialLoadResult:
         if self._pred_files is not None:
             self._pred_files.close()
             self._pred_files = None
+
+
+@dataclass(frozen=True)
+class PredictionOrigin:
+    kind: Literal["local_path", "afdb_accession"]
+    value: str
+
+    def __post_init__(self) -> None:
+        if not self.value:
+            raise ValueError("Prediction origins require a non-empty value.")
 
 
 @dataclass(frozen=True)
@@ -164,12 +180,28 @@ def _scan_and_load_initial_prediction(
     preferred_rank: int | None,
     report_phase: ProgressReporter,
 ) -> InitialLoadResult:
-    from .loader import load_prediction_data, scan_prediction_candidate
-    from .structure_index import StructureIndex
+    from .loader import scan_prediction_candidate
 
     display_path = _session_path_for_candidate(discovery, candidate)
     report_phase(f"Scanning {candidate.provider_label} output…")
     pred_files = scan_prediction_candidate(discovery, candidate)
+    return _load_initial_prediction_files(
+        pred_files,
+        PredictionOrigin("local_path", str(display_path)),
+        preferred_rank,
+        report_phase,
+    )
+
+
+def _load_initial_prediction_files(
+    pred_files: PredictionFiles,
+    origin: PredictionOrigin,
+    preferred_rank: int | None,
+    report_phase: ProgressReporter,
+) -> InitialLoadResult:
+    from .loader import load_prediction_data
+    from .structure_index import StructureIndex
+
     try:
         if not pred_files.models:
             raise ValueError("No ranked model files were found.")
@@ -201,11 +233,27 @@ def _scan_and_load_initial_prediction(
                 data=pred_data,
                 structure_index=structure_index,
             ),
-            display_path,
+            origin,
         )
     except Exception:
         pred_files.close()
         raise
+
+
+def _materialize_and_load_alphafold_db(
+    gateway: AlphaFoldDatabasePort,
+    entry: AlphaFoldDbEntry,
+    qualifier: str,
+    report_phase: ProgressReporter,
+) -> InitialLoadResult:
+    report_phase(f"Downloading {entry.model_id} structure…")
+    pred_files = gateway.materialize(entry)
+    return _load_initial_prediction_files(
+        pred_files,
+        PredictionOrigin("afdb_accession", qualifier),
+        0,
+        report_phase,
+    )
 
 
 def _load_rank_data(

@@ -3,9 +3,9 @@
 FoldQC is a PyMOL plugin for visualizing confidence metrics from predicted
 protein structures. It supports Boltz (local) prediction folders, Boltz Lab and Boltz
 API outputs, AlphaFold 3 local and server outputs, OpenFold3, Chai-1 Discovery,
-and Protenix prediction folders, zip/tar archives containing supported
-prediction folders, and single CIF/PDB files with pLDDT values stored in
-B-factors.
+and Protenix prediction folders, AlphaFold Database (EMBL-EBI) monomer and
+complex predictions, zip/tar archives containing supported prediction folders,
+and single CIF/PDB files with pLDDT values stored in B-factors.
 
 FoldQC can color structures by pLDDT, PAE, PDE, contact probability, chain
 ipTM, and ensemble metrics. It also provides line plots, matrix plots, PAE/PDE
@@ -67,7 +67,11 @@ Development of FoldQC has included coding assistance from OpenAI's Codex.
 2. Choose a prediction folder, archive, or single `.cif`/`.pdb` structure file,
    or select one of the last 10 successfully loaded predictions from the editable
    path history. FoldQC restores this history across sessions but starts with an
-   empty path and never loads a saved prediction automatically.
+   empty path and never loads a saved prediction automatically. Alternatively,
+   enter a UniProt accession or isoform ID in the second source row and click
+   `AFDB-EBI` (or press Return). FoldQC queries monomer and complex entries,
+   prompts when more than one prediction is available, and keeps a separate
+   history of the last 10 successfully loaded accessions.
 3. Select the model, target object, metric, and color palette.
    When FoldQC must create a model object in PyMOL, it initially applies the
    familiar pLDDT quality-class coloring. If the named object already exists,
@@ -92,6 +96,14 @@ Development of FoldQC has included coding assistance from OpenAI's Codex.
    for metrics that use it, such as contact-filtered PAE/PDE and PAE domain labels.
 7. Use the `Plot` menu and ensemble actions for heatmaps, line plots,
    PAE/PDE summary plots, binding-site fingerprints, and multi-model summaries.
+
+For an AlphaFold Database selection, FoldQC downloads the selected CIF and its
+optional PAE JSON into an owned temporary directory. The files remain available
+for lazy PAE loading while the prediction is active and are removed when it is
+replaced or the plugin closes. pLDDT is read from the CIF B-factors. The first
+AFDB integration treats both monomers and complexes as one-model predictions;
+complexes expose pLDDT and PAE when present, but API ipTM/ipSAE summary metadata
+is not imported.
 
 `Load Ensemble` is enabled only for predictions containing at least two
 models and only until that prediction's ensemble has been activated. Its
@@ -170,6 +182,9 @@ AF3 and OpenFold3 numeric `has_clash` values are accepted only when they are
 exactly `0` or `1` and are converted immediately to the canonical boolean.
 Chai-1 score outputs do not provide `fraction_disordered`, so FoldQC omits that
 field from Chai summaries and comparisons.
+AlphaFold Database API average pLDDT is shown only while selecting an entry; it
+is not copied into the confidence schema because the downloaded CIF remains the
+canonical source of per-token pLDDT.
 
 Unknown provider JSON fields are deliberately discarded. Missing recognized
 values remain unavailable; malformed recognized values report the provider,
@@ -203,7 +218,7 @@ Base columns:
 | Column | Meaning |
 | --- | --- |
 | `export_schema_version` | CSV schema version. Currently `2`. |
-| `provider` | Prediction provider, such as `boltz`, `boltz_lab`, `boltz_api`, `alphafold3`, `af3_server`, `openfold3`, `chai1`, `protenix`, or `structure_only`. |
+| `provider` | Prediction provider, such as `boltz`, `boltz_lab`, `boltz_api`, `alphafold3`, `af3_server`, `alphafold_db`, `openfold3`, `chai1`, `protenix`, or `structure_only`. |
 | `prediction_name` | Provider-scanned prediction name. |
 | `input_path` | Original selected folder, zip, CIF, or PDB path. |
 | `structure_path` | Structure file used for token mapping in this session. |

@@ -15,6 +15,7 @@ from FoldQC.loader_models import (
     PredictionFiles,
     ProviderInfo,
 )
+from FoldQC.ownership import TemporaryDirectoryOwner
 from FoldQC.providers.registry import BUILTIN_PROVIDERS
 
 
@@ -60,6 +61,11 @@ def test_prediction_files_close_is_idempotent() -> None:
     files.close()
 
     assert owner.close_count == 1
+
+
+def test_temporary_directory_owner_rejects_non_temporary_roots() -> None:
+    with pytest.raises(ValueError, match="system temporary directory"):
+        TemporaryDirectoryOwner(Path("/"))
 
 
 def test_discovery_transfers_owner_only_after_successful_scan() -> None:

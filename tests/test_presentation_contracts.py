@@ -215,7 +215,7 @@ def test_dialog_button_and_text_panel_geometry_is_centralized() -> None:
         assert constant in source
 
     assert "class FixedMainButton(QtWidgets.QPushButton):" in source
-    assert source.count("FixedMainButton(") == 9  # Definition plus eight buttons.
+    assert source.count("FixedMainButton(") == 10  # Definition plus nine buttons.
     assert source.count("setFixedSize(SMALL_BUTTON_WIDTH, SMALL_BUTTON_HEIGHT)") == 3
     assert "button.setFixedSize(STATISTICS_BUTTON_WIDTH" in source
     assert "setMaximumHeight" not in source
@@ -228,6 +228,18 @@ def test_dialog_button_and_text_panel_geometry_is_centralized() -> None:
         'FixedMainButton("Load Ensemble")',
     ):
         assert label in source
+
+
+def test_prediction_source_rows_share_grid_columns() -> None:
+    source = Path(__file__).resolve().parents[1].joinpath("gui_layout.py").read_text()
+
+    assert "QtWidgets.QGridLayout(dir_group)" in source
+    assert "dir_layout.setColumnStretch(0, 1)" in source
+    assert "dir_layout.addWidget(self._recent_combo, 0, 0)" in source
+    assert "dir_layout.addWidget(self._afdb_combo, 1, 0)" in source
+    assert "dir_layout.addWidget(self._dir_btn, 0, 1)" in source
+    assert "dir_layout.addWidget(self._afdb_btn, 1, 1)" in source
+    assert "dir_layout.addWidget(self._file_btn, 0, 2)" in source
 
 
 def test_native_browse_paths_remain_provisional_until_lifecycle_commit() -> None:

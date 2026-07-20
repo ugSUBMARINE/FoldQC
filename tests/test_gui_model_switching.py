@@ -12,6 +12,7 @@ from pathlib import Path
 
 import numpy as np
 from FoldQC import ensemble
+from FoldQC.alphafold_database import AlphaFoldDbEntry
 from FoldQC.analysis import (
     AnalysisRequest,
     AnalysisResolver,
@@ -38,6 +39,7 @@ from FoldQC.gui_state import PluginState
 from FoldQC.lifecycle_support import (
     DataLoadBatchResult,
     InitialLoadResult,
+    PredictionOrigin,
     _session_path_for_candidate,
 )
 from FoldQC.loader_models import (
@@ -367,6 +369,7 @@ class FakeDependencies:
 class FakeSession:
     def __init__(self) -> None:
         self.recent: tuple[str, ...] = ()
+        self.recent_afdb: tuple[str, ...] = ()
 
     def restore(self):
         raise AssertionError("composition close attempted session restoration")
@@ -379,8 +382,59 @@ class FakeSession:
         self.recent = tuple(item for item in self.recent if item != path)
         return self.recent
 
+    def record_recent_afdb_accession(self, accession: str) -> tuple[str, ...]:
+        self.recent_afdb = (
+            accession,
+            *tuple(item for item in self.recent_afdb if item != accession),
+        )
+        return self.recent_afdb
+
     def save_geometry(self) -> None:
         pass
+
+
+class FakeAlphaFoldDatabase:
+    def lookup(self, qualifier: str, *, include_complexes: bool = True):
+        raise AssertionError((qualifier, include_complexes))
+
+    def materialize(self, entry):
+        raise AssertionError(entry)
+
+
+class RecordingAlphaFoldDatabase:
+    def __init__(self, entries: tuple[AlphaFoldDbEntry, ...]) -> None:
+        self.entries = entries
+        self.lookups: list[tuple[str, bool]] = []
+
+    def lookup(self, qualifier: str, *, include_complexes: bool = True):
+        self.lookups.append((qualifier, include_complexes))
+        return self.entries
+
+    def materialize(self, entry):
+        raise AssertionError(entry)
+
+
+def _afdb_entry(
+    model_id: str,
+    accessions: tuple[str, ...],
+    *,
+    is_complex: bool,
+) -> AlphaFoldDbEntry:
+    return AlphaFoldDbEntry(
+        model_id=model_id,
+        accessions=accessions,
+        composition=tuple((accession, 1) for accession in accessions),
+        description="Example prediction",
+        version=6,
+        sequence_start=None if is_complex else 1,
+        sequence_end=None if is_complex else 100,
+        is_complex=is_complex,
+        assembly_type="heteromer" if is_complex else None,
+        oligomeric_state="A2B" if is_complex else None,
+        mean_plddt=88.5,
+        cif_url="https://alphafold.ebi.ac.uk/files/model.cif",
+        pae_url=None,
+    )
 
 
 class LifecycleContext:
@@ -604,11 +658,180 @@ def test_application_close_releases_adapters_and_prediction_owner_in_order() -> 
         job_runner=runner,
         session=FakeSession(),
         dependencies=dependencies,
+        alphafold_database=FakeAlphaFoldDatabase(),
         metric_rows={},
     )
     services.close()
     assert events == ["dependencies", "prediction", "presenter", "view"]
     assert state.pred_files is None
+
+
+def test_alphafold_lookup_normalizes_query_and_defaults_to_exact_monomer() -> None:
+    entries = (
+        _afdb_entry("AF-COMPLEX-1", ("Q5VSL9", "P12345"), is_complex=True),
+        _afdb_entry("AF-Q5VSL9-F1", ("Q5VSL9",), is_complex=False),
+        _afdb_entry("AF-Q5VSL9-4-F1", ("Q5VSL9-4",), is_complex=False),
+    )
+    gateway = RecordingAlphaFoldDatabase(entries)
+    presenter = FakePresenter()
+    view = FakeView()
+    runner = DeferredRunner()
+    operations = GuiOperationCoordinator(presenter, view)
+    service = PredictionLifecycleService(
+        PluginState(),
+        LifecycleViewer(created=False),
+        presenter,
+        view,
+        LifecycleContext(),
+        operations,
+        runner,
+        FakeSession(),
+        RecordingAnalysisSubmission(operations),
+        gateway,
+    )
+
+    service.load_alphafold_accession(" q5vsl9 ")
+    assert runner.task is not None
+    value = runner.task(lambda _label: None)
+    assert gateway.lookups == [("Q5VSL9", True)]
+    runner.deliver(value)
+
+    request = presenter.selection_requests[-1]
+    assert request.code == "afdb_prediction"
+    assert request.default_key == "1"
+    assert [item.label.split()[0] for item in request.items] == [
+        "Complex",
+        "Monomer",
+        "Monomer",
+    ]
+    assert "A2B" in request.items[0].description
+    assert "API average pLDDT 88.50" in request.items[1].description
+    assert operations.is_busy
+
+
+def test_single_alphafold_result_is_selected_without_prompt() -> None:
+    entry = _afdb_entry("AF-Q5VSL9-F1", ("Q5VSL9",), is_complex=False)
+    presenter = FakePresenter()
+    view = FakeView()
+    runner = DeferredRunner()
+    operations = GuiOperationCoordinator(presenter, view)
+    service = PredictionLifecycleService(
+        PluginState(),
+        LifecycleViewer(created=False),
+        presenter,
+        view,
+        LifecycleContext(),
+        operations,
+        runner,
+        FakeSession(),
+        RecordingAnalysisSubmission(operations),
+        RecordingAlphaFoldDatabase((entry,)),
+    )
+
+    service.load_alphafold_accession("Q5VSL9")
+    runner.deliver((entry,))
+
+    assert presenter.selection_requests == []
+    assert runner.task is not None
+    assert operations.is_busy
+
+
+def test_alphafold_selection_dismissal_restores_both_committed_inputs() -> None:
+    entries = (
+        _afdb_entry("AF-Q5VSL9-F1", ("Q5VSL9",), is_complex=False),
+        _afdb_entry("AF-COMPLEX-1", ("Q5VSL9", "P12345"), is_complex=True),
+    )
+    presenter = FakePresenter()
+    presenter.selection_response = None
+    view = FakeView()
+    runner = DeferredRunner()
+    operations = GuiOperationCoordinator(presenter, view)
+    service = PredictionLifecycleService(
+        PluginState(),
+        LifecycleViewer(created=False),
+        presenter,
+        view,
+        LifecycleContext(),
+        operations,
+        runner,
+        FakeSession(),
+        RecordingAnalysisSubmission(operations),
+        RecordingAlphaFoldDatabase(entries),
+    )
+    service._display_path = "/tmp/committed"
+    service._afdb_accession = "P12345"
+
+    service.load_alphafold_accession("Q5VSL9")
+    runner.deliver(entries)
+
+    assert not operations.is_busy
+    assert view.lifecycle[-1].display_path == "/tmp/committed"
+    assert view.lifecycle[-1].afdb_accession == "P12345"
+
+
+def test_invalid_alphafold_accession_preserves_inputs_without_starting_job() -> None:
+    presenter = FakePresenter()
+    view = FakeView()
+    runner = DeferredRunner()
+    operations = GuiOperationCoordinator(presenter, view)
+    service = PredictionLifecycleService(
+        PluginState(),
+        LifecycleViewer(created=False),
+        presenter,
+        view,
+        LifecycleContext(),
+        operations,
+        runner,
+        FakeSession(),
+        RecordingAnalysisSubmission(operations),
+        FakeAlphaFoldDatabase(),
+    )
+    service._display_path = "/tmp/committed"
+
+    service.load_alphafold_accession("AF-Q5VSL9-F1")
+
+    assert runner.task is None
+    assert presenter.notices[-1].code == "afdb_accession_invalid"
+    assert view.lifecycle[-1].display_path == "/tmp/committed"
+
+
+def test_alphafold_commit_records_only_accession_history_and_clears_path() -> None:
+    loaded, files = _state()
+    presenter = FakePresenter()
+    view = FakeView()
+    runner = DeferredRunner()
+    operations = GuiOperationCoordinator(presenter, view)
+    session = FakeSession()
+    service = PredictionLifecycleService(
+        PluginState(),
+        LifecycleViewer(created=False),
+        presenter,
+        view,
+        LifecycleContext(),
+        operations,
+        runner,
+        session,
+        RecordingAnalysisSubmission(operations),
+        FakeAlphaFoldDatabase(),
+    )
+    service._display_path = "/tmp/old-local"
+    lease = operations.begin("prediction", title="Loading", label="Prediction")
+    assert lease is not None
+
+    service._on_initial_result(
+        lease.request_id,
+        InitialLoadResult(
+            files,
+            loaded.model_states[0],
+            PredictionOrigin("afdb_accession", "Q5VSL9"),
+        ),
+    )
+
+    assert session.recent == ()
+    assert session.recent_afdb == ("Q5VSL9",)
+    assert view.lifecycle[-2].display_path == ""
+    assert view.lifecycle[-2].afdb_accession == "Q5VSL9"
+    assert view.lifecycle[-1].recent_afdb_accessions == ("Q5VSL9",)
 
 
 def test_initial_prediction_colors_only_a_newly_created_viewer_object() -> None:
@@ -631,13 +854,14 @@ def test_initial_prediction_colors_only_a_newly_created_viewer_object() -> None:
             runner,
             session,
             analysis,
+            FakeAlphaFoldDatabase(),
         )
         lease = operations.begin("prediction", title="Loading", label="Prediction")
         assert lease is not None
         result = InitialLoadResult(
             files,
             loaded.model_states[0],
-            Path("/tmp/prediction"),
+            PredictionOrigin("local_path", "/tmp/prediction"),
         )
 
         service._on_initial_result(lease.request_id, result)
@@ -678,6 +902,7 @@ def test_missing_recent_prediction_restores_path_and_can_be_removed(
         runner,
         session,
         RecordingAnalysisSubmission(operations),
+        FakeAlphaFoldDatabase(),
     )
     service._display_path = "/tmp/previous"
 
@@ -710,6 +935,7 @@ def test_missing_recent_prediction_can_be_kept(tmp_path: Path) -> None:
         runner,
         session,
         RecordingAnalysisSubmission(operations),
+        FakeAlphaFoldDatabase(),
     )
 
     service.load_recent_prediction(missing)
@@ -736,6 +962,7 @@ def test_missing_typed_path_reports_error_without_history_prompt(
         runner,
         FakeSession(),
         RecordingAnalysisSubmission(operations),
+        FakeAlphaFoldDatabase(),
     )
 
     service.load_prediction(str(tmp_path / "missing"))
@@ -761,6 +988,7 @@ def test_selecting_active_recent_prediction_is_a_noop() -> None:
         runner,
         FakeSession(),
         RecordingAnalysisSubmission(operations),
+        FakeAlphaFoldDatabase(),
     )
     active_path = str(Path("/tmp/prediction").absolute())
     service._display_path = active_path
@@ -789,6 +1017,7 @@ def test_candidate_cancellation_restores_committed_path(tmp_path: Path) -> None:
         runner,
         FakeSession(),
         RecordingAnalysisSubmission(operations),
+        FakeAlphaFoldDatabase(),
     )
     service._display_path = "/tmp/previous"
     provider = ProviderInfo("test", "Test")
@@ -823,6 +1052,7 @@ def test_progress_cancellation_restores_committed_path(tmp_path: Path) -> None:
         runner,
         FakeSession(),
         RecordingAnalysisSubmission(operations),
+        FakeAlphaFoldDatabase(),
     )
     service._display_path = "/tmp/previous"
 
@@ -858,6 +1088,7 @@ def test_commit_failure_restores_previous_prediction_context_and_path() -> None:
         runner,
         session,
         RecordingAnalysisSubmission(operations),
+        FakeAlphaFoldDatabase(),
     )
     service._display_path = "/tmp/old_prediction"
     lease = operations.begin("prediction", title="Loading", label="Prediction")
@@ -868,7 +1099,7 @@ def test_commit_failure_restores_previous_prediction_context_and_path() -> None:
         InitialLoadResult(
             new_files,
             _new_state.model_states[0],
-            Path("/tmp/new_prediction"),
+            PredictionOrigin("local_path", "/tmp/new_prediction"),
         ),
     )
 

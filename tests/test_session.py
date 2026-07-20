@@ -59,6 +59,26 @@ def test_recent_predictions_are_mru_deduplicated_and_limited(tmp_path: Path) -> 
     assert str(paths[4].absolute()) not in removed
 
 
+def test_recent_afdb_accessions_are_normalized_deduplicated_and_limited() -> None:
+    accessions = tuple(f"P1234{index}" for index in range(10)) + (
+        "Q5VSL9",
+        "q5vsl9",
+    )
+    recent = session.normalize_recent_afdb_accessions(accessions)
+    assert recent == accessions[:10]
+
+    moved = session.add_recent_afdb_accession(recent, "p12344")
+    assert moved[0] == "P12344"
+    assert len(moved) == 10
+    assert moved.count("P12344") == 1
+
+
+def test_recent_afdb_accessions_discard_invalid_values() -> None:
+    assert session.normalize_recent_afdb_accessions(
+        (" q5vsl9-4 ", "AF-Q5VSL9-F1", "Q5VSL9-0", 7)
+    ) == ("Q5VSL9-4",)
+
+
 def test_read_session_state_defaults() -> None:
     assert session.read_session_state(FakeSettings()) == session.SessionState()
 
@@ -72,12 +92,17 @@ def test_read_session_state_decodes_and_normalizes_json(tmp_path: Path) -> None:
             session.SETTINGS_KEY_RECENT_PREDICTIONS: json.dumps(
                 [str(first), str(second), str(first), 7]
             ),
+            session.SETTINGS_KEY_RECENT_AFDB_ACCESSIONS: json.dumps(
+                ["q5vsl9", "Q5VSL9", "P12345", "bad"]
+            ),
             session.SETTINGS_KEY_GEOMETRY: geometry,
         }
     )
 
     assert session.read_session_state(settings) == session.SessionState(
-        (str(first.absolute()), str(second.absolute())), geometry
+        recent_predictions=(str(first.absolute()), str(second.absolute())),
+        recent_afdb_accessions=("Q5VSL9", "P12345"),
+        geometry=geometry,
     )
 
 
@@ -106,12 +131,19 @@ def test_write_session_state_stores_only_history_and_geometry(tmp_path: Path) ->
 
     session.write_session_state(
         settings,
-        session.SessionState((str(prediction),), b"geometry"),
+        session.SessionState(
+            recent_predictions=(str(prediction),),
+            recent_afdb_accessions=("Q5VSL9",),
+            geometry=b"geometry",
+        ),
     )
 
     assert settings.values == {
         session.SETTINGS_KEY_RECENT_PREDICTIONS: json.dumps(
             [str(prediction.absolute())], separators=(",", ":")
+        ),
+        session.SETTINGS_KEY_RECENT_AFDB_ACCESSIONS: json.dumps(
+            ["Q5VSL9"], separators=(",", ":")
         ),
         session.SETTINGS_KEY_GEOMETRY: b"geometry",
     }
@@ -129,7 +161,8 @@ def test_write_accepts_settings_without_remove_or_sync(tmp_path: Path) -> None:
     settings = FakeSettingsWithoutOptionalMethods()
     prediction = tmp_path / "prediction"
     session.write_session_state(
-        settings, session.SessionState((str(prediction),), None)
+        settings,
+        session.SessionState(recent_predictions=(str(prediction),)),
     )
     assert json.loads(
         str(settings.values[session.SETTINGS_KEY_RECENT_PREDICTIONS])

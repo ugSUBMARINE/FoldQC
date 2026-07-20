@@ -259,6 +259,22 @@ def test_recent_prediction_rendering_preserves_edit_text_and_blocks_activation()
     assert combo.blocked == [True, False]
 
 
+def test_recent_afdb_rendering_preserves_edit_text_and_blocks_activation() -> None:
+    line_edit = _HistoryLineEdit("currently edited")
+    combo = _HistoryCombo(line_edit)
+    view = QtDialogView.__new__(QtDialogView)
+    view.widgets = types.SimpleNamespace(
+        _afdb_combo=combo,
+        _afdb_edit=line_edit,
+    )
+
+    view._set_recent_afdb_accessions(("Q5VSL9", "P12345"))
+
+    assert combo.rows == [("Q5VSL9", "Q5VSL9"), ("P12345", "P12345")]
+    assert line_edit.text() == "currently edited"
+    assert combo.blocked == [True, False]
+
+
 def test_busy_state_disables_the_complete_editable_history_control() -> None:
     line_edit = _HistoryLineEdit()
     combo = _HistoryCombo(line_edit)
@@ -271,6 +287,8 @@ def test_busy_state_disables_the_complete_editable_history_control() -> None:
         _dir_edit=line_edit,
         _dir_btn=button,
         _file_btn=_EnabledWidget(),
+        _afdb_btn=_EnabledWidget(),
+        _afdb_combo=_EnabledWidget(),
         _model_combo=model_combo,
         _ensemble_btn=ensemble_button,
         _compare_models_btn=comparison_button,

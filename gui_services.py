@@ -288,6 +288,8 @@ class SessionPort(Protocol):
 
     def remove_recent_prediction(self, path: str | Path) -> tuple[str, ...]: ...
 
+    def record_recent_afdb_accession(self, accession: str) -> tuple[str, ...]: ...
+
     def save_geometry(self) -> None: ...
 
 
@@ -389,7 +391,9 @@ class LifecycleUiUpdate:
     selected_rank: int | None = None
     selected_target: str | None = None
     display_path: str | None = None
+    afdb_accession: str | None = None
     recent_predictions: tuple[str, ...] | None = None
+    recent_afdb_accessions: tuple[str, ...] | None = None
     refresh_context: bool = True
     model_choices: tuple[ModelChoice, ...] | None = None
     target_choices: tuple[TargetChoice, ...] | None = None

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from .alphafold_database import AlphaFoldDatabasePort
 from .analysis_coordinator import AnalysisCoordinator
 from .context_service import ContextService
 from .data_acquisition import DataAcquisitionService
@@ -44,6 +45,7 @@ class GuiApplicationServices:
         job_runner: JobRunner,
         session: SessionPort,
         dependencies: DependencyService,
+        alphafold_database: AlphaFoldDatabasePort,
         metric_rows: dict[str, int],
     ) -> None:
         self.state = state
@@ -54,6 +56,7 @@ class GuiApplicationServices:
         self.job_runner = job_runner
         self.session = session
         self.dependencies = dependencies
+        self.alphafold_database = alphafold_database
 
         self.operations = GuiOperationCoordinator(presenter, view)
         self.context = ContextService(state, viewer, presenter, view, metric_rows)
@@ -104,6 +107,7 @@ class GuiApplicationServices:
             job_runner,
             session,
             self.analysis,
+            alphafold_database,
         )
         self.ensemble = EnsembleLifecycleService(
             state,
