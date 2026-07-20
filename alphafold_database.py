@@ -8,7 +8,7 @@ import math
 import re
 import shutil
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Protocol
 from urllib.error import HTTPError, URLError
@@ -60,6 +60,10 @@ class AlphaFoldDbEntry:
     assembly_type: str | None
     oligomeric_state: str | None
     mean_plddt: float
+    iptm: float | None
+    ipsae: float | None
+    pdockq2: float | None
+    lis: float | None
     cif_url: str
     pae_url: str | None
 
@@ -127,6 +131,15 @@ class UrlOpen(Protocol):
     def __call__(self, request: Request, *, timeout: int) -> UrlResponse: ...
 
 
+@dataclass(frozen=True)
+class _ComplexConfidence:
+    model_id: str
+    iptm: float | None
+    ipsae: float | None
+    pdockq2: float | None
+    lis: float | None
+
+
 def _optional_text(value: object) -> str | None:
     return value.strip() if isinstance(value, str) and value.strip() else None
 
@@ -172,6 +185,34 @@ def _optional_int(value: object, field: str, context: str) -> int | None:
     if isinstance(value, bool) or not isinstance(value, int):
         raise ValueError(f"{context}: {field} must be an integer or null.")
     return value
+
+
+def _optional_score(payload: dict, field: str, context: str) -> float | None:
+    if field not in payload or payload[field] is None:
+        return None
+    value = payload[field]
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{context}: {field} must be numeric or null.")
+    score = float(value)
+    if not math.isfinite(score) or not 0.0 <= score <= 1.0:
+        raise ValueError(f"{context}: {field} must be within 0–1.")
+    return score
+
+
+def _parse_complex_confidence(payload: object, *, index: int) -> _ComplexConfidence:
+    context = f"AlphaFold DB complex result {index + 1}"
+    if not isinstance(payload, dict):
+        raise ValueError(f"{context} must be a JSON object.")
+    model_id = _optional_text(payload.get("modelEntityId"))
+    if model_id is None:
+        raise ValueError(f"{context} has no modelEntityId.")
+    return _ComplexConfidence(
+        model_id=model_id,
+        iptm=_optional_score(payload, "complexPredictionAccuracy_ipTM", context),
+        ipsae=_optional_score(payload, "complexPredictionAccuracy_ipSAE", context),
+        pdockq2=_optional_score(payload, "complexPredictionAccuracy_pDockQ2", context),
+        lis=_optional_score(payload, "complexPredictionAccuracy_LIS", context),
+    )
 
 
 def parse_alphafold_db_entry(payload: object, *, index: int) -> AlphaFoldDbEntry:
@@ -235,6 +276,10 @@ def parse_alphafold_db_entry(payload: object, *, index: int) -> AlphaFoldDbEntry
         assembly_type=_optional_text(payload.get("assemblyType")),
         oligomeric_state=_optional_text(payload.get("oligomericState")),
         mean_plddt=mean_plddt,
+        iptm=None,
+        ipsae=None,
+        pdockq2=None,
+        lis=None,
         cif_url=cif_url,
         pae_url=_optional_text(payload.get("paeDocUrl")),
     )
@@ -253,9 +298,35 @@ class AlphaFoldDatabaseGateway:
         payload = self._read_json(url, label=f"AlphaFold DB lookup for {normalized}")
         if not isinstance(payload, list):
             raise ValueError("AlphaFold DB prediction response must be a JSON list.")
-        return tuple(
+        entries = tuple(
             parse_alphafold_db_entry(item, index=index)
             for index, item in enumerate(payload)
+        )
+        if not include_complexes or not any(entry.is_complex for entry in entries):
+            return entries
+        complex_payload = self._read_json(
+            f"{API_BASE_URL}/complex/{normalized}",
+            label=f"AlphaFold DB complex lookup for {normalized}",
+        )
+        if not isinstance(complex_payload, list):
+            raise ValueError("AlphaFold DB complex response must be a JSON list.")
+        confidence_by_model = {
+            confidence.model_id: confidence
+            for index, item in enumerate(complex_payload)
+            for confidence in (_parse_complex_confidence(item, index=index),)
+        }
+        return tuple(
+            replace(
+                entry,
+                iptm=confidence.iptm,
+                ipsae=confidence.ipsae,
+                pdockq2=confidence.pdockq2,
+                lis=confidence.lis,
+            )
+            if entry.is_complex
+            and (confidence := confidence_by_model.get(entry.model_id)) is not None
+            else entry
+            for entry in entries
         )
 
     def materialize(self, entry: AlphaFoldDbEntry) -> PredictionFiles:
@@ -269,6 +340,16 @@ class AlphaFoldDatabaseGateway:
                 "schema_version": MARKER_SCHEMA_VERSION,
                 "model_id": entry.model_id,
                 "display_label": entry.display_label,
+                "confidence": {
+                    key: value
+                    for key, value in (
+                        ("iptm", entry.iptm),
+                        ("ipsae", entry.ipsae),
+                        ("pdockq2", entry.pdockq2),
+                        ("lis", entry.lis),
+                    )
+                    if value is not None
+                },
             }
             marker_part = root / f"{MARKER_NAME}.part"
             with marker_part.open("w", encoding="utf-8") as handle:

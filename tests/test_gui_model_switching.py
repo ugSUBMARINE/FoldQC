@@ -432,6 +432,10 @@ def _afdb_entry(
         assembly_type="heteromer" if is_complex else None,
         oligomeric_state="A2B" if is_complex else None,
         mean_plddt=88.5,
+        iptm=0.85 if is_complex else None,
+        ipsae=0.81 if is_complex else None,
+        pdockq2=0.40 if is_complex else None,
+        lis=0.41 if is_complex else None,
         cif_url="https://alphafold.ebi.ac.uk/files/model.cif",
         pae_url=None,
     )

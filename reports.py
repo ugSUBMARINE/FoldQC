@@ -52,7 +52,10 @@ def format_confidence_summary(pred_data, token_map: TokenMap | None = None) -> s
     confidence = getattr(pred_data, "confidence", None)
     provider_line = f"provider         : {provider.label}"
     if confidence is None:
-        return f"{provider_line}\nNo confidence data loaded."
+        lines = [provider_line, "No confidence data loaded."]
+        if spec.note_text is not None:
+            lines += ["", spec.note_text]
+        return "\n".join(lines)
     if not isinstance(confidence, PredictionConfidence):
         raise TypeError("PredictionData.confidence must be PredictionConfidence.")
 
@@ -99,6 +102,8 @@ def format_confidence_summary(pred_data, token_map: TokenMap | None = None) -> s
             lines.append(
                 f"  chains {row_label} / {column_label}: {format_optional_float(value)}"
             )
+    if spec.note_text is not None:
+        lines += ["", spec.note_text]
     return "\n".join(lines)
 
 

@@ -102,8 +102,13 @@ optional PAE JSON into an owned temporary directory. The files remain available
 for lazy PAE loading while the prediction is active and are removed when it is
 replaced or the plugin closes. pLDDT is read from the CIF B-factors. The first
 AFDB integration treats both monomers and complexes as one-model predictions;
-complexes expose pLDDT and PAE when present, but API ipTM/ipSAE summary metadata
-is not imported.
+complexes expose pLDDT and PAE when present and show the EBI interface scores
+ipTM, ipSAE, pDockQ2, and LIS in the confidence summary. These interface scores
+range from 0 to 1, with higher values indicating greater confidence. ipTM
+assesses relative chain placement; ipSAE focuses on reliably positioned
+inter-chain residue pairs; pDockQ2 estimates interface quality from interface
+pLDDT and PAE; and LIS summarizes confidence in local low-PAE interaction
+regions. They are summary values rather than colorable token metrics.
 
 `Load Ensemble` is enabled only for predictions containing at least two
 models and only until that prediction's ensemble has been activated. Its

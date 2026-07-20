@@ -7,7 +7,7 @@ from pathlib import Path
 
 import numpy as np
 
-from ..confidence import ConfidenceSummarySpec
+from ..confidence import ConfidenceFieldSpec, ConfidenceSummarySpec
 from ..loader_models import ModelFiles, PredictionData, PredictionFiles
 from ..loader_utils import _safe_object_name
 from .base import BaseProvider, LoadOptions
@@ -18,14 +18,20 @@ PAE_NAME = "pae.json"
 MARKER_SCHEMA_VERSION = 1
 
 AFDB_CONFIDENCE_SUMMARY = ConfidenceSummarySpec(
-    informational_text=(
+    fields=(
+        ConfidenceFieldSpec("iptm", "ipTM", precision=2, omit_when_missing=True),
+        ConfidenceFieldSpec("ipsae", "ipSAE", precision=2, omit_when_missing=True),
+        ConfidenceFieldSpec("pdockq2", "pDockQ2", precision=2, omit_when_missing=True),
+        ConfidenceFieldSpec("lis", "LIS", precision=2, omit_when_missing=True),
+    ),
+    note_text=(
         "AlphaFold DB input: pLDDT read from structure B-factors; "
         "PAE loaded on demand when available."
-    )
+    ),
 )
 
 
-def _load_marker(path: Path) -> tuple[str, str]:
+def _load_marker(path: Path) -> tuple[str, str, bool]:
     try:
         with (path / MARKER_NAME).open(encoding="utf-8") as handle:
             payload = json.load(handle)
@@ -43,7 +49,10 @@ def _load_marker(path: Path) -> tuple[str, str]:
         raise ValueError(f"AlphaFold DB marker in {path} has no model ID.")
     if not isinstance(display_label, str) or not display_label.strip():
         raise ValueError(f"AlphaFold DB marker in {path} has no display label.")
-    return model_id.strip(), display_label.strip()
+    confidence = payload.get("confidence", {})
+    if not isinstance(confidence, dict):
+        raise ValueError(f"AlphaFold DB marker in {path} has invalid confidence data.")
+    return model_id.strip(), display_label.strip(), bool(confidence)
 
 
 def _load_pae(path: Path) -> np.ndarray:
@@ -86,8 +95,9 @@ class AlphaFoldDatabaseProvider(BaseProvider):
             raise ValueError(
                 f"No materialized AlphaFold DB prediction found in {path}."
             )
-        model_id, display_label = _load_marker(path)
+        model_id, display_label, has_confidence = _load_marker(path)
         pae_path = path / PAE_NAME
+        marker_path = path / MARKER_NAME
         files = self.prediction_files(name=model_id, pred_dir=path)
         files.models = [
             ModelFiles(
@@ -95,6 +105,7 @@ class AlphaFoldDatabaseProvider(BaseProvider):
                 structure_path=path / MODEL_NAME,
                 display_label=display_label,
                 object_name=_safe_object_name(model_id),
+                summary_path=marker_path if has_confidence else None,
                 pae_path=pae_path if pae_path.is_file() else None,
                 capabilities=frozenset(
                     {"plddt", "pae"} if pae_path.is_file() else {"plddt"}
@@ -102,6 +113,16 @@ class AlphaFoldDatabaseProvider(BaseProvider):
             )
         ]
         return files
+
+    def normalize_confidence_payload(self, payload: dict | None) -> dict | None:
+        if payload is None:
+            return None
+        confidence = payload.get("confidence")
+        if confidence is None:
+            return None
+        if not isinstance(confidence, dict):
+            raise ValueError("AlphaFold DB marker confidence must be an object.")
+        return confidence
 
     def load_model_data(
         self,

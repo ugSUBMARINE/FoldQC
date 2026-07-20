@@ -32,6 +32,9 @@ class PredictionConfidence:
     confidence_score: float | None = None
     ptm: float | None = None
     iptm: float | None = None
+    ipsae: float | None = None
+    pdockq2: float | None = None
+    lis: float | None = None
     ligand_iptm: float | None = None
     protein_iptm: float | None = None
     complex_plddt: float | None = None
@@ -193,6 +196,7 @@ class ConfidenceSummarySpec:
     sections: tuple[ConfidenceSectionSpec, ...] = ()
     informational_text: str | None = None
     matrix_sections: tuple[ConfidenceMatrixSectionSpec, ...] = ()
+    note_text: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "fields", tuple(self.fields))
@@ -293,6 +297,9 @@ _SCALAR_ALIASES: dict[str, tuple[str, ...]] = {
     "confidence_score": ("confidence_score", "structure_confidence"),
     "ptm": ("ptm",),
     "iptm": ("iptm",),
+    "ipsae": ("ipsae",),
+    "pdockq2": ("pdockq2",),
+    "lis": ("lis",),
     "ligand_iptm": ("ligand_iptm",),
     "protein_iptm": ("protein_iptm",),
     "complex_plddt": ("complex_plddt",),

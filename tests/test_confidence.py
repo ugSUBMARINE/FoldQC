@@ -39,6 +39,9 @@ def test_parser_normalizes_aliases_chain_order_diagonal_and_affinity() -> None:
         {
             "aggregate_score": 0.91,
             "structure_confidence": 0.88,
+            "ipsae": 0.81,
+            "pdockq2": 0.40,
+            "lis": 0.41,
             "disorder": 0.12,
             "has_inter_chain_clashes": False,
             "chains_ptm": {"1": 0.7, "0": 0.8},
@@ -56,6 +59,9 @@ def test_parser_normalizes_aliases_chain_order_diagonal_and_affinity() -> None:
 
     assert confidence.ranking_score == 0.91
     assert confidence.confidence_score == 0.88
+    assert confidence.ipsae == 0.81
+    assert confidence.pdockq2 == 0.40
+    assert confidence.lis == 0.41
     assert confidence.fraction_disordered == 0.12
     assert confidence.has_clash is False
     np.testing.assert_allclose(confidence.chain_ptm, [0.8, 0.7])
@@ -182,6 +188,7 @@ def test_confidence_merge_enriches_identity_and_rejects_conflicts() -> None:
 
 def test_confidence_presentation_schemas_validate_typed_attributes() -> None:
     assert ConfidenceFieldSpec("ptm", "pTM").attribute == "ptm"
+    assert ConfidenceFieldSpec("ipsae", "ipSAE").attribute == "ipsae"
     assert (
         ConfidenceMatrixSectionSpec("pair_bespoke_iptm", "Bespoke").attribute
         == "pair_bespoke_iptm"
@@ -196,6 +203,7 @@ def test_confidence_presentation_schemas_validate_typed_attributes() -> None:
         source="affinity",
         include_in_model_comparison=False,
     ).include_in_model_comparison
+    assert ConfidenceSummarySpec(note_text="Source note").note_text == "Source note"
     with pytest.raises(ValueError, match="Unknown confidence presentation field"):
         ConfidenceFieldSpec("unknown", "Unknown")
     with pytest.raises(ValueError, match="Unknown confidence section field"):

@@ -10,6 +10,7 @@ from urllib.error import URLError
 
 import numpy as np
 import pytest
+from FoldQC import reports
 from FoldQC.alphafold_database import (
     AlphaFoldDatabaseGateway,
     AlphaFoldDbEntry,
@@ -69,10 +70,26 @@ def _entry(**changes: object) -> AlphaFoldDbEntry:
         assembly_type=None,
         oligomeric_state=None,
         mean_plddt=87.25,
+        iptm=None,
+        ipsae=None,
+        pdockq2=None,
+        lis=None,
         cif_url="https://alphafold.ebi.ac.uk/files/model.cif",
         pae_url="https://alphafold.ebi.ac.uk/files/pae.json",
     )
     return replace(entry, **changes)
+
+
+def _complex_payload(**changes: object) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "modelEntityId": "AF-COMPLEX-1",
+        "complexPredictionAccuracy_ipTM": 0.85,
+        "complexPredictionAccuracy_ipSAE": 0.81,
+        "complexPredictionAccuracy_pDockQ2": 0.40,
+        "complexPredictionAccuracy_LIS": 0.41,
+    }
+    payload.update(changes)
+    return payload
 
 
 @pytest.mark.parametrize(
@@ -205,7 +222,8 @@ def test_gateway_lookup_requests_complexes_and_preserves_order() -> None:
 
     def opener(request, *, timeout: int):
         requested.append((request.full_url, timeout))
-        return _Response(json.dumps(payload).encode())
+        response = [_complex_payload()] if "/complex/" in request.full_url else payload
+        return _Response(json.dumps(response).encode())
 
     entries = AlphaFoldDatabaseGateway(opener=opener).lookup("q5vsl9")
 
@@ -214,7 +232,43 @@ def test_gateway_lookup_requests_complexes_and_preserves_order() -> None:
         "AF-COMPLEX-1",
     ]
     assert requested[0][0].endswith("/prediction/Q5VSL9?include_complexes=true")
+    assert requested[1][0].endswith("/complex/Q5VSL9")
     assert requested[0][1] > 0
+    assert entries[1].iptm == 0.85
+    assert entries[1].ipsae == 0.81
+    assert entries[1].pdockq2 == 0.40
+    assert entries[1].lis == 0.41
+
+
+def test_gateway_skips_complex_metadata_when_complexes_are_excluded() -> None:
+    requested: list[str] = []
+
+    def opener(request, *, timeout: int):
+        requested.append(request.full_url)
+        return _Response(json.dumps([_payload()]).encode())
+
+    entries = AlphaFoldDatabaseGateway(opener=opener).lookup(
+        "Q5VSL9", include_complexes=False
+    )
+
+    assert len(entries) == 1
+    assert requested[0].endswith("/prediction/Q5VSL9?include_complexes=false")
+    assert len(requested) == 1
+
+
+def test_gateway_rejects_malformed_complex_confidence() -> None:
+    prediction = [_payload(modelEntityId="AF-COMPLEX-1", isComplex=True)]
+
+    def opener(request, *, timeout: int):
+        response = (
+            [_complex_payload(complexPredictionAccuracy_ipSAE=1.2)]
+            if "/complex/" in request.full_url
+            else prediction
+        )
+        return _Response(json.dumps(response).encode())
+
+    with pytest.raises(ValueError, match="ipSAE.*within 0–1"):
+        AlphaFoldDatabaseGateway(opener=opener).lookup("Q5VSL9")
 
 
 def test_gateway_reports_network_and_json_failures() -> None:
@@ -242,11 +296,20 @@ def test_gateway_materializes_owned_prediction_and_cleans_it_up() -> None:
     def opener(request, *, timeout: int):
         return _Response(responses[request.full_url])
 
-    files = AlphaFoldDatabaseGateway(opener=opener).materialize(_entry())
+    files = AlphaFoldDatabaseGateway(opener=opener).materialize(
+        _entry(iptm=0.85, ipsae=0.81, pdockq2=0.40, lis=0.41)
+    )
     root = files.pred_dir
     assert files.provider.key == "alphafold_db"
     assert files.n_models == 1
     assert (root / MARKER_NAME).is_file()
+    marker = json.loads((root / MARKER_NAME).read_text())
+    assert marker["confidence"] == {
+        "iptm": 0.85,
+        "ipsae": 0.81,
+        "pdockq2": 0.40,
+        "lis": 0.41,
+    }
     assert not any(root.glob("*.part"))
 
     files.close()
@@ -322,7 +385,12 @@ def test_gateway_cleans_successful_cif_when_advertised_pae_download_fails(
     assert not root.exists()
 
 
-def _write_materialized(root: Path, *, pae: object | None) -> None:
+def _write_materialized(
+    root: Path,
+    *,
+    pae: object | None,
+    confidence: dict[str, object] | None = None,
+) -> None:
     root.mkdir()
     (root / MODEL_NAME).write_text(CIF_TEXT)
     (root / MARKER_NAME).write_text(
@@ -331,6 +399,7 @@ def _write_materialized(root: Path, *, pae: object | None) -> None:
                 "schema_version": MARKER_SCHEMA_VERSION,
                 "model_id": "AF-Q5VSL9-F1",
                 "display_label": "Monomer Q5VSL9 (AF-Q5VSL9-F1)",
+                "confidence": confidence or {},
             }
         )
     )
@@ -371,6 +440,34 @@ def test_provider_supports_plddt_only_when_pae_is_absent(tmp_path: Path) -> None
     _write_materialized(root, pae=None)
     files = scan_prediction_path(root)
     assert files.model(0).capabilities == frozenset({"plddt"})
+
+
+def test_provider_loads_and_summarizes_complex_interface_confidence(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "afdb"
+    _write_materialized(
+        root,
+        pae=None,
+        confidence={"iptm": 0.85, "ipsae": 0.81, "pdockq2": 0.40, "lis": 0.41},
+    )
+    files = scan_prediction_path(root)
+    index = StructureIndex.from_path(files.structure_path(0))
+    data = load_prediction_data(
+        files, rank=0, load_pae=False, load_pde=False, structure_index=index
+    )
+
+    assert data.confidence is not None
+    assert data.confidence.iptm == 0.85
+    assert data.confidence.ipsae == 0.81
+    assert data.confidence.pdockq2 == 0.40
+    assert data.confidence.lis == 0.41
+    summary = reports.format_confidence_summary(data, index.token_map)
+    assert "ipTM             : 0.85" in summary
+    assert "ipSAE            : 0.81" in summary
+    assert "pDockQ2          : 0.40" in summary
+    assert "LIS              : 0.41" in summary
+    assert "pLDDT read from structure B-factors" in summary
 
 
 @pytest.mark.parametrize(

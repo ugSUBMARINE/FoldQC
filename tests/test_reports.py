@@ -233,6 +233,31 @@ def test_confidence_summary_no_data_and_structure_only() -> None:
     )
 
 
+def test_alphafold_database_confidence_summary_shows_interface_scores_and_note() -> (
+    None
+):
+    monomer_text = reports.format_confidence_summary(_confidence_data("alphafold_db"))
+    assert "No confidence data loaded." in monomer_text
+    assert "pLDDT read from structure B-factors" in monomer_text
+
+    complex_text = reports.format_confidence_summary(
+        _confidence_data(
+            "alphafold_db",
+            PredictionConfidence(
+                iptm=0.85,
+                ipsae=0.81,
+                pdockq2=0.40,
+                lis=0.41,
+            ),
+        )
+    )
+    assert "ipTM             : 0.85" in complex_text
+    assert "ipSAE            : 0.81" in complex_text
+    assert "pDockQ2          : 0.40" in complex_text
+    assert "LIS              : 0.41" in complex_text
+    assert "pLDDT read from structure B-factors" in complex_text
+
+
 def test_confidence_summary_common_fields_and_chain_arrays() -> None:
     confidence = PredictionConfidence(
         ranking_score=0.91,
