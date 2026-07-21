@@ -1,0 +1,3 @@
+# Files and directories excluded from `git archive` exports (e.g. GitHub release zips)
+# (files already in .gitignore are untracked and excluded automatically)
+tests/           export-ignore
