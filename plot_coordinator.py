@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Literal, TypeAlias
 
-from . import metrics, plot_data, plots
+from . import metrics, plot_data
 from .analysis import ComputedMetric, PlotOptions, ResolvedAnalysis
 from .plot_preparation import PlotPreparationService
 from .presentation import PreparedPlot
@@ -61,6 +61,8 @@ class PlotCoordinator:
         computed: tuple[ComputedMetric, ...],
         options: PlotOptions,
     ) -> PreparedPlot:
+        from . import plots
+
         x_values, series, ylabel = self._preparation.line_data(resolved, computed)
         spec = resolved.metric_spec
         if spec is None:
@@ -99,6 +101,8 @@ class PlotCoordinator:
         computed: tuple[ComputedMetric, ...],
         options: PlotOptions,
     ) -> PreparedPlot:
+        from . import plots
+
         values, indices = self._preparation.distribution_values(resolved, computed)
         spec = resolved.metric_spec
         if spec is None:
@@ -151,6 +155,8 @@ class PlotCoordinator:
         computed: tuple[ComputedMetric, ...],
         options: PlotOptions,
     ) -> PreparedPlot:
+        from . import plots
+
         (
             matrix,
             rows,
@@ -215,6 +221,8 @@ class PlotCoordinator:
         options: PlotOptions,
         family: Literal["pae", "pde"],
     ) -> PreparedPlot:
+        from . import plots
+
         x_values, series, ylabel = self._preparation.summary_data(resolved, family)
         indices = list(map(int, x_values.tolist()))
         boundaries, labels = plot_data.chain_boundaries(
@@ -268,6 +276,8 @@ class PlotCoordinator:
         computed: tuple[ComputedMetric, ...],
         options: PlotOptions,
     ) -> PreparedPlot:
+        from . import plots
+
         context = resolved.members[0].metric_context
         binding_indices = list(context.contact_indices)
         if not binding_indices:
@@ -309,6 +319,8 @@ class PlotCoordinator:
         computed: tuple[ComputedMetric, ...],
         options: PlotOptions,
     ) -> PreparedPlot:
+        from . import plots
+
         labels, series, site_indices = self._preparation.ensemble_site_data(resolved)
         if not series:
             raise ValueError("No pLDDT, PAE, or PDE site-summary data are available.")

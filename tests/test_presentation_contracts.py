@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import ast
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -52,6 +54,38 @@ def test_typed_presentation_and_view_results_preserve_payload_identity() -> None
     )
     assert state.metric_labels[0][1].endswith("(structure B-factors)")
     assert state.plot_availability[0][0] == "matrix"
+
+
+def test_gui_application_import_does_not_require_matplotlib() -> None:
+    root = Path(__file__).resolve().parents[1]
+    script = """
+import importlib.abc
+import sys
+
+
+class BlockMatplotlib(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname == "matplotlib" or fullname.startswith("matplotlib."):
+            raise ModuleNotFoundError("Matplotlib is intentionally unavailable")
+        return None
+
+
+sys.meta_path.insert(0, BlockMatplotlib())
+import FoldQC.gui_application
+
+assert "FoldQC.plots" not in sys.modules
+assert not any(
+    name == "matplotlib" or name.startswith("matplotlib.") for name in sys.modules
+)
+"""
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=root.parent,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
 
 
 def test_service_modules_have_no_direct_qt_or_pymol_imports_or_broad_ignores() -> None:
