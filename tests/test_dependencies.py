@@ -1,13 +1,49 @@
 from __future__ import annotations
 
+import builtins
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from FoldQC import dependencies
+
+
+def test_standalone_installer_uses_pymol_script_path(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    source_path = Path(__file__).resolve().parents[1] / "tools" / "install_deps.py"
+    simulated_path = tmp_path / "FoldQC" / "tools" / "install_deps.py"
+    expected_parent = str(tmp_path)
+    fake_dependencies = SimpleNamespace(
+        DEPENDENCIES=(),
+        missing_dependency_keys=lambda _keys: (),
+    )
+    original_import = builtins.__import__
+
+    def importing(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "FoldQC":
+            assert sys.path[0] == expected_parent
+            return SimpleNamespace(dependencies=fake_dependencies)
+        return original_import(name, globals, locals, fromlist, level)
+
+    namespace = {
+        "__builtins__": {**vars(builtins), "__import__": importing},
+        "__file__": "/Applications/PyMOL.app/pymol/__init__.py",
+        "__script__": str(simulated_path),
+    }
+    old_path = sys.path.copy()
+    try:
+        sys.path[:] = [entry for entry in sys.path if entry != expected_parent]
+        source = source_path.read_text(encoding="utf-8")
+        exec(compile(source, str(source_path), "exec"), namespace)
+    finally:
+        sys.path[:] = old_path
+
+    assert "All optional FoldQC dependencies are installed." in capsys.readouterr().out
 
 
 def test_dependency_keys_are_validated_deduplicated_and_ordered() -> None:

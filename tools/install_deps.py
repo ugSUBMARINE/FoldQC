@@ -14,7 +14,11 @@ from pathlib import Path
 
 # ``run /path/to/FoldQC/tools/install_deps.py`` does not establish package
 # context, so make the directory containing the FoldQC package importable.
-package_parent = str(Path(__file__).resolve().parents[2])
+# PyMOL executes scripts in the ``pymol`` module namespace, where ``__file__``
+# identifies pymol/__init__.py.  Its runner sets ``__script__`` to the actual
+# script path before execution.
+script_path = Path(globals().get("__script__") or __file__).resolve()
+package_parent = str(script_path.parents[2])
 if package_parent not in sys.path:
     sys.path.insert(0, package_parent)
 
