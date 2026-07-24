@@ -372,25 +372,32 @@ present in the full-data file.
 
 The pairwise chain ipTM matrix uses the unique first-appearance chain order from
 the canonical structure token map, mapped onto the displayed PyMOL chain IDs.
-Provider JSON indices are converted to this order while loading; row `i`,
-column `j` then represents those two canonical chains.
+Provider-specific encodings are normalized while loading. In FoldQC's
+provider-neutral representation and matrix plots:
 
-Do not assume every provider uses the matrix as a simple "reference chain" by
-"placed chain" table. For AlphaFold 3 `chain_pair_iptm`, the off-diagonal
-element `(i, j)` is documented as the ipTM restricted to tokens from chains `i`
-and `j`; in the public AlphaFold 3 implementation this chain-pair score is
-written symmetrically. In that case `(A, X)` and `(X, A)` should be the same
-apart from rounding or output-version differences. OpenFold3's chain-ID-keyed
-`chain_pair_iptm` and `bespoke_iptm` values are likewise mapped to the canonical
-chain order and represented symmetrically. The bespoke matrix has no diagonal
-self-score and is presented separately from the colorable chain-ipTM matrix.
+- rows are alignment/reference chains;
+- columns are scored chains whose placement is evaluated relative to the row;
+- `matrix[i, j]` therefore means alignment chain `i` → scored chain `j`.
 
-Boltz-style, Chai-1 Discovery, and Protenix `pair_chains_iptm` outputs can be
-asymmetric. For those matrices, read `[i][j]` as the provider's directional
-score for chain `i` against chain `j`. This is analogous to PAE directionality:
-the row can be treated as the alignment/reference side and the column as the
-side whose placement is being evaluated relative to it. Because the two
-directions can differ, report both directions when diagnosing an interface. For
-a single conservative interface summary, use `min([i][j], [j][i])`; for a
-permissive summary, use the mean or maximum, but state which aggregation you
-used.
+Chai-1 already emits `per_chain_pair_iptm` with
+`[query_chain, key_chain] = [alignment_chain, scored_chain]` axes, so FoldQC
+preserves its matrix orientation. Boltz serializes the inverse nested
+convention, `pair_chains_iptm[scored_chain][alignment_chain]`; the Boltz
+provider transposes that field during loading to produce the same canonical
+FoldQC axes. This normalization applies to standard Boltz, Boltz Lab, and Boltz
+API inputs.
+
+AlphaFold 3 `chain_pair_iptm` is documented as the ipTM restricted to the two
+selected chains and is written symmetrically by the public implementation.
+OpenFold3's chain-ID-keyed `chain_pair_iptm` and `bespoke_iptm` values are
+likewise mapped to canonical chain order and represented symmetrically. For
+these matrices, swapping row and column does not change the displayed
+off-diagonal value. The bespoke matrix has no diagonal self-score and is
+presented separately from the colorable chain-ipTM matrix.
+
+When a normalized matrix is asymmetric, report both directions when diagnosing
+an interface. For a single conservative interface summary, use
+`min(matrix[i, j], matrix[j, i])`; for a permissive summary, use the mean or
+maximum, but state which aggregation was used. Do not infer direction from a
+provider's raw field name alone; use the normalized FoldQC plot axes described
+above.

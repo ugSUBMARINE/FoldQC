@@ -407,10 +407,48 @@ def _boltz_api_metrics_by_sample(
     return by_sample
 
 
+def _normalize_boltz_confidence(payload: dict | None) -> dict | None:
+    """Convert Boltz chain-pair nesting to FoldQC's canonical matrix axes.
+
+    Boltz serializes ``pair_chains_iptm[scored_chain][alignment_chain]``.
+    FoldQC stores pair matrices as ``[alignment_chain, scored_chain]`` so that
+    their axes match PAE and Chai's ``[query_chain, key_chain]`` convention.
+    """
+    if not isinstance(payload, dict):
+        return payload
+    normalized = dict(payload)
+    pair_scores = normalized.get("pair_chains_iptm")
+
+    if isinstance(pair_scores, dict) and all(
+        isinstance(row, dict) for row in pair_scores.values()
+    ):
+        transposed: dict[object, dict[object, object]] = {
+            alignment_chain: {} for alignment_chain in pair_scores
+        }
+        for scored_chain, row in pair_scores.items():
+            for alignment_chain, value in row.items():
+                transposed.setdefault(alignment_chain, {})[scored_chain] = value
+        normalized["pair_chains_iptm"] = transposed
+    elif (
+        isinstance(pair_scores, list)
+        and all(isinstance(row, list) for row in pair_scores)
+        and all(len(row) == len(pair_scores) for row in pair_scores)
+    ):
+        normalized["pair_chains_iptm"] = [
+            [pair_scores[column][row] for column in range(len(pair_scores))]
+            for row in range(len(pair_scores))
+        ]
+
+    return normalized
+
+
 class BoltzProvider(BaseProvider):
     key, label = "boltz", "Boltz"
     confidence_summary = BOLTZ_CONFIDENCE_SUMMARY
     detect = staticmethod(_looks_like_boltz)
+
+    def normalize_confidence_payload(self, payload: dict | None) -> dict | None:
+        return _normalize_boltz_confidence(payload)
 
     def scan(self, path: Path) -> PredictionFiles:
         return _scan_boltz_dir(path, self)

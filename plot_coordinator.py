@@ -172,7 +172,7 @@ class PlotCoordinator:
         if source == "chain_iptm":
             row_boundaries: list[float] = []
             column_boundaries: list[float] = []
-            xlabel, ylabel = "Chain j", "Chain i"
+            xlabel, ylabel = "Scored chain", "Alignment/reference chain"
         else:
             row_boundaries, _ = plot_data.chain_boundaries(
                 resolved.target.token_map, rows

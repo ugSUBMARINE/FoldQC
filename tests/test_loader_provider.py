@@ -168,7 +168,18 @@ class LoaderProviderTests(unittest.TestCase):
             pred_dir = Path(tmp) / "target"
             pred_dir.mkdir()
             (pred_dir / "target_model_0.cif").write_text(CIF_TEXT)
-            _write_json(pred_dir / "confidence_target_model_0.json", {"ptm": 0.8})
+            _write_json(
+                pred_dir / "confidence_target_model_0.json",
+                {
+                    "ptm": 0.8,
+                    "chains_ptm": {"0": 0.8, "1": 0.7},
+                    # Boltz nests scored chain outside alignment chain.
+                    "pair_chains_iptm": {
+                        "0": {"0": 0.8, "1": 0.2},
+                        "1": {"0": 0.9, "1": 0.7},
+                    },
+                },
+            )
             np.savez(pred_dir / "plddt_target_model_0.npz", plddt=np.array([0.7, 0.6]))
 
             files = scan_prediction_path(pred_dir)
@@ -179,6 +190,11 @@ class LoaderProviderTests(unittest.TestCase):
         self.assertTrue(files.model_supports(0, "plddt"))
         np.testing.assert_allclose(data.token_plddt, np.array([0.7, 0.6]))
         self.assertEqual(data.token_plddt_source, "provider_token")
+        np.testing.assert_allclose(
+            data.confidence.pair_chain_iptm,
+            # FoldQC canonical axes: rows=alignment, columns=scored.
+            [[0.8, 0.9], [0.2, 0.7]],
+        )
 
     def test_boltz_without_token_array_falls_back_to_structure(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
