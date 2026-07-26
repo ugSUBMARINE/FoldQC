@@ -61,6 +61,7 @@ class ContextService:
     def refresh(self, selection: ContextSelection | None = None) -> ContextViewState:
         if selection is not None:
             self._selection = selection
+        self._select_fallback_metric_for_hidden_group()
         state = self.derive_view_state()
         self._view.apply_context(state)
         return state
@@ -78,6 +79,7 @@ class ContextService:
         if selected not in names:
             selected = names[0] if names else ""
         self._selection = replace(self._selection, target_name=selected)
+        self._select_fallback_metric_for_hidden_group()
         state = self.derive_view_state(target_names=names)
         self._view.apply_context(state)
         return state
@@ -222,7 +224,7 @@ class ContextService:
             )
             return None
 
-    def metric_availability(self) -> tuple[tuple[int, bool], ...]:
+    def _metric_availability_by_key(self) -> tuple[tuple[str, bool], ...]:
         if self._state.active_model_state is None or self._state.pred_files is None:
             return ()
         target_states = self.target_model_states()
@@ -237,29 +239,52 @@ class ContextService:
             state.data.confidence is not None and state.data.confidence.has_chain_iptm
             for state in target_states
         )
-        availability: list[tuple[int, bool]] = []
+        availability: list[tuple[str, bool]] = []
         for spec in metrics.METRICS:
-            row = self._metric_rows.get(spec.key)
-            if row is None:
-                continue
             available = all(family_available[item] for item in spec.requirements)
             if spec.key == "chain_iptm":
                 available = available and has_chain_iptm
             if spec.ensemble_level:
                 available = available and self._state.ensemble is not None
-            availability.append((row, available))
+            availability.append((spec.key, available))
         return tuple(availability)
 
+    def metric_availability(self) -> tuple[tuple[int, bool], ...]:
+        availability = dict(self._metric_availability_by_key())
+        return tuple(
+            (row, availability[spec.key])
+            for spec in metrics.METRICS
+            if (row := self._metric_rows.get(spec.key)) is not None
+            and spec.key in availability
+        )
+
+    def metric_group_visibility(self) -> tuple[tuple[str, bool], ...]:
+        availability = dict(self._metric_availability_by_key())
+        if not availability:
+            return ()
+        visible: dict[str, bool] = {}
+        for spec in metrics.METRICS:
+            visible[spec.group] = (
+                visible.get(spec.group, False) or availability[spec.key]
+            )
+        return tuple(visible.items())
+
+    def _select_fallback_metric_for_hidden_group(self) -> None:
+        visibility = dict(self.metric_group_visibility())
+        if not visibility:
+            return
+        selected = metrics.METRICS.find(self._selection.metric_key)
+        if selected is not None and visibility[selected.group]:
+            return
+        self._selection = replace(
+            self._selection,
+            metric_key=self.first_available_metric(),
+        )
+
     def first_available_metric(self) -> str | None:
-        available_rows = {
-            row for row, available in self.metric_availability() if available
-        }
+        availability = dict(self._metric_availability_by_key())
         return next(
-            (
-                spec.key
-                for spec in metrics.METRICS
-                if self._metric_rows.get(spec.key) in available_rows
-            ),
+            (spec.key for spec in metrics.METRICS if availability.get(spec.key, False)),
             None,
         )
 
@@ -362,7 +387,9 @@ class ContextService:
         active = self._state.active_model_state
         return ContextViewState(
             metric_availability=self.metric_availability(),
+            metric_group_visibility=self.metric_group_visibility(),
             metric_labels=self.metric_labels(),
+            selected_metric_key=selection.metric_key,
             plot_availability=self.plot_availability(),
             reference_label=field.ref_label,
             reference_tooltip=field.ref_tooltip,

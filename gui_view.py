@@ -79,6 +79,27 @@ class QtDialogView:
         for row, label in labels:
             combo.setItemText(row, label)
 
+    def set_metric_group_visibility(
+        self, visibility: tuple[tuple[str, bool], ...]
+    ) -> None:
+        popup = self.widgets._prop_combo.view()
+        for group, visible in visibility:
+            for row in self.widgets._prop_combo_group_rows.get(group, ()):
+                popup.setRowHidden(row, not visible)
+
+    def apply_metric_context(self, state: ContextViewState) -> None:
+        combo = self.widgets._prop_combo
+        combo.blockSignals(True)
+        try:
+            self.set_metric_labels(state.metric_labels)
+            for row, available in state.metric_availability:
+                self.set_metric_available(row, available)
+            self.set_metric_group_visibility(state.metric_group_visibility)
+            if state.selected_metric_key is not None:
+                self.select_property(state.selected_metric_key)
+        finally:
+            combo.blockSignals(False)
+
     def set_plot_availability(
         self, availability: tuple[tuple[str, bool, str], ...]
     ) -> None:
@@ -146,9 +167,7 @@ class QtDialogView:
                 self.select_object(state.selected_target)
         finally:
             combo.blockSignals(False)
-        self.set_metric_labels(state.metric_labels)
-        for row, available in state.metric_availability:
-            self.set_metric_available(row, available)
+        self.apply_metric_context(state)
         self.set_plot_availability(state.plot_availability)
         self.apply_field_context(state)
         self.set_confidence_text(state.confidence_text)

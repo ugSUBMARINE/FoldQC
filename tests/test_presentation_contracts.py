@@ -48,11 +48,15 @@ def test_typed_presentation_and_view_results_preserve_payload_identity() -> None
     assert LifecycleUiUpdate(selected_rank=2).selected_rank == 2
     state = ContextViewState(
         metric_availability=((3, False),),
+        metric_group_visibility=(("PAE", False),),
         metric_labels=((3, "  pLDDT (structure B-factors)"),),
+        selected_metric_key="plddt",
         plot_availability=(("matrix", False, "PAE is unavailable"),),
         preview_text="preview",
     )
     assert state.metric_labels[0][1].endswith("(structure B-factors)")
+    assert state.metric_group_visibility == (("PAE", False),)
+    assert state.selected_metric_key == "plddt"
     assert state.plot_availability[0][0] == "matrix"
 
 

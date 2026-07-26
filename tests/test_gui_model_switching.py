@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
-from FoldQC import ensemble
+from FoldQC import ensemble, metrics
 from FoldQC.alphafold_database import AlphaFoldDbEntry
 from FoldQC.analysis import (
     AnalysisRequest,
@@ -22,6 +22,7 @@ from FoldQC.analysis import (
     build_data_load_plan,
 )
 from FoldQC.analysis_coordinator import AnalysisCoordinator
+from FoldQC.confidence import PredictionConfidence
 from FoldQC.context_service import ContextService
 from FoldQC.data_acquisition import DataAcquisitionService
 from FoldQC.gui_application import GuiApplicationServices
@@ -1401,6 +1402,54 @@ def test_context_reports_ensemble_button_availability_and_tooltips() -> None:
     assert loaded.ensemble_tooltip == (
         "The ensemble for this prediction is already loaded."
     )
+
+
+def test_context_hides_unavailable_metric_groups_and_falls_back() -> None:
+    presenter = FakePresenter()
+    view = FakeView()
+    state, _files = _state()
+    rows = {spec.key: row for row, spec in enumerate(metrics.METRICS)}
+    context = ContextService(state, TargetListViewer(), presenter, view, rows)
+
+    rendered = context.refresh(
+        ContextSelection(target_name="model_0", metric_key="pde_mean")
+    )
+
+    assert dict(rendered.metric_group_visibility) == {
+        "pLDDT": True,
+        "PAE": True,
+        "PDE": False,
+        "Interaction probability": False,
+        "Ensemble": False,
+        "Chain/interface": False,
+    }
+    assert dict(rendered.metric_availability)[rows["pae_row_mean"]]
+    assert rendered.selected_metric_key == metrics.DEFAULT_METRIC_KEY
+    assert context.selection.metric_key == metrics.DEFAULT_METRIC_KEY
+
+
+def test_context_special_metric_groups_follow_ensemble_and_chain_data() -> None:
+    presenter = FakePresenter()
+    view = FakeView()
+    state, _files = _state()
+    context = ContextService(state, TargetListViewer(), presenter, view, {})
+
+    state.active_model_state.data.confidence = PredictionConfidence(
+        chain_iptm=np.array([0.8], dtype=np.float32)
+    )
+    state.ensemble = ensemble.EnsembleState(
+        "prediction_ensemble",
+        (ensemble.EnsembleMember(0, "model_0"),),
+        False,
+        np.zeros(2, dtype=np.float32),
+        np.zeros(2, dtype=np.float32),
+        np.zeros(2, dtype=np.float32),
+    )
+
+    visibility = dict(context.metric_group_visibility())
+
+    assert visibility["Ensemble"]
+    assert visibility["Chain/interface"]
 
 
 def test_context_labels_plddt_metrics_with_selected_target_source() -> None:

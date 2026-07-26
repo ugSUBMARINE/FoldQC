@@ -404,7 +404,9 @@ class ContextViewState:
     """Complete contextual control state rendered by ``DialogViewPort``."""
 
     metric_availability: tuple[tuple[int, bool], ...] = ()
+    metric_group_visibility: tuple[tuple[str, bool], ...] = ()
     metric_labels: tuple[tuple[int, str], ...] = ()
+    selected_metric_key: str | None = None
     plot_availability: tuple[tuple[str, bool, str], ...] = ()
     reference_label: str = "Reference:"
     reference_tooltip: str = ""

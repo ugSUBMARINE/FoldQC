@@ -123,17 +123,26 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
         caption.setFixedHeight(fixed_height)
         caption.setAlignment(alignment)
 
-    def _populate_property_combo_for(self, combo, rows: dict[str, int]) -> None:
+    def _populate_property_combo_for(
+        self,
+        combo,
+        rows: dict[str, int],
+        group_rows: dict[str, tuple[int, ...]],
+    ) -> None:
         """Populate a provided metric combo while the widget registry is built."""
         current_group = None
         for spec in metrics.METRICS:
             group = spec.group
             if group != current_group:
                 combo.addItem(str(group), None)
-                self._disable_combo_row(combo, combo.count() - 1)
+                header_row = combo.count() - 1
+                self._disable_combo_row(combo, header_row)
+                group_rows[group] = (header_row,)
                 current_group = group
             combo.addItem(metrics.property_combo_label(spec), spec.key)
-            rows[spec.key] = combo.count() - 1
+            metric_row = combo.count() - 1
+            rows[spec.key] = metric_row
+            group_rows[group] = (*group_rows[group], metric_row)
         combo.setCurrentIndex(rows[metrics.DEFAULT_METRIC_KEY])
 
     def _disable_combo_row(self, combo, row: int) -> None:

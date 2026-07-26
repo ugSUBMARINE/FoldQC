@@ -119,6 +119,70 @@ class _MetricCombo:
         self.labels[row] = label
 
 
+class _GroupedMetricItem:
+    def __init__(self, flags: int = 64) -> None:
+        self.value = flags
+
+    def flags(self) -> int:
+        return self.value
+
+    def setFlags(self, flags: int) -> None:
+        self.value = flags
+
+
+class _GroupedMetricCombo:
+    def __init__(self) -> None:
+        self.labels = [
+            "pLDDT",
+            "old pLDDT",
+            "PAE",
+            "old PAE",
+            "PDE",
+            "old PDE mean",
+            "old PDE selection",
+        ]
+        self.data = [
+            None,
+            "plddt_class",
+            None,
+            "pae_row_mean",
+            None,
+            "pde_mean",
+            "pde_to_sel",
+        ]
+        self.items = [_GroupedMetricItem() for _label in self.labels]
+        self.blocked: list[bool] = []
+        self.hidden: dict[int, bool] = {}
+        self.current_index = 3
+
+    def blockSignals(self, blocked: bool) -> None:
+        self.blocked.append(blocked)
+
+    def setItemText(self, row: int, label: str) -> None:
+        self.labels[row] = label
+
+    def count(self) -> int:
+        return len(self.items)
+
+    def itemData(self, row: int):
+        return self.data[row]
+
+    def setCurrentIndex(self, row: int) -> None:
+        self.current_index = row
+
+    def model(self):
+        return self
+
+    def item(self, row: int) -> _GroupedMetricItem | None:
+        return self.items[row] if 0 <= row < len(self.items) else None
+
+    def view(self):
+        return self
+
+    def setRowHidden(self, row: int, hidden: bool) -> None:
+        self.hidden[row] = hidden
+
+
 class _HistoryItem:
     def __init__(self) -> None:
         self.tooltip = ""
@@ -237,6 +301,61 @@ def test_context_metric_labels_update_existing_combo_rows() -> None:
     view.set_metric_labels(((1, "  pLDDT (structure B-factors)"),))
 
     assert combo.labels == ["group", "  pLDDT (structure B-factors)", "PAE"]
+
+
+def test_metric_context_hides_complete_groups_and_selects_fallback_silently() -> None:
+    combo = _GroupedMetricCombo()
+    view = QtDialogView.__new__(QtDialogView)
+    view.widgets = types.SimpleNamespace(
+        _prop_combo=combo,
+        _prop_combo_group_rows={
+            "pLDDT": (0, 1),
+            "PAE": (2, 3),
+            "PDE": (4, 5, 6),
+        },
+    )
+    state = types.SimpleNamespace(
+        metric_labels=((1, "  pLDDT — classes"),),
+        metric_availability=((1, True), (3, False), (5, True), (6, False)),
+        metric_group_visibility=(
+            ("pLDDT", True),
+            ("PAE", False),
+            ("PDE", True),
+        ),
+        selected_metric_key="plddt_class",
+    )
+
+    view.apply_metric_context(state)
+
+    assert combo.blocked == [True, False]
+    assert combo.current_index == 1
+    assert combo.hidden == {
+        0: False,
+        1: False,
+        2: True,
+        3: True,
+        4: False,
+        5: False,
+        6: False,
+    }
+    assert not (combo.items[3].flags() & 64)
+    assert combo.items[5].flags() & 64
+    assert not (combo.items[6].flags() & 64)
+
+    state.metric_availability = ((1, True), (3, True), (5, True), (6, False))
+    state.metric_group_visibility = (
+        ("pLDDT", True),
+        ("PAE", True),
+        ("PDE", True),
+    )
+    state.selected_metric_key = "pae_row_mean"
+    view.apply_metric_context(state)
+
+    assert combo.blocked == [True, False, True, False]
+    assert combo.current_index == 3
+    assert combo.hidden[2] is False
+    assert combo.hidden[3] is False
+    assert combo.items[3].flags() & 64
 
 
 def test_recent_prediction_rendering_preserves_edit_text_and_blocks_activation() -> (

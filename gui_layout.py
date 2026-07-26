@@ -164,6 +164,7 @@ class GuiWidgets:
     _preview_details_btn: QtWidgets.QPushButton
     _preview_label: QtWidgets.QLabel
     _prop_combo: QtWidgets.QComboBox
+    _prop_combo_group_rows: dict[str, tuple[int, ...]]
     _prop_combo_rows: dict[str, int]
     _recent_combo: QtWidgets.QComboBox
     _ref_edit: QtWidgets.QLineEdit
@@ -206,6 +207,7 @@ class GuiWidgets:
             _preview_details_btn=dialog._preview_details_btn,
             _preview_label=dialog._preview_label,
             _prop_combo=dialog._prop_combo,
+            _prop_combo_group_rows=dialog._prop_combo_group_rows,
             _prop_combo_rows=dialog._prop_combo_rows,
             _recent_combo=dialog._recent_combo,
             _ref_edit=dialog._ref_edit,
@@ -365,8 +367,13 @@ def build_dialog_ui(dialog) -> GuiWidgets:
 
     self._prop_combo = QtWidgets.QComboBox()
     _configure_flexible_combo(self._prop_combo, ANALYSIS_COMBO_MIN_WIDTH)
+    self._prop_combo_group_rows: dict[str, tuple[int, ...]] = {}
     self._prop_combo_rows: dict[str, int] = {}
-    dialog._populate_property_combo_for(self._prop_combo, self._prop_combo_rows)
+    dialog._populate_property_combo_for(
+        self._prop_combo,
+        self._prop_combo_rows,
+        self._prop_combo_group_rows,
+    )
     self._prop_combo.setToolTip(
         "Confidence metric to write into B-factors and display on the selected target."
     )
