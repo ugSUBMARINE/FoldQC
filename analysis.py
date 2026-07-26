@@ -216,6 +216,21 @@ class ComputedMetric:
         object.__setattr__(self, "values", values)
 
 
+@dataclass(frozen=True)
+class MetricComputationJobResult:
+    """Typed result returned by a background metric computation."""
+
+    resolved: ResolvedAnalysis
+    computed: tuple[ComputedMetric, ...] | None = None
+    notice: Notice | None = None
+
+    def __post_init__(self) -> None:
+        if (self.computed is None) == (self.notice is None):
+            raise ValueError(
+                "A metric computation result requires either values or a notice."
+            )
+
+
 def _loaded_capabilities(state: ModelState) -> frozenset[DataCapability]:
     data = state.data
     loaded: set[DataCapability] = set()

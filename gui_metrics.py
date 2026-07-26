@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import numpy as np
 
 from . import compute
@@ -126,11 +128,17 @@ class MetricComputationService:
             )
         return resolved.with_member_contexts(tuple(contexts))
 
-    def compute(self, resolved: ResolvedAnalysis) -> tuple[ComputedMetric, ...]:
+    def compute(
+        self,
+        resolved: ResolvedAnalysis,
+        report_progress: Callable[[str], None] | None = None,
+    ) -> tuple[ComputedMetric, ...]:
         metric = resolved.metric_spec
         if metric is None:
             return ()
         if metric.ensemble_level:
+            if report_progress is not None:
+                report_progress(f"Calculating {metric.label}…")
             values = self._compute_ensemble_metric(metric.key)
             member = resolved.members[0]
             return (
@@ -144,7 +152,13 @@ class MetricComputationService:
                 ),
             )
         computed: list[ComputedMetric] = []
-        for member in resolved.members:
+        member_count = len(resolved.members)
+        for member_index, member in enumerate(resolved.members, start=1):
+            if report_progress is not None:
+                suffix = f" ({member_index}/{member_count})" if member_count > 1 else ""
+                report_progress(
+                    f"Calculating {metric.label} for {member.label}…{suffix}"
+                )
             context = member.metric_context
             try:
                 values = compute.compute_metric(

@@ -235,6 +235,19 @@ def _lazy_action(revision: int = 0) -> DeferredAnalysisAction:
     )
 
 
+def _domain_action(revision: int = 0) -> DeferredAnalysisAction:
+    return DeferredAnalysisAction(
+        AnalysisRequest(
+            "color",
+            "model_0",
+            "pae_domain_complete",
+            cutoff_angstrom=5.0,
+            ui_revision=revision,
+        ),
+        ColorOptions("viridis"),
+    )
+
+
 def test_operation_coordinator_owns_exclusivity_and_abandonment() -> None:
     presenter = FakePresenter()
     view = FakeView()
@@ -521,9 +534,11 @@ class CountingMetricService:
         self.context_calls += 1
         return resolved
 
-    def compute(self, resolved):
+    def compute(self, resolved, report_progress=None):
         self.compute_calls += 1
         member = resolved.members[0]
+        if report_progress is not None:
+            report_progress(f"Calculating clusters for {member.label}…")
         return (
             ComputedMetric(
                 member.rank,
@@ -567,6 +582,8 @@ class NoopContext:
 def test_analysis_coordinator_computes_each_action_once() -> None:
     state, _files = _state(with_pae=True)
     presenter = FakePresenter()
+    runner = DeferredRunner()
+    operations = GuiOperationCoordinator(presenter, FakeView())
     metrics = CountingMetricService()
     coloring = RecordingColoring()
     coordinator = AnalysisCoordinator(
@@ -580,6 +597,8 @@ def test_analysis_coordinator_computes_each_action_once() -> None:
         NoopExport(),
         NoopContext(),
         set(),
+        runner,
+        operations,
     )
     coordinator.submit(_lazy_action())
     assert metrics.context_calls == 1
@@ -591,6 +610,8 @@ def test_analysis_coordinator_computes_each_action_once() -> None:
 def test_analysis_coordinator_discards_stale_captured_ui_revision() -> None:
     state, _files = _state(with_pae=True)
     presenter = FakePresenter()
+    runner = DeferredRunner()
+    operations = GuiOperationCoordinator(presenter, FakeView())
     metrics = CountingMetricService()
     coloring = RecordingColoring()
     coordinator = AnalysisCoordinator(
@@ -604,11 +625,221 @@ def test_analysis_coordinator_discards_stale_captured_ui_revision() -> None:
         NoopExport(),
         NoopContext(),
         set(),
+        runner,
+        operations,
     )
     coordinator.invalidate_ui()
     coordinator.submit(_lazy_action(revision=0))
     assert metrics.compute_calls == 0
     assert coloring.calls == 0
+    assert presenter.notices == []
+
+
+def test_analysis_coordinator_runs_domain_clustering_in_worker() -> None:
+    state, _files = _state(with_pae=True)
+    presenter = FakePresenter()
+    view = FakeView()
+    runner = DeferredRunner()
+    operations = GuiOperationCoordinator(presenter, view)
+    metric_service = CountingMetricService()
+    coloring = RecordingColoring()
+    coordinator = AnalysisCoordinator(
+        state,
+        presenter,
+        FakeDependencies(),
+        NoLoadData(),
+        metric_service,
+        coloring,
+        NoopPlots(),
+        NoopExport(),
+        NoopContext(),
+        set(),
+        runner,
+        operations,
+    )
+
+    coordinator.submit(_domain_action())
+
+    assert metric_service.context_calls == 1
+    assert metric_service.compute_calls == 0
+    assert coloring.calls == 0
+    assert operations.active is not None
+    assert operations.active.kind == "analysis"
+    assert "domain labels" in presenter.progress[0][1]
+    assert presenter.cancel_callbacks[-1] is None
+
+    assert runner.task is not None
+    assert runner.on_progress is not None
+    result = runner.task(lambda label: runner.on_progress(runner.request_id, label))
+    assert metric_service.compute_calls == 1
+    assert "Calculating clusters" in presenter.progress[-1][1]
+    assert coloring.calls == 0
+
+    runner.deliver(result)
+
+    assert coloring.calls == 1
+    assert not operations.is_busy
+    assert presenter.finished
+    assert presenter.notices == []
+
+
+def test_background_metric_result_is_silent_when_ui_becomes_stale() -> None:
+    state, _files = _state(with_pae=True)
+    presenter = FakePresenter()
+    runner = DeferredRunner()
+    operations = GuiOperationCoordinator(presenter, FakeView())
+    metric_service = CountingMetricService()
+    coloring = RecordingColoring()
+    coordinator = AnalysisCoordinator(
+        state,
+        presenter,
+        FakeDependencies(),
+        NoLoadData(),
+        metric_service,
+        coloring,
+        NoopPlots(),
+        NoopExport(),
+        NoopContext(),
+        set(),
+        runner,
+        operations,
+    )
+    coordinator.submit(_domain_action())
+    assert runner.task is not None
+    result = runner.task(lambda _label: None)
+
+    coordinator.invalidate_ui()
+    runner.deliver(result)
+
+    assert coloring.calls == 0
+    assert result in runner.disposed
+    assert not operations.is_busy
+    assert presenter.notices == []
+
+
+def test_background_metric_failure_and_invalid_result_finish_progress() -> None:
+    for invalid_result in (None, "worker failed"):
+        state, _files = _state(with_pae=True)
+        presenter = FakePresenter()
+        runner = DeferredRunner()
+        operations = GuiOperationCoordinator(presenter, FakeView())
+        coordinator = AnalysisCoordinator(
+            state,
+            presenter,
+            FakeDependencies(),
+            NoLoadData(),
+            CountingMetricService(),
+            RecordingColoring(),
+            NoopPlots(),
+            NoopExport(),
+            NoopContext(),
+            set(),
+            runner,
+            operations,
+        )
+        coordinator.submit(_domain_action())
+
+        if invalid_result is None:
+            assert runner.on_error is not None
+            runner.on_error(
+                runner.request_id,
+                type(
+                    "Failure", (), {"message": "worker failed", "traceback_text": ""}
+                )(),
+            )
+            expected_code = "metric_computation_failed"
+        else:
+            runner.deliver(invalid_result)
+            expected_code = "metric_result_type"
+
+        assert not operations.is_busy
+        assert presenter.finished
+        assert presenter.notices[-1].code == expected_code
+
+
+def test_clustering_starts_after_lazy_pae_loading_finishes() -> None:
+    state, files = _state(with_pae=False)
+    presenter = FakePresenter()
+    runner = DeferredRunner()
+    operations = GuiOperationCoordinator(presenter, FakeView())
+    data = DataAcquisitionService(
+        state, presenter, ImmediateScheduler(), runner, operations
+    )
+    metric_service = CountingMetricService()
+    coloring = RecordingColoring()
+    coordinator = AnalysisCoordinator(
+        state,
+        presenter,
+        FakeDependencies(),
+        data,
+        metric_service,
+        coloring,
+        NoopPlots(),
+        NoopExport(),
+        NoopContext(),
+        set(),
+        runner,
+        operations,
+    )
+    action = _domain_action()
+    resolved = AnalysisResolver().resolve(action.request, state)
+    plan = build_data_load_plan(resolved)
+
+    coordinator.submit(action)
+
+    assert operations.active is not None
+    assert operations.active.kind == "data"
+    assert metric_service.compute_calls == 0
+    requirement = plan.requirements[0]
+    loaded = PredictionData(
+        "prediction",
+        0,
+        Path("/tmp/model_0.cif"),
+        files.provider,
+        pae=np.full((2, 2), 2.0, dtype=np.float32),
+    )
+    runner.deliver(DataLoadBatchResult(files, ((requirement, loaded),)))
+
+    assert operations.active is not None
+    assert operations.active.kind == "analysis"
+    assert metric_service.compute_calls == 0
+    assert runner.task is not None
+    result = runner.task(lambda _label: None)
+    runner.deliver(result)
+    assert coloring.calls == 1
+
+
+def test_clustering_close_abandons_worker_and_ignores_late_result() -> None:
+    state, _files = _state(with_pae=True)
+    presenter = FakePresenter()
+    runner = DeferredRunner()
+    operations = GuiOperationCoordinator(presenter, FakeView())
+    coloring = RecordingColoring()
+    coordinator = AnalysisCoordinator(
+        state,
+        presenter,
+        FakeDependencies(),
+        NoLoadData(),
+        CountingMetricService(),
+        coloring,
+        NoopPlots(),
+        NoopExport(),
+        NoopContext(),
+        set(),
+        runner,
+        operations,
+    )
+    coordinator.submit(_domain_action())
+    assert runner.task is not None
+    result = runner.task(lambda _label: None)
+
+    coordinator.close()
+    runner.deliver(result)
+
+    assert runner.handle.abandoned
+    assert result in runner.disposed
+    assert coloring.calls == 0
+    assert not operations.is_busy
     assert presenter.notices == []
 
 

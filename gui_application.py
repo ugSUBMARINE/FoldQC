@@ -96,6 +96,8 @@ class GuiApplicationServices:
             self.export,
             self.context,
             accepted_overlap_warnings,
+            job_runner,
+            self.operations,
         )
         self.lifecycle = PredictionLifecycleService(
             state,
@@ -122,6 +124,7 @@ class GuiApplicationServices:
 
     def close(self) -> None:
         self.ensemble.close()
+        self.analysis.close()
         self.operations.abandon()
         self.data.close()
         self.lifecycle.close()

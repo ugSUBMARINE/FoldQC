@@ -92,6 +92,7 @@ class MetricSpec:
     matrix: MatrixSpec | None = None
     aggregate_kind: AggregateKind = "single_model"
     dependency_keys: tuple[DependencyKey, ...] = ()
+    compute_in_background: bool = False
 
     @property
     def load_capabilities(self) -> frozenset[DataCapability]:
@@ -513,6 +514,7 @@ METRICS = MetricRegistry(
             reference_scoped_plots=_DISTRIBUTION_MATRIX,
             matrix=PAE_MATRIX,
             dependency_keys=("scipy",),
+            compute_in_background=True,
         ),
         MetricSpec(
             "pae_domain_spectral",
@@ -535,6 +537,7 @@ METRICS = MetricRegistry(
             reference_scoped_plots=_DISTRIBUTION_MATRIX,
             matrix=PAE_MATRIX,
             dependency_keys=("scipy", "sklearn"),
+            compute_in_background=True,
         ),
         MetricSpec(
             "pde_mean",

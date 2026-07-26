@@ -50,6 +50,10 @@ def test_metric_registry_owns_behavioral_metadata() -> None:
         "scipy",
         "sklearn",
     )
+    background_metrics = {
+        spec.key for spec in metrics.METRICS if spec.compute_in_background
+    }
+    assert background_metrics == {"pae_domain_complete", "pae_domain_spectral"}
     assert metrics.METRICS.require("chain_iptm").needs_confidence
     assert metrics.METRICS.find("missing") is None
     with pytest.raises(KeyError, match="Unknown metric"):

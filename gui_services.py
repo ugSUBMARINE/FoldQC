@@ -319,7 +319,7 @@ class BusyViewState:
     prediction_controls_enabled: bool
 
 
-OperationKind = Literal["prediction", "data", "ensemble", "model_switch"]
+OperationKind = Literal["prediction", "data", "ensemble", "model_switch", "analysis"]
 
 
 @dataclass(frozen=True)
