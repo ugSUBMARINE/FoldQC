@@ -17,7 +17,6 @@ from .analysis import (
     DeferredAnalysisAction,
     ExportOptions,
     MetricComputationJobResult,
-    PlotOptions,
     ResolvedAnalysis,
     build_data_load_plan,
 )
@@ -335,9 +334,7 @@ class AnalysisCoordinator(DataLoadObserver):
                 raise ValueError("Export requires a captured output path.")
             self._export.execute(resolved, computed, options)
         else:
-            if not isinstance(options, PlotOptions):
-                raise ValueError("Plotting requires captured plot options.")
-            self._presenter.show_plot(self._plots.prepare(resolved, computed, options))
+            self._presenter.show_plot(self._plots.prepare(resolved, computed))
 
     def close(self) -> None:
         self._pending = None

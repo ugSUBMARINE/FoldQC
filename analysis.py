@@ -81,21 +81,6 @@ class ColorOptions:
 
 
 @dataclass(frozen=True)
-class PlotOptions:
-    palette_key: str
-    reverse_palette: bool = False
-    vmin: float | None = None
-    vmax: float | None = None
-
-    def __post_init__(self) -> None:
-        for label, value in (("minimum", self.vmin), ("maximum", self.vmax)):
-            if value is not None and not np.isfinite(float(value)):
-                raise ValueError(f"Plot scale {label} must be finite or automatic.")
-        if self.vmin is not None and self.vmax is not None and self.vmin > self.vmax:
-            raise ValueError("Plot scale minimum must not exceed its maximum.")
-
-
-@dataclass(frozen=True)
 class ExportOptions:
     path: Path
 
@@ -108,7 +93,7 @@ class DeferredAnalysisAction:
     """Exact action resumed after a lazy-load commit."""
 
     request: AnalysisRequest
-    options: ColorOptions | PlotOptions | ExportOptions | None = None
+    options: ColorOptions | ExportOptions | None = None
 
 
 class AnalysisPreflightError(ValueError):

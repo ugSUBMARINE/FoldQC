@@ -234,6 +234,33 @@ class PlotTests(unittest.TestCase):
         finally:
             plots.plt.close(fig)
 
+    def test_matrix_plot_explicit_appearance_overrides_defaults(self) -> None:
+        fig = plots.make_matrix_plot(
+            np.array([[0.2, 0.8]], dtype=np.float32),
+            palette="Greys",
+            reverse_palette=True,
+            vmin=0.1,
+            vmax=0.9,
+        )
+        try:
+            image = fig.axes[0].images[0]
+            self.assertEqual(image.cmap.name, "Greys_r")
+            self.assertEqual(image.get_clim(), (0.1, 0.9))
+        finally:
+            plots.plt.close(fig)
+
+    def test_line_plot_explicit_limits_override_autoscaling(self) -> None:
+        fig = plots.make_line_plot(
+            [0, 1],
+            [("values", np.array([-2.0, 3.0]), None)],
+            ymin=-5.0,
+            ymax=10.0,
+        )
+        try:
+            self.assertEqual(fig.axes[0].get_ylim(), (-5.0, 10.0))
+        finally:
+            plots.plt.close(fig)
+
     def test_matrix_plot_uses_palette_mapping_and_chain_boundaries(self) -> None:
         token_map = _token_map(
             [

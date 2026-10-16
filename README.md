@@ -72,7 +72,8 @@ Development of FoldQC has included coding assistance from OpenAI's Codex.
    `AFDB-EBI` (or press Return). FoldQC queries monomer and complex entries,
    prompts when more than one prediction is available, and keeps a separate
    history of the last 10 successfully loaded accessions.
-3. Select the model, target object, metric, and color palette.
+3. Select the model, target object, metric, and color palette. The palette,
+   Reverse, Min, and Max controls affect PyMOL coloring only.
    When FoldQC must create a model object in PyMOL, it initially applies the
    familiar pLDDT quality-class coloring. If the named object already exists,
    FoldQC reuses it without overwriting its current colors.
@@ -101,6 +102,15 @@ Development of FoldQC has included coding assistance from OpenAI's Codex.
    for metrics that use it, such as contact-filtered PAE/PDE and PAE domain labels.
 7. Use the `Plot` menu and ensemble actions for heatmaps, line plots,
    PAE/PDE summary plots, binding-site fingerprints, and multi-model summaries.
+
+Plots use their own appearance defaults, independently of the PyMOL coloring
+controls. PAE, PDE, and interaction probability matrices use `viridis`; the
+chain pTM/ipTM matrix uses `viridis_r`. Matrix color scales start at zero and
+use a data-derived upper bound, including for reference-restricted and ensemble
+matrices. Line and PAE/PDE summary plots autoscale their y-axes. Adjust plot
+palettes and scale limits using the embedded Matplotlib figure controls.
+Previously, plots inherited the main dialog's palette and range settings; those
+settings now apply only to PyMOL coloring.
 
 For an AlphaFold Database selection, FoldQC downloads the selected CIF and its
 optional PAE JSON into an owned temporary directory. The files remain available
@@ -150,11 +160,13 @@ prediction, model, ensemble, or relevant controls change while work is running,
 the stale result is discarded instead of applying the old action to a new
 target.
 
-The same captured request also owns palette/range, plot, or export options, so
-completion never rereads the dialog controls. Loading progress is modeless and
-shown only after a short delay. Closing the plugin or explicitly cancelling a
-workflow abandons its result safely; user cancellation and stale results stay
-silent, while genuine provider or viewer failures are presented once.
+Coloring actions also capture the PyMOL palette, reversal, and range options;
+export actions capture the output path. Plot actions carry no appearance
+options and use independent plotting defaults. Completion never rereads the
+dialog controls. Loading progress is modeless and shown only after a short
+delay. Closing the plugin or explicitly cancelling a workflow abandons its
+result safely; user cancellation and stale results stay silent, while genuine
+provider or viewer failures are presented once.
 
 Transient interaction is centralized: workflow notices, confirmations,
 candidate/alignment choices, progress, statistics, and plot windows are

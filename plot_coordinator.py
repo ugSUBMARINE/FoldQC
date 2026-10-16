@@ -6,13 +6,13 @@ from collections.abc import Callable
 from typing import Literal, TypeAlias
 
 from . import metrics, plot_data
-from .analysis import ComputedMetric, PlotOptions, ResolvedAnalysis
+from .analysis import ComputedMetric, ResolvedAnalysis
 from .plot_preparation import PlotPreparationService
 from .presentation import PreparedPlot
 from .token_map import TokenMap
 
 PlotPreparer: TypeAlias = Callable[
-    [ResolvedAnalysis, tuple[ComputedMetric, ...], PlotOptions], PreparedPlot
+    [ResolvedAnalysis, tuple[ComputedMetric, ...]], PreparedPlot
 ]
 
 
@@ -36,13 +36,12 @@ class PlotCoordinator:
         self,
         resolved: ResolvedAnalysis,
         computed: tuple[ComputedMetric, ...],
-        options: PlotOptions,
     ) -> PreparedPlot:
         action = resolved.request.action
         preparer = self._dispatch.get(action)
         if preparer is None:
             raise ValueError(f"Unknown plot action: {action}")
-        return preparer(resolved, computed, options)
+        return preparer(resolved, computed)
 
     @staticmethod
     def _selection_maps(
@@ -59,7 +58,6 @@ class PlotCoordinator:
         self,
         resolved: ResolvedAnalysis,
         computed: tuple[ComputedMetric, ...],
-        options: PlotOptions,
     ) -> PreparedPlot:
         from . import plots
 
@@ -77,8 +75,6 @@ class PlotCoordinator:
             series,
             title=title,
             ylabel=ylabel,
-            ymin=options.vmin,
-            ymax=options.vmax,
             chain_boundaries=boundaries,
             chain_labels=labels,
         )
@@ -99,7 +95,6 @@ class PlotCoordinator:
         self,
         resolved: ResolvedAnalysis,
         computed: tuple[ComputedMetric, ...],
-        options: PlotOptions,
     ) -> PreparedPlot:
         from . import plots
 
@@ -153,7 +148,6 @@ class PlotCoordinator:
         self,
         resolved: ResolvedAnalysis,
         computed: tuple[ComputedMetric, ...],
-        options: PlotOptions,
     ) -> PreparedPlot:
         from . import plots
 
@@ -193,10 +187,7 @@ class PlotCoordinator:
             cell_text=None if cell_text is None else cell_text.tolist(),
             row_chain_boundaries=row_boundaries,
             col_chain_boundaries=column_boundaries,
-            vmin=0.0 if options.vmin is None else options.vmin,
-            vmax=options.vmax,
-            palette=options.palette_key,
-            reverse_palette=options.reverse_palette,
+            reverse_palette=source == "chain_iptm",
             xlabel=xlabel,
             ylabel=ylabel,
             colorbar_label=label,
@@ -218,7 +209,6 @@ class PlotCoordinator:
     def _summary(
         self,
         resolved: ResolvedAnalysis,
-        options: PlotOptions,
         family: Literal["pae", "pde"],
     ) -> PreparedPlot:
         from . import plots
@@ -235,8 +225,6 @@ class PlotCoordinator:
             series,
             title=title,
             ylabel=ylabel,
-            ymin=options.vmin,
-            ymax=options.vmax,
             chain_boundaries=boundaries,
             chain_labels=labels,
             show_legend=True,
@@ -258,23 +246,20 @@ class PlotCoordinator:
         self,
         resolved: ResolvedAnalysis,
         computed: tuple[ComputedMetric, ...],
-        options: PlotOptions,
     ) -> PreparedPlot:
-        return self._summary(resolved, options, "pae")
+        return self._summary(resolved, "pae")
 
     def _pde_summary(
         self,
         resolved: ResolvedAnalysis,
         computed: tuple[ComputedMetric, ...],
-        options: PlotOptions,
     ) -> PreparedPlot:
-        return self._summary(resolved, options, "pde")
+        return self._summary(resolved, "pde")
 
     def _fingerprint(
         self,
         resolved: ResolvedAnalysis,
         computed: tuple[ComputedMetric, ...],
-        options: PlotOptions,
     ) -> PreparedPlot:
         from . import plots
 
@@ -317,7 +302,6 @@ class PlotCoordinator:
         self,
         resolved: ResolvedAnalysis,
         computed: tuple[ComputedMetric, ...],
-        options: PlotOptions,
     ) -> PreparedPlot:
         from . import plots
 

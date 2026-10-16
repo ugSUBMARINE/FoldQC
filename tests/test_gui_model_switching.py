@@ -566,7 +566,7 @@ class NoLoadData:
 
 
 class NoopPlots:
-    def prepare(self, _resolved, _computed, _options):
+    def prepare(self, _resolved, _computed):
         raise AssertionError("color action reached plots")
 
 
@@ -756,6 +756,78 @@ def test_background_metric_failure_and_invalid_result_finish_progress() -> None:
         assert not operations.is_busy
         assert presenter.finished
         assert presenter.notices[-1].code == expected_code
+
+
+def test_plot_resumes_captured_request_after_lazy_load_without_options() -> None:
+    from FoldQC import plots
+    from FoldQC.plot_coordinator import PlotCoordinator
+    from FoldQC.plot_preparation import PlotPreparationService
+
+    class RecordingPlots(PlotCoordinator):
+        def __init__(self):
+            super().__init__(PlotPreparationService())
+            self.requests = []
+
+        def prepare(self, resolved, computed):
+            self.requests.append(resolved.request)
+            return super().prepare(resolved, computed)
+
+    state, files = _state(with_pae=False)
+    presenter = FakePresenter()
+    runner = DeferredRunner()
+    operations = GuiOperationCoordinator(presenter, FakeView())
+    data = DataAcquisitionService(
+        state, presenter, ImmediateScheduler(), runner, operations
+    )
+    plot_coordinator = RecordingPlots()
+    coordinator = AnalysisCoordinator(
+        state,
+        presenter,
+        FakeDependencies(),
+        data,
+        CountingMetricService(),
+        RecordingColoring(),
+        plot_coordinator,
+        NoopExport(),
+        NoopContext(),
+        set(),
+        runner,
+        operations,
+    )
+    request = AnalysisRequest("matrix", "model_0", "pae_row_mean")
+    action = DeferredAnalysisAction(request)
+    _, plan = coordinator.resolve_and_plan(request)
+
+    coordinator.submit(action)
+
+    assert presenter.plots == []
+    assert operations.active.kind == "data"
+    loaded = PredictionData(
+        "prediction",
+        0,
+        Path("/tmp/model_0.cif"),
+        files.provider,
+        pae=np.array([[1, 2], [3, 4]], dtype=np.float32),
+    )
+    runner.deliver(DataLoadBatchResult(files, ((plan.requirements[0], loaded),)))
+
+    assert presenter.notices == []
+    assert not operations.is_busy
+    assert len(plot_coordinator.requests) == 1
+    assert plot_coordinator.requests[0] is request
+    assert len(presenter.plots) == 1
+    figure = presenter.plots[0].figure
+    try:
+        image = figure.axes[0].images[0]
+        assert image.cmap.name == "viridis"
+        assert image.get_clim() == (0, 4)
+        metadata = figure._foldqc_viewer_selection
+        assert metadata["token_map"] is state.model_states[0].token_map
+        assert metadata["obj_name"] == request.target_name
+        assert metadata["row_indices"] == [0, 1]
+        assert metadata["col_indices"] == [0, 1]
+    finally:
+        plots.plt.close(figure)
 
 
 def test_clustering_starts_after_lazy_pae_loading_finishes() -> None:

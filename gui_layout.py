@@ -434,12 +434,12 @@ def build_dialog_ui(dialog) -> GuiWidgets:
     for spec in iter_gui_palettes():
         self._palette_combo.addItem(spec.label, spec.key)
     self._palette_combo.setToolTip(
-        "Color palette used for continuous confidence metrics and plot heatmaps."
+        "Color palette used for continuous confidence metrics in PyMOL only."
     )
     self._palette_reverse_chk = QtWidgets.QCheckBox()
     self._palette_reverse_chk.setAccessibleName("Reverse")
     self._palette_reverse_chk.setToolTip(
-        "Reverse the selected continuous color palette."
+        "Reverse the selected PyMOL color palette. Does not affect plots."
     )
     reverse_label = QtWidgets.QLabel("rev:")
     reverse_label.setToolTip(self._palette_reverse_chk.toolTip())
@@ -451,20 +451,20 @@ def build_dialog_ui(dialog) -> GuiWidgets:
     self._vmin_edit.setPlaceholderText("auto")
     _configure_flexible_line_edit(self._vmin_edit, NUMERIC_EDIT_MIN_WIDTH)
     self._vmin_edit.setToolTip(
-        "Optional lower bound for the color scale. Leave blank or use 'auto' to infer it."
+        "Optional lower bound for the PyMOL color scale. Leave blank or use 'auto' to infer it."
     )
     self._vmax_edit = QtWidgets.QLineEdit()
     self._vmax_edit.setPlaceholderText("auto")
     _configure_flexible_line_edit(self._vmax_edit, NUMERIC_EDIT_MIN_WIDTH)
     self._vmax_edit.setToolTip(
-        "Optional upper bound for the color scale. Leave blank or use 'auto' to infer it."
+        "Optional upper bound for the PyMOL color scale. Leave blank or use 'auto' to infer it."
     )
     min_label = QtWidgets.QLabel("Min:")
-    min_label.setToolTip("Lower bound for the color scale.")
+    min_label.setToolTip("Lower bound for the PyMOL color scale only.")
     palette_range_row.addWidget(min_label)
     palette_range_row.addWidget(self._vmin_edit, 1)
     max_label = QtWidgets.QLabel("Max:")
-    max_label.setToolTip("Upper bound for the color scale.")
+    max_label.setToolTip("Upper bound for the PyMOL color scale only.")
     palette_range_row.addWidget(max_label)
     palette_range_row.addWidget(self._vmax_edit, 1)
     prop_form.addRow("Palette/Scale range:", palette_range_row)

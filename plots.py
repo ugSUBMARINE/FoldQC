@@ -611,13 +611,17 @@ def make_matrix_plot(
     col_chain_boundaries: Sequence[float] | None = None,
     vmin: float | None = None,
     vmax: float | None = None,
-    palette: str = "blue_white_red",
+    palette: str = "viridis",
     reverse_palette: bool = False,
     xlabel: str = "Token j",
     ylabel: str = "Token i",
     colorbar_label: str = "Value (Å)",
 ) -> plt.Figure:
-    """Create a matrix plot with optional token labels and chain borders."""
+    """Create a matrix plot with optional token labels and chain borders.
+
+    Defaults to viridis and a zero lower bound with a finite, data-derived
+    upper bound. Explicit palette and range arguments override these defaults.
+    """
     matrix = np.asarray(matrix)
     if matrix.ndim != 2:
         raise ValueError("matrix must be two-dimensional.")

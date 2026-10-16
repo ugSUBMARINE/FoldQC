@@ -19,7 +19,6 @@ from .analysis import (
     ColorOptions,
     DeferredAnalysisAction,
     ExportOptions,
-    PlotOptions,
 )
 from .compat import (
     AlignLeft,
@@ -375,19 +374,14 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
         request = self._capture_request(action)
         plot = metrics.PLOTS.find(action)
         if action == "color":
-            options: ColorOptions | PlotOptions | ExportOptions = ColorOptions(
+            options: ColorOptions | ExportOptions | None = ColorOptions(
                 str(self.widgets._palette_combo.currentData()),
                 bool(self.widgets._palette_reverse_chk.isChecked()),
                 self._optional_float(self.widgets._vmin_edit.text(), label="Minimum"),
                 self._optional_float(self.widgets._vmax_edit.text(), label="Maximum"),
             )
         elif plot is not None:
-            options = PlotOptions(
-                str(self.widgets._palette_combo.currentData()),
-                bool(self.widgets._palette_reverse_chk.isChecked()),
-                self._optional_float(self.widgets._vmin_edit.text(), label="Minimum"),
-                self._optional_float(self.widgets._vmax_edit.text(), label="Maximum"),
-            )
+            options = None
         else:
             if export_path is None:
                 raise ValueError("Export requires an output path.")

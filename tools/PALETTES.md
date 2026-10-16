@@ -2,7 +2,13 @@
 
 Palette handling is centralized in `palettes.py`. The GUI, PyMOL painter, and
 matrix plots all resolve palette definitions through that file, so a new
-curated palette should normally require one registry edit plus tests.
+curated palette should normally require one registry edit plus tests. The GUI
+palette selector and Reverse control affect PyMOL coloring only. GUI matrix
+plots default to `viridis` for PAE, PDE, and interaction probabilities, and
+`viridis_r` for chain pTM/ipTM. The core `plots.make_matrix_plot()` function
+still accepts explicit `palette`, `reverse_palette`, `vmin`, and `vmax`
+arguments; core line plots retain `ymin` and `ymax`. GUI plots do not pass the
+PyMOL coloring controls to these functions.
 
 ## Files to modify
 
