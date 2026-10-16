@@ -99,11 +99,12 @@ class ModelComparisonColumn:
 
 @dataclass(frozen=True)
 class ModelComparisonRow:
-    """One ranked model and its formatted scalar confidence values."""
+    """One ranked model with display text and raw scalar sorting values."""
 
     rank: int
     label: str
     values: tuple[str, ...]
+    sort_values: tuple[float | bool | None, ...]
 
 
 @dataclass(frozen=True)
@@ -120,7 +121,10 @@ class ModelComparisonRequest:
         width = len(self.columns)
         if not self.rows:
             raise ValueError("Model comparison requires at least one row.")
-        if any(len(row.values) != width for row in self.rows):
+        if any(
+            len(row.values) != width or len(row.sort_values) != width
+            for row in self.rows
+        ):
             raise ValueError("Model comparison rows must match the table columns.")
         ranks = tuple(row.rank for row in self.rows)
         if len(ranks) != len(set(ranks)):

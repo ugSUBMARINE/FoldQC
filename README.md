@@ -82,6 +82,11 @@ Development of FoldQC has included coding assistance from OpenAI's Codex.
    pTM, ipTM, and complex pLDDT without loading every structure or lazy PAE/PDE
    matrix; columns remain provider- and file-dependent. Prediction-level Boltz
    affinity values are intentionally excluded from this per-model table.
+   Click a column heading to sort by that column, and click it again to reverse;
+   an arrow indicates the current sort. Scores sort numerically, with missing
+   values always last. The `Model` column sorts by original rank. Sorting keeps
+   the selected model selected, and reopening the table restores original rank
+   order.
 4. Click the paint/color action to write the metric into B-factors and color the
    structure in PyMOL.
 5. Use the statistics panel's threshold control and `Select ≥` / `Select ≤`

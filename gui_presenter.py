@@ -8,10 +8,13 @@ from .compat import (
     AbstractItemViewNoEditTriggers,
     AbstractItemViewSelectRows,
     AbstractItemViewSingleSelection,
+    AscendingOrder,
+    DescendingOrder,
     MessageBoxButtonRole,
     MessageBoxStandardButton,
     QtCore,
     QtWidgets,
+    UserRole,
     WindowCloseButtonHint,
 )
 from .presentation import (
@@ -22,6 +25,7 @@ from .presentation import (
     ProgressRequest,
     SelectionRequest,
 )
+from .reports import sort_model_comparison_rows
 
 
 class QtPresenter:
@@ -105,6 +109,7 @@ class QtPresenter:
         layout = QtWidgets.QVBoxLayout(dialog)
         description = QtWidgets.QLabel(
             f"{request.provider_label} scalar confidence summaries. "
+            "Click a column heading to sort; click again to reverse. "
             "Select a row to switch to that model."
         )
         description.setWordWrap(True)
@@ -120,20 +125,49 @@ class QtPresenter:
         table.setSelectionBehavior(AbstractItemViewSelectRows)
         table.setSelectionMode(AbstractItemViewSingleSelection)
         table.setAlternatingRowColors(True)
-        for row_index, row in enumerate(request.rows):
-            table.setItem(row_index, 0, QtWidgets.QTableWidgetItem(row.label))
-            for column_index, value in enumerate(row.values, start=1):
-                table.setItem(
-                    row_index,
-                    column_index,
-                    QtWidgets.QTableWidgetItem(value),
-                )
-            if row.rank == request.selected_rank:
-                table.setCurrentCell(row_index, 0)
-        if table.currentRow() < 0:
-            table.setCurrentCell(0, 0)
+        table.setSortingEnabled(False)
+        header = table.horizontalHeader()
+        header.setSectionsClickable(True)
+        header.setSortIndicatorShown(True)
+        sort_column = 0
+        descending = False
+
+        def selected_rank() -> int | None:
+            item = table.item(table.currentRow(), 0)
+            return None if item is None else int(item.data(UserRole))
+
+        def render_rows(rank: int | None) -> None:
+            selected_row = 0
+            for row_index, row in enumerate(
+                sort_model_comparison_rows(request, sort_column, descending=descending)
+            ):
+                model_item = QtWidgets.QTableWidgetItem(row.label)
+                model_item.setData(UserRole, row.rank)
+                table.setItem(row_index, 0, model_item)
+                for column_index, value in enumerate(row.values, start=1):
+                    table.setItem(
+                        row_index,
+                        column_index,
+                        QtWidgets.QTableWidgetItem(value),
+                    )
+                if row.rank == rank:
+                    selected_row = row_index
+            table.setCurrentCell(selected_row, 0)
+            header.setSortIndicator(
+                sort_column, DescendingOrder if descending else AscendingOrder
+            )
+
+        def sort_by_column(column: int) -> None:
+            nonlocal sort_column, descending
+            rank = selected_rank()
+            descending = not descending if column == sort_column else False
+            sort_column = column
+            render_rows(rank)
+
+        render_rows(request.selected_rank)
+        header.sectionClicked.connect(sort_by_column)
         table.resizeColumnsToContents()
-        table.horizontalHeader().setStretchLastSection(True)
+        header.setStretchLastSection(True)
         layout.addWidget(table)
 
         buttons = QtWidgets.QHBoxLayout()
@@ -153,10 +187,7 @@ class QtPresenter:
         header_width = table.horizontalHeader().length()
         dialog.resize(min(max(header_width + 70, 560), 1100), 300)
         accepted = bool(dialog.exec())
-        row_index = table.currentRow()
-        if not accepted or row_index < 0:
-            return None
-        return request.rows[row_index].rank
+        return selected_rank() if accepted else None
 
     def start_progress(
         self,

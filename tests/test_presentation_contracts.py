@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import subprocess
 import sys
+from dataclasses import FrozenInstanceError
 from pathlib import Path
 
 import pytest
@@ -10,12 +11,37 @@ from FoldQC.gui_services import ContextViewState, LifecycleUiUpdate
 from FoldQC.presentation import (
     ChoiceOption,
     ChoiceRequest,
+    ModelComparisonColumn,
+    ModelComparisonRequest,
+    ModelComparisonRow,
     Notice,
     PreparedPlot,
     ProgressRequest,
     SelectionItem,
     SelectionRequest,
 )
+
+
+@pytest.mark.parametrize(
+    ("values", "sort_values"),
+    [((), (1.0,)), (("1.0000",), ()), (("1.0000", "2.0000"), (1.0,))],
+)
+def test_model_comparison_validates_display_and_sort_widths(
+    values, sort_values
+) -> None:
+    with pytest.raises(ValueError, match="match the table columns"):
+        ModelComparisonRequest(
+            "Compare",
+            "Test",
+            (ModelComparisonColumn("score"),),
+            (ModelComparisonRow(0, "model", values, sort_values),),
+        )
+
+
+def test_model_comparison_sort_values_are_immutable() -> None:
+    row = ModelComparisonRow(0, "model", ("1.0000",), (1.0,))
+    with pytest.raises(FrozenInstanceError):
+        row.sort_values = (2.0,)
 
 
 def test_presentation_requests_are_immutable_and_validate_stable_keys() -> None:

@@ -130,30 +130,55 @@ def build_model_comparison(
         )
     )
     columns = tuple(ModelComparisonColumn(field.label) for field in fields)
-    rows = tuple(
-        ModelComparisonRow(
-            model.rank,
-            model.display_label,
-            tuple(
-                _format_comparison_value(_comparison_value(confidence, field), field)
-                for field in fields
-            ),
+    rows = []
+    for model, confidence in zip(pred_files.models, confidences):
+        values = tuple(_comparison_value(confidence, field) for field in fields)
+        rows.append(
+            ModelComparisonRow(
+                rank=model.rank,
+                label=model.display_label,
+                values=tuple(
+                    _format_comparison_value(value, field)
+                    for value, field in zip(values, fields)
+                ),
+                sort_values=values,
+            )
         )
-        for model, confidence in zip(pred_files.models, confidences)
-    )
     return ModelComparisonRequest(
         title="Compare ranked models",
         provider_label=pred_files.provider.label,
         columns=columns,
-        rows=rows,
+        rows=tuple(rows),
         selected_rank=selected_rank,
     )
+
+
+def sort_model_comparison_rows(
+    request: ModelComparisonRequest,
+    column: int,
+    *,
+    descending: bool = False,
+) -> tuple[ModelComparisonRow, ...]:
+    """Sort a displayed column (0 is Model), keeping missing values last."""
+    if not 0 <= column <= len(request.columns):
+        raise ValueError("Sort column must name a model comparison column.")
+    if column == 0:
+        return tuple(sorted(request.rows, key=lambda row: row.rank, reverse=descending))
+
+    def sort_key(row: ModelComparisonRow) -> tuple[bool, float, int]:
+        value = row.sort_values[column - 1]
+        if value is None:
+            return True, 0.0, row.rank
+        numeric = float(value)
+        return False, -numeric if descending else numeric, row.rank
+
+    return tuple(sorted(request.rows, key=sort_key))
 
 
 def _comparison_value(
     confidence: PredictionConfidence | None,
     field: ConfidenceFieldSpec,
-) -> object | None:
+) -> float | bool | None:
     if confidence is None:
         return None
     source = confidence.affinity if field.source == "affinity" else confidence

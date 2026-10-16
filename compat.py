@@ -56,6 +56,13 @@ else:
 _TextElideMode = getattr(QtCore.Qt, "TextElideMode", QtCore.Qt)
 ElideLeft = getattr(_TextElideMode, "ElideLeft", 0)
 
+# Model comparison keeps stable rank metadata and renders its own sort indicator.
+_ItemDataRole = getattr(QtCore.Qt, "ItemDataRole", QtCore.Qt)
+UserRole = getattr(_ItemDataRole, "UserRole", 256)
+_SortOrder = getattr(QtCore.Qt, "SortOrder", QtCore.Qt)
+AscendingOrder = getattr(_SortOrder, "AscendingOrder", 0)
+DescendingOrder = getattr(_SortOrder, "DescendingOrder", 1)
+
 # QAction: lives in QtWidgets (Qt5) and moved to QtGui (Qt6)
 if QT_MAJOR >= 6:
     QAction = QtGui.QAction

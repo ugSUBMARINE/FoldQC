@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -16,6 +17,11 @@ from FoldQC.loader_models import (  # noqa: E402
     ModelFiles,
     PredictionData,
     PredictionFiles,
+)
+from FoldQC.presentation import (  # noqa: E402
+    ModelComparisonColumn,
+    ModelComparisonRequest,
+    ModelComparisonRow,
 )
 from FoldQC.providers.registry import BUILTIN_PROVIDERS  # noqa: E402
 from FoldQC.token_map import TokenInfo, TokenMap  # noqa: E402
@@ -388,9 +394,10 @@ def test_model_comparison_uses_provider_columns_and_formats_missing_values() -> 
         files,
         (
             PredictionConfidence(
-                confidence_score=0.92,
+                confidence_score=0.92001,
                 ptm=0.81,
                 iptm=0.74,
+                complex_pde=2.5,
                 affinity=AffinityConfidence(
                     predicted_value=-1.2,
                     probability=0.91,
@@ -410,3 +417,93 @@ def test_model_comparison_uses_provider_columns_and_formats_missing_values() -> 
     assert "affinity_probability" not in [column.label for column in request.columns]
     assert request.rows[0].values[:3] == ("0.9200", "0.8100", "0.7400")
     assert request.rows[1].values[:3] == ("0.8800", "0.7900", "n/a")
+    assert request.rows[0].sort_values[:3] == (0.92001, 0.81, 0.74)
+    assert request.rows[1].sort_values[:3] == (0.88, 0.79, None)
+    pde_column = next(
+        index
+        for index, column in enumerate(request.columns)
+        if column.label == "complex_pde"
+    )
+    assert request.rows[0].values[pde_column] == "2.5000 Å"
+    assert request.rows[0].sort_values[pde_column] == 2.5
+    assert request.rows[1].values[pde_column] == "n/a"
+    assert request.rows[1].sort_values[pde_column] is None
+
+
+def _comparison_request(
+    values: tuple[float | bool | None, ...],
+) -> ModelComparisonRequest:
+    return ModelComparisonRequest(
+        title="Compare",
+        provider_label="Test",
+        columns=(ModelComparisonColumn("score"),),
+        # Deliberately scrambled: ties must use rank, not incoming row order.
+        rows=tuple(
+            ModelComparisonRow(
+                rank,
+                f"sample {10 - rank}",
+                ("n/a" if value is None else f"{float(value):.4f} Å",),
+                (value,),
+            )
+            for rank, value in reversed(tuple(enumerate(values)))
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    ("values", "ascending", "descending"),
+    [
+        ((10.0, 2.0, -3.0, None, 2.0, None), (2, 1, 4, 0, 3, 5), (0, 1, 4, 2, 3, 5)),
+        ((0.80002, 0.80001), (1, 0), (0, 1)),
+        ((True, None, False, True, False), (2, 4, 0, 3, 1), (0, 3, 2, 4, 1)),
+        ((None, None, None), (0, 1, 2), (0, 1, 2)),
+    ],
+)
+def test_model_comparison_sorts_raw_values_with_missing_last_and_rank_ties(
+    values, ascending, descending
+) -> None:
+    request = _comparison_request(values)
+    original_rows = request.rows
+
+    for reverse, expected in ((False, ascending), (True, descending)):
+        result = reports.sort_model_comparison_rows(request, 1, descending=reverse)
+        assert tuple(row.rank for row in result) == expected
+        assert all(any(row is source for source in original_rows) for row in result)
+    assert request.rows is original_rows
+
+
+def test_model_comparison_model_column_sorts_original_rank_not_label() -> None:
+    request = _comparison_request((2.0, 10.0, 0.0))
+
+    assert tuple(
+        row.rank for row in reports.sort_model_comparison_rows(request, 0)
+    ) == (0, 1, 2)
+    assert tuple(
+        row.rank
+        for row in reports.sort_model_comparison_rows(request, 0, descending=True)
+    ) == (2, 1, 0)
+
+
+@pytest.mark.parametrize("column", [-1, 2])
+def test_model_comparison_rejects_unknown_sort_columns(column: int) -> None:
+    with pytest.raises(ValueError, match="Sort column"):
+        reports.sort_model_comparison_rows(_comparison_request((1.0,)), column)
+
+
+def test_model_comparison_boolean_raw_values_match_formatted_text() -> None:
+    files = PredictionFiles(
+        name="prediction",
+        pred_dir=Path("/tmp/prediction"),
+        provider=BUILTIN_PROVIDERS.get("alphafold3").info,
+        models=[ModelFiles(0, Path("/tmp/model.cif"), "model", "model")],
+    )
+    request = reports.build_model_comparison(
+        files, (PredictionConfidence(has_clash=False),), selected_rank=0
+    )
+    column = next(
+        index
+        for index, column in enumerate(request.columns)
+        if column.label == "has_clash"
+    )
+    assert request.rows[0].values[column] == "False"
+    assert request.rows[0].sort_values[column] is False
