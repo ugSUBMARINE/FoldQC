@@ -300,6 +300,7 @@ Metric units and semantics:
 | `pde_mean`, `pde_chain_mean`, `pde_to_sel`, `pde_within_sel`, `pde_contact`, `ensemble_rmsd` | `angstrom` | `lower_is_better` |
 | `contact_prob_mean`, `contact_prob_to_sel` | `probability` | `higher_is_better` |
 | `chain_iptm` | `iptm` | `higher_is_better` |
+| `chain_ptm` | `ptm` | `higher_is_better` |
 
 ## Color by Metric Reference
 
@@ -373,6 +374,7 @@ and made read-only before entering model state.
 | Ensemble pLDDT mean | After ensemble setup, computes the per-token mean pLDDT across loaded models. | Higher values indicate consistently high local confidence across the ensemble. |
 | Ensemble pLDDT std | After ensemble setup, computes the per-token standard deviation of pLDDT across loaded models. | Lower values indicate stable confidence estimates across models; higher values mark positions where model confidence varies between predictions. |
 | Chain ipTM | Uses FoldQC's normalized per-chain ipTM (falling back to per-chain pTM) and assigns each token the score at that chain's position in canonical `TokenMap.chain_order`. Matrix plots use the normalized pairwise chain ipTM matrix. | Higher values indicate higher confidence in chain-level placement or interactions. Off-diagonal cells describe confidence for a chain pair; diagonal cells are chain-restricted pTM/self scores, not interfaces. |
+| Chain pTM | Assigns each token its chain's main-diagonal score from the normalized pairwise chain ipTM matrix. If no matrix is available, uses the provider's per-chain pTM vector. | Higher values indicate higher confidence in the chain's internal fold. Missing scores remain undefined (grey); interface scores and global pTM are not used as substitutes. |
 
 OpenFold3 output roots contain one directory per query and one `seed_<n>`
 directory per model seed. When a selected folder or archive contains multiple
@@ -400,6 +402,15 @@ and interaction probability metrics are available only when their arrays are
 present in the full-data file.
 
 ### Interpreting Pairwise Chain ipTM
+
+Chain pTM and Chain ipTM both support Line and Matrix plots, but not Distribution
+plots. Reference selections restrict only line-plot ranges. Both metrics show the
+same full pairwise chain ipTM matrix, including off-diagonal interface scores;
+Chain pTM coloring uses its diagonal self-scores. Normalization fills missing or
+zero diagonal cells from provider per-chain pTM when available. Ensemble line
+plots show member means and standard deviations; matrix plots show member means
+with standard-deviation annotations. Per-chain pTM without a matrix supports
+coloring and line plots, but Matrix reports unavailable pairwise data.
 
 The pairwise chain ipTM matrix uses the unique first-appearance chain order from
 the canonical structure token map, mapped onto the displayed PyMOL chain IDs.

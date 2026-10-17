@@ -340,6 +340,68 @@ class PropertiesTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "pairwise chain ipTM"):
             P.pair_chain_iptm_matrix(PredictionConfidence(), _token_map("A"))
 
+    def test_chain_ptm_uses_diagonal_in_canonical_order_including_ligands(self) -> None:
+        token_map = TokenMap(
+            (
+                TokenInfo(0, "Z", 1, "ALA", False, None),
+                TokenInfo(1, "Z", 2, "ALA", False, None),
+                TokenInfo(2, "L", 1, "LIG", True, "C1"),
+                TokenInfo(3, "L", 1, "LIG", True, "C2"),
+                TokenInfo(4, "A", 1, "GLY", False, None),
+                TokenInfo(5, "Z", 3, "GLY", False, None),
+            )
+        )
+        confidence = PredictionConfidence(
+            chain_ptm=np.array([0.4, 0.5, np.nan]),
+            chain_iptm=np.array([0.1, 0.2, 0.3]),
+            pair_chain_iptm=np.array(
+                [[0.9, 0.1, 0.2], [0.3, 0.8, 0.4], [0.5, 0.6, np.nan]]
+            ),
+        )
+        matrix = confidence.pair_chain_iptm
+        vector = confidence.chain_ptm
+        original = matrix.copy()
+
+        values = P.chain_ptm_values(confidence, token_map)
+
+        self.assertEqual(values.dtype, np.float32)
+        np.testing.assert_allclose(values, [0.9, 0.9, 0.8, 0.8, np.nan, 0.9])
+        self.assertIs(confidence.pair_chain_iptm, matrix)
+        self.assertIs(confidence.chain_ptm, vector)
+        np.testing.assert_array_equal(matrix, original)
+        self.assertFalse(matrix.flags.writeable)
+        self.assertFalse(vector.flags.writeable)
+
+    def test_chain_ptm_uses_normalized_diagonal(self) -> None:
+        confidence = PredictionConfidence(
+            chain_ptm=np.array([0.9, 0.8]),
+            pair_chain_iptm=np.array([[0.0, 0.2], [0.3, np.nan]]),
+        )
+        np.testing.assert_allclose(
+            P.chain_ptm_values(confidence, _token_map("A", "B")), [0.9, 0.8]
+        )
+
+    def test_chain_ptm_vector_fallback_and_single_chain(self) -> None:
+        for confidence in (
+            PredictionConfidence(chain_ptm=np.array([0.85])),
+            PredictionConfidence(pair_chain_iptm=np.array([[0.85]])),
+        ):
+            np.testing.assert_allclose(
+                P.chain_ptm_values(confidence, _token_map("A", "A")), [0.85, 0.85]
+            )
+
+    def test_chain_ptm_does_not_substitute_other_confidence(self) -> None:
+        for confidence in (
+            PredictionConfidence(),
+            PredictionConfidence(ptm=0.9, chain_iptm=np.array([0.8, 0.7])),
+            PredictionConfidence(
+                pair_chain_iptm=np.array([[np.nan, 0.8], [0.7, np.nan]])
+            ),
+        ):
+            self.assertTrue(
+                np.isnan(P.chain_ptm_values(confidence, _token_map("A", "B"))).all()
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

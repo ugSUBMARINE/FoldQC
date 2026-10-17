@@ -29,7 +29,7 @@ PlotType = Literal[
     "ensemble_site_summary",
 ]
 MatrixSource = Literal["pae", "pde", "contact_probs", "chain_iptm"]
-ValueUnit = Literal["plddt", "angstrom", "probability", "iptm", "label"]
+ValueUnit = Literal["plddt", "angstrom", "probability", "iptm", "ptm", "label"]
 ValueSemantics = Literal["higher_is_better", "lower_is_better", "categorical_label"]
 AggregateKind = Literal[
     "single_model", "ensemble_mean", "ensemble_std", "ensemble_rmsd"
@@ -51,7 +51,7 @@ _PLOT_TYPES = frozenset(
     }
 )
 _MATRIX_SOURCES = frozenset({"pae", "pde", "contact_probs", "chain_iptm"})
-_VALUE_UNITS = frozenset({"plddt", "angstrom", "probability", "iptm", "label"})
+_VALUE_UNITS = frozenset({"plddt", "angstrom", "probability", "iptm", "ptm", "label"})
 _VALUE_SEMANTICS = frozenset(
     {"higher_is_better", "lower_is_better", "categorical_label"}
 )
@@ -726,6 +726,26 @@ METRICS = MetricRegistry(
             ensemble_level=True,
             reference_scoped_plots=_LINE_DISTRIBUTION,
             aggregate_kind="ensemble_std",
+        ),
+        MetricSpec(
+            "chain_ptm",
+            "Chain pTM",
+            "Chain/interface",
+            frozenset({"confidence"}),
+            "ptm",
+            "higher_is_better",
+            "pTM",
+            "Colors chains in {target_text} by chain-level pTM; use Plot > Matrix for pairwise chain ipTM.",
+            "Assigns every token in each chain of {target_text} the diagonal score "
+            "from the normalized pairwise chain ipTM matrix. When no matrix is "
+            "available, uses the provider's per-chain pTM scores. Higher values "
+            "indicate greater confidence in the chain's internal fold. The matrix "
+            "plot shows the full pairwise chain ipTM matrix: diagonal cells are "
+            "chain-restricted pTM or self scores, while off-diagonal cells describe "
+            "chain pairs.",
+            plot_modes=frozenset({"line", "matrix"}),
+            reference_scoped_plots=frozenset({"line"}),
+            matrix=CHAIN_IPTM_MATRIX,
         ),
         MetricSpec(
             "chain_iptm",

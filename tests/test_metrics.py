@@ -34,6 +34,7 @@ def test_metric_keys_preserve_gui_order() -> None:
         "ensemble_rmsd",
         "ensemble_plddt_mean",
         "ensemble_plddt_std",
+        "chain_ptm",
         "chain_iptm",
     ]
     assert metrics.DEFAULT_METRIC_KEY == "plddt_class"
@@ -93,6 +94,13 @@ def test_metric_plot_matrix_and_export_metadata() -> None:
         "iptm",
         "higher_is_better",
     )
+    ptm = metrics.METRICS.require("chain_ptm")
+    assert (ptm.label, ptm.value_unit, ptm.line_ylabel) == ("Chain pTM", "ptm", "pTM")
+    assert ptm.value_semantics == "higher_is_better"
+    assert ptm.requirements == chain.requirements == {"confidence"}
+    assert ptm.plot_modes == chain.plot_modes == {"line", "matrix"}
+    assert ptm.reference_scoped_plots == chain.reference_scoped_plots == {"line"}
+    assert ptm.matrix == chain.matrix
 
 
 def test_plot_registry_is_ordered_and_strict() -> None:

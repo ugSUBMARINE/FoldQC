@@ -549,6 +549,29 @@ def pair_chain_iptm_matrix(
     return matrix, labels
 
 
+def chain_ptm_values(
+    confidence: PredictionConfidence, token_map: TokenMap
+) -> np.ndarray:
+    """Assign each token its chain's diagonal self-score, or per-chain pTM.
+
+    The normalized matrix takes precedence over the provider's chain vector.
+    Both are indexed by canonical token-map chain order; missing scores remain
+    NaN rather than falling back to interface or global confidence values.
+    """
+    chain_scores = (
+        np.diag(confidence.pair_chain_iptm)
+        if confidence.pair_chain_iptm is not None
+        else confidence.chain_ptm
+    )
+    out = np.full(len(token_map), np.nan, dtype=np.float32)
+    if chain_scores is not None:
+        for chain_id, indices in token_map.chain_to_indices.items():
+            chain_index = token_map.chain_id_to_index[chain_id]
+            if chain_index < len(chain_scores):
+                out[list(indices)] = chain_scores[chain_index]
+    return out
+
+
 def chain_iptm_values(
     confidence: PredictionConfidence,
     token_map: TokenMap,

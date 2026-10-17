@@ -118,6 +118,15 @@ class PredictionConfidence:
                 object.__setattr__(self, "pair_chain_iptm", matrix)
 
     @property
+    def has_chain_ptm(self) -> bool:
+        scores = (
+            np.diag(self.pair_chain_iptm)
+            if self.pair_chain_iptm is not None
+            else self.chain_ptm
+        )
+        return scores is not None and bool(np.isfinite(scores).any())
+
+    @property
     def has_chain_iptm(self) -> bool:
         return any(
             value is not None and bool(np.isfinite(value).any())

@@ -10,9 +10,11 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from FoldQC import (
+    compute,  # noqa: E402
     mol_viewer,  # noqa: E402
     palettes,  # noqa: E402
 )
+from FoldQC.confidence import PredictionConfidence  # noqa: E402
 from FoldQC.token_map import TokenInfo, TokenMap  # noqa: E402
 
 
@@ -115,6 +117,36 @@ class PainterPaletteTests(unittest.TestCase):
         self.assertEqual(args[:3], ("b", "red_white_blue", "(obj)"))
         self.assertEqual(kwargs["minimum"], 1.0)
         self.assertEqual(kwargs["maximum"], 2.0)
+
+    def test_chain_ptm_colors_each_chain_using_diagonal_b_factors(self) -> None:
+        token_map = _token_map(
+            _token(0), _token(1), TokenInfo(2, "B", 3, "ALA", False, None)
+        )
+        atoms = self.cmd.get_model("obj").atom
+        atoms[2].chain = "B"
+        self.cmd.get_model = lambda _name: types.SimpleNamespace(atom=atoms)
+        data = types.SimpleNamespace(
+            confidence=PredictionConfidence(
+                pair_chain_iptm=np.array([[0.9, 0.1], [0.2, 0.7]])
+            )
+        )
+
+        mol_viewer.paint_property_bulk(
+            "obj",
+            token_map,
+            compute.compute_metric("chain_ptm", data, token_map),
+            palette="blue_white_red",
+            rebuild=False,
+        )
+
+        np.testing.assert_allclose(
+            self.cmd.alter_spaces[0]["foldqc_atom_values"][1:4], [0.9, 0.9, 0.7]
+        )
+        self.assertIn("b = foldqc_atom_values[index]", self.cmd.alter_calls[0][1])
+        args, kwargs = self.cmd.spectrum_calls[0]
+        self.assertEqual(args[:3], ("b", "blue_white_red", "(obj)"))
+        self.assertAlmostEqual(kwargs["minimum"], 0.7)
+        self.assertAlmostEqual(kwargs["maximum"], 0.9)
 
     def test_viridis_quantizes_colors_without_spectrum(self) -> None:
         mol_viewer.paint_property_bulk(

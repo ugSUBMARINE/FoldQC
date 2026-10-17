@@ -158,6 +158,13 @@ _DISPATCH: dict[str, _Dispatch] = {
         "confidence",
         needs_token_map=True,
     ),
+    "chain_ptm": _Dispatch(
+        "confidence",
+        P.chain_ptm_values,
+        "Confidence data",
+        "confidence",
+        needs_token_map=True,
+    ),
 }
 
 

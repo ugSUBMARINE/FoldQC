@@ -9,7 +9,8 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from FoldQC import export
+from FoldQC import compute, export
+from FoldQC.confidence import PredictionConfidence
 from FoldQC.providers.registry import BUILTIN_PROVIDERS
 from FoldQC.token_map import ResidueId, TokenInfo, TokenMap
 
@@ -54,6 +55,33 @@ def test_fieldnames_add_ensemble_columns_only_when_requested() -> None:
     assert with_ensemble == export.BASE_COLUMNS + export.ENSEMBLE_COLUMNS
     assert "ensemble_group" not in base
     assert "ensemble_group" in with_ensemble
+
+
+def test_chain_ptm_export_uses_diagonal_values_and_ptm_metadata(tmp_path: Path) -> None:
+    files = _PredictionFiles(tmp_path)
+    data = types.SimpleNamespace(
+        rank=0,
+        structure_path=tmp_path / "model.cif",
+        confidence=PredictionConfidence(
+            pair_chain_iptm=np.array([[0.9, 0.2], [0.3, np.nan]])
+        ),
+    )
+    token_map = TokenMap((_token(0), _token(1, chain_id="L", is_hetatm=True)))
+    rows = export.build_token_rows(
+        pred_files=files,
+        data=data,
+        token_map=token_map,
+        values=compute.compute_metric("chain_ptm", data, token_map),
+        metric_key="chain_ptm",
+    )
+    np.testing.assert_allclose(rows[0]["value"], 0.9)
+    assert rows[1]["value"] == "nan"
+    for row in rows:
+        assert row["metric_key"] == "chain_ptm"
+        assert row["metric_label"] == "Chain pTM"
+        assert row["value_units"] == "ptm"
+        assert row["value_semantics"] == "higher_is_better"
+        assert row["export_schema_version"] == "2"
 
 
 def test_default_csv_export_path_uses_prediction_metadata(tmp_path: Path) -> None:

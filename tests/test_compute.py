@@ -256,3 +256,19 @@ def test_unknown_metric_raises_unsupported_metric() -> None:
         compute.compute_metric(
             "future_metric", types.SimpleNamespace(), EMPTY_TOKEN_MAP
         )
+
+
+def test_chain_ptm_dispatch_and_missing_confidence() -> None:
+    token_map = TokenMap((_token(0, chain_id="B"), _token(1, chain_id="A")))
+    data = types.SimpleNamespace(
+        confidence=PredictionConfidence(
+            pair_chain_iptm=np.array([[0.9, 0.1], [0.2, 0.7]])
+        )
+    )
+    np.testing.assert_allclose(
+        compute.compute_metric("chain_ptm", data, token_map), [0.9, 0.7]
+    )
+    with pytest.raises(compute.MissingMetricDataError):
+        compute.compute_metric(
+            "chain_ptm", types.SimpleNamespace(confidence=None), token_map
+        )

@@ -34,6 +34,30 @@ def _parse(payload, *, affinity=None, chains=2):
     )
 
 
+@pytest.mark.parametrize(
+    ("fields", "available"),
+    [
+        ({}, False),
+        ({"ptm": 0.9, "chain_iptm": np.array([0.8])}, False),
+        ({"chain_ptm": np.array([0.8, np.nan])}, True),
+        ({"chain_ptm": np.array([np.nan])}, False),
+        ({"pair_chain_iptm": np.array([[0.8]])}, True),
+        ({"pair_chain_iptm": np.array([[0.0]])}, True),
+        ({"pair_chain_iptm": np.array([[np.nan, 0.8], [0.7, np.nan]])}, False),
+        ({"pair_chain_iptm": np.array([[np.nan, 0.8], [0.7, 0.9]])}, True),
+        (
+            {
+                "pair_chain_iptm": np.array([[np.nan]]),
+                "chain_ptm": np.array([0.8]),
+            },
+            True,
+        ),
+    ],
+)
+def test_chain_ptm_availability_uses_diagonal_or_vector(fields, available) -> None:
+    assert PredictionConfidence(**fields).has_chain_ptm is available
+
+
 def test_parser_normalizes_aliases_chain_order_diagonal_and_affinity() -> None:
     confidence = _parse(
         {

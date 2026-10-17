@@ -61,6 +61,9 @@ def test_plot_action_state_for_representative_metrics() -> None:
 
     assert _enabled("matrix", "chain_iptm")
     assert not _enabled("distribution", "chain_iptm")
+    assert _enabled("matrix", "chain_ptm")
+    assert _enabled("line", "chain_ptm")
+    assert not _enabled("distribution", "chain_ptm")
     assert _enabled(
         "line",
         "ensemble_rmsd",
@@ -549,9 +552,10 @@ def test_metric_preview_text_omits_plot_restriction_without_reference() -> None:
     assert "restricted to tokens selected by" not in text
 
 
-def test_chain_iptm_preview_restriction_only_mentions_line_plot() -> None:
+@pytest.mark.parametrize("metric_key", ["chain_iptm", "chain_ptm"])
+def test_chain_preview_restriction_only_mentions_line_plot(metric_key) -> None:
     text = gui_rules.metric_preview_text(
-        "chain_iptm",
+        metric_key,
         "target_model_0",
         "chain B",
         "5.0",
@@ -607,9 +611,10 @@ def test_ensemble_domain_preview_only_describes_available_matrix_aggregation() -
     assert "distribution plots use" not in text
 
 
-def test_ensemble_chain_iptm_preview_describes_line_and_matrix_std() -> None:
+@pytest.mark.parametrize("metric_key", ["chain_iptm", "chain_ptm"])
+def test_ensemble_chain_preview_describes_line_and_matrix_std(metric_key) -> None:
     text = gui_rules.metric_preview_text(
-        "chain_iptm",
+        metric_key,
         "ensemble_group",
         "",
         "5.0",

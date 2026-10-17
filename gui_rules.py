@@ -76,9 +76,10 @@ def plot_action_state(
         return PlotActionState(True)
 
     if plot_type == "distribution":
-        if metric_key == "chain_iptm":
+        if spec is not None and "distribution" not in spec.plot_modes:
+            label = spec.label[0].lower() + spec.label[1:]
             return PlotActionState(
-                False, "Distribution plots are not available for chain ipTM."
+                False, f"Distribution plots are not available for {label}."
             )
         if (
             spec is not None
@@ -100,7 +101,7 @@ def plot_action_state(
             return PlotActionState(
                 False,
                 "Matrix plots are only available for PAE, PDE, interaction "
-                "probability, and chain ipTM.",
+                "probability, chain ipTM, and chain pTM.",
             )
         return PlotActionState(True)
 
@@ -376,10 +377,14 @@ def _append_ensemble_plot_guidance(
     spec = metrics.METRICS.find(metric_key)
     if spec is not None and not spec.is_domain_label:
         plot_details.append("line plots show the member mean and standard deviation")
-    if metric_key != "chain_iptm" and spec is not None and not spec.is_domain_label:
+    if (
+        spec is not None
+        and "distribution" in spec.plot_modes
+        and not spec.is_domain_label
+    ):
         plot_details.append("distribution plots use the member mean")
     if spec is not None and spec.matrix is not None:
-        if metric_key == "chain_iptm":
+        if spec.matrix.source == "chain_iptm":
             plot_details.append(
                 "matrix plots show the member mean with standard-deviation annotations"
             )

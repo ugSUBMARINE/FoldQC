@@ -239,11 +239,17 @@ class ContextService:
             state.data.confidence is not None and state.data.confidence.has_chain_iptm
             for state in target_states
         )
+        has_chain_ptm = bool(target_states) and all(
+            state.data.confidence is not None and state.data.confidence.has_chain_ptm
+            for state in target_states
+        )
         availability: list[tuple[str, bool]] = []
         for spec in metrics.METRICS:
             available = all(family_available[item] for item in spec.requirements)
             if spec.key == "chain_iptm":
                 available = available and has_chain_iptm
+            if spec.key == "chain_ptm":
+                available = available and has_chain_ptm
             if spec.ensemble_level:
                 available = available and self._state.ensemble is not None
             availability.append((spec.key, available))
