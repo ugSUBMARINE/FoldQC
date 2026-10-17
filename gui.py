@@ -199,7 +199,6 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
         )
         self.widgets._export_csv_btn.clicked.connect(self._export_csv)
         self.widgets._ensemble_btn.clicked.connect(self._activate_ensemble)
-        self.widgets._close_btn.clicked.connect(self.close)
 
     def _guide_text(self) -> str:
         """Return compact non-computing guidance for common FoldQC workflows."""

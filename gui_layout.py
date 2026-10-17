@@ -37,8 +37,8 @@ SMALL_BUTTON_HEIGHT = 25
 CONFIDENCE_SUMMARY_MIN_HEIGHT = 90
 STATISTICS_TEXT_MIN_HEIGHT = 120
 
-# Set the minimum widths of expanding widgets to unrealistically small values;
-# the min. width of the window is then determined by the width of the button row
+# Keep expanding widgets narrow at minimum size; section controls determine the
+# dialog's natural minimum width.
 PREDICTION_PATH_MIN_WIDTH = 100  # 380
 MODEL_SELECTION_BOX_MIN_WIDTH = 100  # 250
 ANALYSIS_COMBO_MIN_WIDTH = 100  # 300
@@ -141,7 +141,6 @@ class GuiWidgets:
     _afdb_combo: QtWidgets.QComboBox
     _afdb_edit: QtWidgets.QLineEdit
     _apply_btn: QtWidgets.QPushButton
-    _close_btn: QtWidgets.QPushButton
     _compare_models_btn: QtWidgets.QPushButton
     _conf_browser: QtWidgets.QTextBrowser
     _cutoff_spin: QtWidgets.QDoubleSpinBox
@@ -184,7 +183,6 @@ class GuiWidgets:
             _afdb_combo=dialog._afdb_combo,
             _afdb_edit=dialog._afdb_edit,
             _apply_btn=dialog._apply_btn,
-            _close_btn=dialog._close_btn,
             _compare_models_btn=dialog._compare_models_btn,
             _conf_browser=dialog._conf_browser,
             _cutoff_spin=dialog._cutoff_spin,
@@ -325,7 +323,17 @@ def build_dialog_ui(dialog) -> GuiWidgets:
         "Compare scalar confidence summaries for every discovered rank without "
         "loading all model structures."
     )
-    model_controls_layout.addWidget(self._compare_models_btn)
+    self._ensemble_btn = FixedMainButton("Load Ensemble")
+    dialog._disable_default_button(self._ensemble_btn)
+    self._ensemble_btn.setToolTip(
+        "Load all ranked models as an ensemble and compute ensemble-level metrics."
+    )
+    model_actions = QtWidgets.QHBoxLayout()
+    model_actions.setSpacing(BASE_LAYOUT_SPACING)
+    model_actions.addWidget(self._compare_models_btn)
+    model_actions.addWidget(self._ensemble_btn)
+    model_actions.addStretch(1)
+    model_controls_layout.addLayout(model_actions)
     model_controls_layout.addStretch(1)
 
     self._conf_browser = QtWidgets.QTextBrowser()
@@ -469,6 +477,24 @@ def build_dialog_ui(dialog) -> GuiWidgets:
     palette_range_row.addWidget(self._vmax_edit, 1)
     prop_form.addRow("Palette/Scale range:", palette_range_row)
 
+    analysis_actions = QtWidgets.QHBoxLayout()
+    analysis_actions.setSpacing(BASE_LAYOUT_SPACING)
+    analysis_actions.addStretch(1)
+    self._apply_btn = FixedMainButton("Apply Coloring")
+    self._plot_btn = FixedMainButton("Plot")
+    self._plot_menu = QtWidgets.QMenu(self._plot_btn)
+    self._plot_actions = build_plot_actions(self._plot_menu)
+    self._apply_btn.setToolTip(
+        f"Apply the selected coloring metric to the {VIEWER_NAME} target."
+    )
+    self._plot_btn.setToolTip(
+        "Open an available plot for the current target and inputs."
+    )
+    for button in (self._apply_btn, self._plot_btn):
+        dialog._disable_default_button(button)
+        analysis_actions.addWidget(button)
+    prop_form.addRow(analysis_actions)
+
     _fix_height_to_content(prop_group)
     root.addWidget(prop_group)
 
@@ -531,51 +557,12 @@ def build_dialog_ui(dialog) -> GuiWidgets:
     )
     selection_layout.addWidget(self._stats_selection_status)
     selection_layout.addStretch()
-    stats_layout.addWidget(selection_panel)
-    root.addGrowingWidget(stats_group)
-
-    # --- Button row ---
-    button_container = QtWidgets.QWidget()
-    button_container.setSizePolicy(SizePolicyExpanding, SizePolicyFixed)
-    btn_layout = QtWidgets.QHBoxLayout(button_container)
-    btn_layout.setContentsMargins(0, 0, 0, 0)
-    btn_layout.setSpacing(0)
-    self._apply_btn = FixedMainButton("Apply Coloring")
-    self._plot_btn = FixedMainButton("Plot")
     self._export_csv_btn = FixedMainButton("Export CSV")
-    self._plot_menu = QtWidgets.QMenu(self._plot_btn)
-    self._plot_actions = build_plot_actions(self._plot_menu)
-    self._ensemble_btn = FixedMainButton("Load Ensemble")
-    self._close_btn = FixedMainButton("Close")
-
-    self._apply_btn.setToolTip(
-        f"Apply the selected coloring metric to the {VIEWER_NAME} target."
-    )
-    self._plot_btn.setToolTip(
-        "Open an available plot for the current target and inputs."
-    )
+    dialog._disable_default_button(self._export_csv_btn)
     self._export_csv_btn.setToolTip(
         "Export token-level values for the current metric and target."
     )
-    self._ensemble_btn.setToolTip(
-        "Load all ranked models as an ensemble and compute ensemble-level metrics."
-    )
-    self._close_btn.setToolTip("Close the FoldQC dialog.")
-
-    main_buttons = (
-        self._apply_btn,
-        self._plot_btn,
-        self._export_csv_btn,
-        self._ensemble_btn,
-        self._close_btn,
-    )
-    for index, btn in enumerate(main_buttons):
-        dialog._disable_default_button(btn)
-        btn_layout.addWidget(btn)
-        if index < len(main_buttons) - 1:
-            btn_layout.addSpacing(BASE_LAYOUT_SPACING)
-            btn_layout.addStretch(1)
-
-    _fix_height_to_content(button_container)
-    root.addWidget(button_container)
+    selection_layout.addWidget(self._export_csv_btn)
+    stats_layout.addWidget(selection_panel)
+    root.addGrowingWidget(stats_group)
     return GuiWidgets.capture(self)

@@ -255,9 +255,9 @@ def test_dialog_uses_content_derived_resize_policy() -> None:
     assert "root.addGrowingWidget(model_group)" in layout_source
     assert "root.addGrowingWidget(stats_group)" in layout_source
     assert "growth, remainder = divmod(surplus" in layout_source
-    assert layout_source.count("_fix_height_to_content(") == 4
+    assert layout_source.count("_fix_height_to_content(") == 3
     assert (
-        layout_source.count("setSizePolicy(SizePolicyExpanding, SizePolicyFixed)") >= 4
+        layout_source.count("setSizePolicy(SizePolicyExpanding, SizePolicyFixed)") >= 3
     )
     assert "setMinimumSize(600, 890)" not in dialog_source
     assert "self.resize(self.minimumSizeHint())" in dialog_source
@@ -279,7 +279,7 @@ def test_dialog_button_and_text_panel_geometry_is_centralized() -> None:
         assert constant in source
 
     assert "class FixedMainButton(QtWidgets.QPushButton):" in source
-    assert source.count("FixedMainButton(") == 10  # Definition plus nine buttons.
+    assert source.count("FixedMainButton(") == 9  # Definition plus eight buttons.
     assert source.count("setFixedSize(SMALL_BUTTON_WIDTH, SMALL_BUTTON_HEIGHT)") == 3
     assert "button.setFixedSize(STATISTICS_BUTTON_WIDTH" in source
     assert "setMaximumHeight" not in source
