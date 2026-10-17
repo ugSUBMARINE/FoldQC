@@ -11,6 +11,7 @@ authors = [
 
 [dependency-groups]
 dev = ["mypy"]
+test = ["matplotlib", "numpy", "pytest", "scikit-learn", "scipy"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

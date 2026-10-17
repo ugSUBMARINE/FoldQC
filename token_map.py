@@ -20,6 +20,10 @@ Critical implementation note
 Molecular viewers may reorder HETATM atoms after loading a structure file.
 Token indices are therefore derived exclusively from the original CIF/PDB file
 and ligand tokens retain atom names for stable viewer-side lookup.
+
+Use ordinary frozen dataclasses for immutable records. Combining automatic
+slots with freezing can break generated attribute setters on Python 3.10–3.12
+(CPython issue 90055), including writes to read-only properties.
 """
 
 from __future__ import annotations
@@ -31,7 +35,7 @@ from types import MappingProxyType
 from typing import overload
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class ResidueId:
     """Lossless structure residue identifier."""
 
@@ -75,7 +79,7 @@ def is_hydrogen(element: str | None, atom_name: str = "") -> bool:
     return normalized_name.startswith(("H", "D", "T"))
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class TokenInfo:
     """Viewer-independent identity and metadata for one prediction token."""
 
@@ -111,7 +115,7 @@ PolymerTokenKey = tuple[str, ResidueId, str]
 HetatmTokenKey = tuple[str, ResidueId, str, str]
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class TokenMap(Sequence[TokenInfo]):
     """Immutable prediction-token sequence with reusable derived metadata.
 

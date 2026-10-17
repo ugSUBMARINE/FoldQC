@@ -1,4 +1,8 @@
-"""One-pass, viewer-independent indexing of prediction structures."""
+"""One-pass, viewer-independent indexing of prediction structures.
+
+Frozen records omit automatic slots for Python 3.10+ compatibility; see the
+dataclass compatibility note in :mod:`token_map`.
+"""
 
 from __future__ import annotations
 
@@ -14,7 +18,7 @@ from .token_map import ResidueId, TokenInfo, TokenMap, is_hydrogen
 StructureFormat = Literal["cif", "pdb"]
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class _AtomRecord:
     hetatm: bool
     name: str
@@ -25,7 +29,7 @@ class _AtomRecord:
     element: str
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class StructureIndex:
     """Reusable token and atom metadata parsed from one structure-file read."""
 

@@ -18,6 +18,10 @@ Development of FoldQC has included coding assistance from OpenAI's Codex.
 
 ## Installation
 
+FoldQC requires Python 3.10 or newer in the PyMOL installation. Optional
+packages are installed into that interpreter, using releases compatible with
+its Python version.
+
 1. Copy or clone this repository into a PyMOL plugin directory. Common user
    plugin locations include:
 
@@ -219,6 +223,16 @@ For contributors, `uv run mypy` checks the Phase 5 service boundary with a
 stable strict target. Qt, PyMOL, Matplotlib, providers, and older numerical
 modules outside that target are intentionally not yet a repository-wide typing
 baseline.
+
+The `test` dependency group includes the full test dependencies. To check
+a specific Python version without replacing the project's environment, run:
+
+```bash
+uv run --isolated --no-default-groups --python 3.10 --group test python -m pytest tests
+```
+
+Repeat with Python 3.11, 3.12, and newer installed versions. These tests use
+fake PyMOL/Qt ports; verify the actual dialog and viewport in PyMOL separately.
 
 ## CSV Export Schema
 
