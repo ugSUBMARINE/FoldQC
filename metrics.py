@@ -735,14 +735,23 @@ METRICS = MetricRegistry(
             "ptm",
             "higher_is_better",
             "pTM",
-            "Colors chains in {target_text} by chain-level pTM; use Plot > Matrix for pairwise chain ipTM.",
+            "Colors chains in {target_text} by chain-level pTM. Small-ligand scores need care; see ?.",
             "Assigns every token in each chain of {target_text} the diagonal score "
             "from the normalized pairwise chain ipTM matrix. When no matrix is "
             "available, uses the provider's per-chain pTM scores. Higher values "
-            "indicate greater confidence in the chain's internal fold. The matrix "
+            "indicate greater confidence in the chain's internal fold. Use "
+            "Plot > Matrix for pairwise chain ipTM. The matrix "
             "plot shows the full pairwise chain ipTM matrix: diagonal cells are "
             "chain-restricted pTM or self scores, while off-diagonal cells describe "
-            "chain pairs.",
+            "chain pairs.\n\n"
+            "Caution for small ligands and short chains: AF3, Chai-1, Protenix, "
+            "and OpenFold3 use the chain's token count to scale pTM. With fewer "
+            "than 20 tokens, very low scores can coexist with high pLDDT and low "
+            "PAE; a ligand heavy atom is one token. Public Boltz-1/2 implementations "
+            "instead scale diagonal self-scores using the whole complex's token "
+            "count. These scores are not directly comparable across providers. "
+            "For ligand placement, also inspect protein-ligand PAE and interface "
+            "confidence; intra-ligand PAE alone does not assess the binding pose.",
             plot_modes=frozenset({"line", "matrix"}),
             reference_scoped_plots=frozenset({"line"}),
             matrix=CHAIN_IPTM_MATRIX,
@@ -755,13 +764,21 @@ METRICS = MetricRegistry(
             "iptm",
             "higher_is_better",
             "ipTM",
-            "Colors chains in {target_text} by chain-level ipTM; use Plot > Matrix for pairwise chain ipTM.",
+            "Colors chains in {target_text} by chain-level ipTM. Provider definitions differ; see ?.",
             "Assigns every token in each chain of {target_text} that chain's normalized "
             "ipTM score, falling back to per-chain pTM when needed. Higher values "
             "indicate greater confidence in chain-level placement or interactions. "
-            "The matrix plot shows pairwise chain ipTM: off-diagonal cells describe "
+            "Use Plot > Matrix for pairwise chain ipTM. The matrix plot shows "
+            "pairwise chain ipTM: off-diagonal cells describe "
             "chain pairs, while diagonal cells are chain-restricted pTM or self "
-            "scores and should not be interpreted as interfaces.",
+            "scores and should not be interpreted as interfaces.\n\n"
+            "Small-ligand caution: diagonal pTM/self scores, including the "
+            "per-chain pTM fallback, can be very low because of short-chain "
+            "length scaling. This does not by itself imply an uncertain binding "
+            "pose. Chai-1 also scales off-diagonal scores by the scored chain's "
+            "token count, so scores in a small ligand's column can be suppressed. "
+            "Inspect both directions and protein-ligand PAE; provider scores "
+            "are not directly comparable. See the README's small-ligand guidance.",
             plot_modes=frozenset({"line", "matrix"}),
             reference_scoped_plots=frozenset({"line"}),
             matrix=CHAIN_IPTM_MATRIX,

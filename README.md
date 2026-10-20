@@ -374,7 +374,7 @@ and made read-only before entering model state.
 | Ensemble pLDDT mean | After ensemble setup, computes the per-token mean pLDDT across loaded models. | Higher values indicate consistently high local confidence across the ensemble. |
 | Ensemble pLDDT std | After ensemble setup, computes the per-token standard deviation of pLDDT across loaded models. | Lower values indicate stable confidence estimates across models; higher values mark positions where model confidence varies between predictions. |
 | Chain ipTM | Uses FoldQC's normalized per-chain ipTM (falling back to per-chain pTM) and assigns each token the score at that chain's position in canonical `TokenMap.chain_order`. Matrix plots use the normalized pairwise chain ipTM matrix. | Higher values indicate higher confidence in chain-level placement or interactions. Off-diagonal cells describe confidence for a chain pair; diagonal cells are chain-restricted pTM/self scores, not interfaces. |
-| Chain pTM | Assigns each token its chain's main-diagonal score from the normalized pairwise chain ipTM matrix. If no matrix is available, uses the provider's per-chain pTM vector. | Higher values indicate higher confidence in the chain's internal fold. Missing scores remain undefined (grey); interface scores and global pTM are not used as substitutes. |
+| Chain pTM | Assigns each token its chain's main-diagonal score from the normalized pairwise chain ipTM matrix. If no matrix is available, uses the provider's per-chain pTM vector. | Higher values indicate higher confidence in the chain's internal fold, subject to provider-specific length scaling, especially for [small ligands and short chains](#small-ligands-and-short-chains). Missing scores remain undefined (grey); interface scores and global pTM are not used as substitutes. |
 
 OpenFold3 output roots contain one directory per query and one `seed_<n>`
 directory per model seed. When a selected folder or archive contains multiple
@@ -443,3 +443,37 @@ an interface. For a single conservative interface summary, use
 maximum, but state which aggregation was used. Do not infer direction from a
 provider's raw field name alone; use the normalized FoldQC plot axes described
 above.
+
+#### Small ligands and short chains
+
+**A very low Chain pTM does not by itself imply a poorly predicted ligand or
+binding pose.** pTM uses a length-dependent distance scale that becomes extremely
+strict for small chains. AlphaFold 3 explicitly warns that chains with fewer than
+20 tokens can have pTM below 0.05 even when PAE and pLDDT indicate good confidence
+([AF3 confidence documentation](https://github.com/google-deepmind/alphafold3/blob/main/docs/output.md#confidence-metrics)).
+A small-molecule ligand contributes one token per heavy atom; a polymer normally
+contributes one per residue, so this also matters for short peptides.
+
+The public implementations differ in which token count sets that scale:
+
+| Provider | Length scaling relevant to FoldQC's Chain pTM |
+|---|---|
+| AlphaFold 3 | Uses the individual chain's token count; small ligands can receive very low pTM. |
+| [Chai-1](https://github.com/chaidiscovery/chai-lab/blob/main/chai_lab/ranking/ptm.py) | Uses the scored chain's token count. The effect applies to diagonal self-scores and to off-diagonal entries in a small ligand's column. |
+| [Protenix](https://github.com/bytedance/Protenix/blob/main/protenix/model/sample_confidence.py) | Uses the selected chain's token count for chain pTM, so the same small-chain effect can occur. |
+| [OpenFold3](https://github.com/aqlaboratory/openfold-3/blob/main/openfold3/core/metrics/confidence.py) | Uses the selected chain's token count for chain pTM, so the same small-chain effect can occur. |
+| Public [Boltz-1](https://github.com/jwohlwend/boltz/blob/main/src/boltz/model/modules/confidence_utils.py) / [Boltz-2](https://github.com/jwohlwend/boltz/blob/main/src/boltz/model/layers/confidence_utils.py) | Uses the whole complex's token count even for diagonal chain self-scores. A small ligand in a large complex therefore avoids this particular short-chain penalty. Hosted Boltz Lab/API versions may differ. |
+
+FoldQC preserves these provider scores; normalizing chain order and filling
+missing diagonal entries does not harmonize their length scaling. Do not compare
+absolute Chain pTM values across providers as if they used the same definition.
+The caveat also applies to diagonal cells in either chain metric's Matrix plot
+and to Chain ipTM when it falls back to per-chain pTM. Chai-1's asymmetric
+off-diagonal scores require care too: inspect both directions rather than
+treating a low ligand-column score alone as evidence of poor placement.
+
+For a small ligand, inspect pLDDT together with protein-ligand PAE around the
+binding pocket and interface confidence interpreted using the provider's
+definition. Low intra-ligand PAE supports a coherent internal arrangement but
+does not establish correct placement in the protein. A pTM value of 0.04 is a
+score, not a 4% probability that the prediction is correct.
