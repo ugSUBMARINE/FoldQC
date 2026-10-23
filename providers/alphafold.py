@@ -148,13 +148,16 @@ def _scan_af3_dir(pred_dir: Path, provider: BaseProvider) -> PredictionFiles:
 
 
 def _scan_af3_server_dir(pred_dir: Path, provider: BaseProvider) -> PredictionFiles:
-    """Discover ranked AlphaFold 3 Server output files."""
+    """Discover ranked Server-format outputs, including localfold PDBs."""
     name = pred_dir.name
     files = provider.prediction_files(name=name, pred_dir=pred_dir)
 
     model_re = re.compile(r"(.+)_model_(\d+)$")
     ranked_models: list[tuple[int, str, Path]] = []
-    for path in sorted(pred_dir.glob("*_model_*.cif")):
+    # Retain CIF preference when a model is available in both formats.
+    model_paths = {path.stem: path for path in pred_dir.glob("*_model_*.pdb")}
+    model_paths.update((path.stem, path) for path in pred_dir.glob("*_model_*.cif"))
+    for path in sorted(model_paths.values()):
         match = model_re.fullmatch(path.stem)
         if match is None:
             continue
@@ -162,7 +165,9 @@ def _scan_af3_server_dir(pred_dir: Path, provider: BaseProvider) -> PredictionFi
         ranked_models.append((int(rank_text), prefix, path))
 
     if not ranked_models:
-        raise ValueError(f"No AlphaFold 3 Server model CIFs found in {pred_dir}.")
+        raise ValueError(
+            f"No AlphaFold 3 Server model CIF/PDB files found in {pred_dir}."
+        )
 
     for rank, prefix, structure_path in sorted(ranked_models):
         full_data_path = _ranked_json_path(

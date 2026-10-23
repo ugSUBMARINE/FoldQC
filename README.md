@@ -2,8 +2,8 @@
 
 FoldQC is a PyMOL plugin for visualizing confidence metrics from predicted
 protein structures. It supports Boltz (local) prediction folders, Boltz Lab and Boltz
-API outputs, AlphaFold 3 local and server outputs, OpenFold3, Chai-1 Discovery,
-and Protenix prediction folders, AlphaFold Database (EMBL-EBI) monomer and
+API outputs, AlphaFold 3 local and server outputs, localfold exports, OpenFold3,
+Chai-1 Discovery and Protenix prediction folders, AlphaFold Database (EMBL-EBI) monomer and
 complex predictions, zip/tar archives containing supported prediction folders,
 and single CIF/PDB files with pLDDT values stored in B-factors.
 
@@ -375,6 +375,17 @@ and made read-only before entering model state.
 | Ensemble pLDDT std | After ensemble setup, computes the per-token standard deviation of pLDDT across loaded models. | Lower values indicate stable confidence estimates across models; higher values mark positions where model confidence varies between predictions. |
 | Chain ipTM | Uses FoldQC's normalized per-chain ipTM (falling back to per-chain pTM) and assigns each token the score at that chain's position in canonical `TokenMap.chain_order`. Matrix plots use the normalized pairwise chain ipTM matrix. | Higher values indicate higher confidence in chain-level placement or interactions. Off-diagonal cells describe confidence for a chain pair; diagonal cells are chain-restricted pTM/self scores, not interfaces. |
 | Chain pTM | Assigns each token its chain's main-diagonal score from the normalized pairwise chain ipTM matrix. If no matrix is available, uses the provider's per-chain pTM vector. | Higher values indicate higher confidence in the chain's internal fold, subject to provider-specific length scaling, especially for [small ligands and short chains](#small-ligands-and-short-chains). Missing scores remain undefined (grey); interface scores and global pTM are not used as substitutes. |
+
+[localfold](https://github.com/sokrypton/localfold) exports use the AlphaFold
+Server layout with `*_model_<rank>.pdb` structures and matching
+`*_summary_confidences_<rank>.json` / `*_full_data_<rank>.json` files. FoldQC
+reads these through its AlphaFold 3 Server provider (`af3_server` in CSV
+exports), independently of the weights used, including AF3 and Boltz-2.
+Atom pLDDTs are averaged into canonical tokens; PAE, interaction probabilities,
+and chain confidence use the same loading rules as Server outputs. Native
+Boltz-only data such as PDE or affinity are not implied by Boltz-2 weights.
+Select the extracted folder or its ZIP archive. If both CIF and PDB exist for
+the same model basename, FoldQC uses CIF once.
 
 OpenFold3 output roots contain one directory per query and one `seed_<n>`
 directory per model seed. When a selected folder or archive contains multiple
