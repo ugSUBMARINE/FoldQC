@@ -96,6 +96,16 @@ def main() -> None:
     window.show()
     app.processEvents()
     assert window.pairs.model().rowCount() == 3
+    dunbrack_column = 3 + next(
+        i
+        for i, spec in enumerate(window.pairs.model().specs)
+        if spec.key == "interface_lis_dunbrack"
+    )
+    assert window.pairs.model().headers[dunbrack_column] == "LIS — Dunbrack"
+    np.testing.assert_allclose(
+        window.pairs.model().value(window.pairs.model().rows[0], dunbrack_column),
+        fixture["expected"]["lis_dunbrack_mean"],
+    )
     assert window.rest.model().rowCount() == 6
     assert window.select.isEnabled()
     window._select()

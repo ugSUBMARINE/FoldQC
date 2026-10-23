@@ -51,10 +51,7 @@ class InterfaceTableModel(QtCore.QAbstractTableModel):
             "Chain A" if scope == "chain_pair" else "Scored chain",
             "Partner(s)",
         ]
-        self.headers += [
-            s.label + (" (max)" if s.interface.aggregation == "max" else "")
-            for s in self.specs
-        ]
+        self.headers += [s.label for s in self.specs]
         self.headers += [
             "Cβ contact pairs" if scope == "chain_pair" else "Cα contact pairs"
         ]

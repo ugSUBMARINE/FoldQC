@@ -131,7 +131,13 @@ def test_published_golden_values_and_variants():
     assert score(model, "lis_kim").forward == pytest.approx(expected["lis_kim_ab"])
     assert score(model, "lis_kim").reverse == pytest.approx(expected["lis_kim_ba"])
     assert score(model, "lis_dunbrack").value == pytest.approx(
-        expected["lis_dunbrack_max"]
+        expected["lis_dunbrack_mean"]
+    )
+    assert score(model, "lis_dunbrack").forward == pytest.approx(
+        expected["lis_dunbrack_ab"]
+    )
+    assert score(model, "lis_dunbrack").reverse == pytest.approx(
+        expected["lis_dunbrack_ba"]
     )
     assert score(model, "clis").value == pytest.approx(expected["clis_mean"])
     assert score(model, "ilis").value == pytest.approx(expected["ilis"])
@@ -151,6 +157,27 @@ def test_published_golden_values_and_variants():
     assert len(score(model, "ipsae").residue_profile) == 4
     assert score(model, "clis").support_a == (0, 1)
     assert score(model, "clis").support_b == (2,)
+
+
+def test_dunbrack_lis_directional_mean_includes_an_empty_direction():
+    pae = np.full((4, 4), 30.0)
+    pae[:2, 2:] = [[0.0, 12.0], [12.0, 12.0]]
+    model = compute(pae=pae)
+    result = score(model, "lis_dunbrack")
+    assert result.forward == 1.0
+    assert result.reverse == 0.0
+    assert result.value == 0.5
+    assert dict(result.counts)["LIA_ab"] == 1
+    spec = metrics.METRICS.require(result.metric_key)
+    assert spec.interface.aggregation == "mean"
+    assert "maximum" not in spec.details_template
+    summary = next(
+        row
+        for row in interface_report_rows(report(model))
+        if row["metric_key"] == result.metric_key and row["direction"] == "summary"
+    )
+    assert summary["aggregation"] == "mean"
+    assert summary["value"] == 0.5
 
 
 def test_empty_interfaces_preserve_each_reference_convention():

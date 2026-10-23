@@ -225,7 +225,7 @@ def compute_interface_model(
                         value = float(np.sqrt((lis_a + lis_b) / 2 * value))
                 else:
                     forward, reverse = lis_a, lis_b
-                    value = max(lis_a, lis_b) if strict else (lis_a + lis_b) / 2
+                    value = (lis_a + lis_b) / 2
                 union = mask_a | mask_b.T
                 result = replace(
                     result,

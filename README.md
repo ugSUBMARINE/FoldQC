@@ -515,15 +515,15 @@ protein chains. Original scores also appear in dimer pair details.
 
 | Score | Calculation and scope |
 |---|---|
-| ipSAE — Dunbrack (max) | For each alignment residue, retain opposite-chain residues with PAE strictly below the preset (10 Å by default, or 15 Å). Set `d0 = max(1, 1.24*cbrt(max(n,26)-15)-1.8)` from the number `n` of qualifying residues. Average `1/(1+(PAE/d0)^2)` over that set, then take the maximum over alignment residues. Retain both chain directions and display their maximum. No geometric distance filter. |
+| ipSAE — Dunbrack | For each alignment residue, retain opposite-chain residues with PAE strictly below the preset (10 Å by default, or 15 Å). Set `d0 = max(1, 1.24*cbrt(max(n,26)-15)-1.8)` from the number `n` of qualifying residues. Average `1/(1+(PAE/d0)^2)` over that set, then take the maximum over alignment residues. Retain both chain directions and display their maximum. No geometric distance filter. |
 | LIS — Kim | Mean `1-PAE/12` over PAE ≤12 Å in each direction; average the two directional means. Cells exactly at the cutoff contribute zero but remain in the denominator. |
-| LIS — Dunbrack (max) | Same transformation, with a strict PAE <12 Å cutoff and maximum over directional means. This is a separate labeled implementation. |
+| LIS — Dunbrack | Same transformation, with a strict PAE <12 Å cutoff; average the two directional means, matching the reference pair summary. A direction with no qualifying pairs contributes zero. |
 | cLIS — Kim | Kim LIS restricted to Cβ–Cβ contacts ≤8 Å (Cα for glycine), with a mean over directions. |
 | iLIS — Kim | `sqrt(LIS_Kim * cLIS_Kim)`, calculated after directional averaging. |
 | pDockQ — Bryant | Corrected sigmoid `0.724/(1+exp(-0.052*(x-152.611)))+0.018`, where `x = mean_interface_pLDDT * log10(contact_pair_count)`. Cβ contacts ≤8 Å (Cα for glycine); interface residues from both chains counted once each. Requires no PAE. |
-| pDockQ2 — Dunbrack (max) | Pairwise Cβ contacts ≤8 Å (Cα for glycine), unique interface-residue pLDDT pooled across both chains, multiplied by directional mean `1/(1+(PAE/10)^2)`. Apply `1.31/(1+exp(-0.075*(x-84.733)))+0.005`; display the larger direction. No contacts returns zero. |
+| pDockQ2 — Dunbrack | Pairwise Cβ contacts ≤8 Å (Cα for glycine), unique interface-residue pLDDT pooled across both chains, multiplied by directional mean `1/(1+(PAE/10)^2)`. Apply `1.31/(1+exp(-0.075*(x-84.733)))+0.005`; display the larger direction. No contacts returns zero. |
 | pDockQ2 — Zhu original | Chain versus all other protein chains, using Cα contacts ≤8 Å. Scored-chain Cα pLDDT is weighted by contact multiplicity; multiply by the mean transformed directional PAE over these contacts. Original sigmoid constants are `L=1.31034849`, `x0=84.7326239`, `k=0.0747157696`, `b=0.00501886443`. With no contacts the sigmoid baseline (~0.00735) remains. |
-| Pair ipTM — provider (max) | Existing normalized off-diagonal pair matrix only, with both directions retained and their maximum displayed. No diagonal pTM, global ipTM, or PAE-based reconstruction is substituted. |
+| Pair ipTM — provider | Existing normalized off-diagonal pair matrix only, with both directions retained and their maximum displayed. No diagonal pTM, global ipTM, or PAE-based reconstruction is substituted. |
 
 The numerical definitions are pinned to [Dunbrack/IPSAE
 6174cf9](https://github.com/DunbrackLab/IPSAE/blob/6174cf9e71cb1bd660cc805856a18c4871a6dec3/ipsae.py),
@@ -532,10 +532,6 @@ The numerical definitions are pinned to [Dunbrack/IPSAE
 and [Zhu/AFM-Benchmark
 5866c6d](https://gitlab.com/ElofssonLab/afm-benchmark/-/blob/5866c6d45abc802217a618290f76390999a83461/src/pdockq2.py).
 FoldQC implements the equations locally; no upstream scripts run at analysis time.
-For LIS — Dunbrack, FoldQC explicitly takes the maximum of the reference's
-directional LIS values as requested for this report. The pinned script itself
-writes their mean in its pair-summary row; the `(max)` label and CSV aggregation
-field distinguish FoldQC's presentation choice.
 
 The **Heatmap** shows one model or the ensemble mean, with canonical chain
 order, a fixed viridis 0–1 scale, an undefined diagonal, and grey N/A cells.

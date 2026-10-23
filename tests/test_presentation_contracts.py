@@ -279,7 +279,7 @@ def test_dialog_button_and_text_panel_geometry_is_centralized() -> None:
         assert constant in source
 
     assert "class FixedMainButton(QtWidgets.QPushButton):" in source
-    assert source.count("FixedMainButton(") == 9  # Definition plus eight buttons.
+    assert source.count("FixedMainButton(") == 10  # Definition plus nine buttons.
     assert source.count("setFixedSize(SMALL_BUTTON_WIDTH, SMALL_BUTTON_HEIGHT)") == 3
     assert "button.setFixedSize(STATISTICS_BUTTON_WIDTH" in source
     assert "setMaximumHeight" not in source

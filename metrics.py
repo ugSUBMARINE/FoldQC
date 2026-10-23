@@ -842,7 +842,7 @@ def _interface_specs() -> tuple[MetricSpec, ...]:
             "Dunbrack",
             _DUNBRACK,
             "https://doi.org/10.1101/2024.02.19.580970",
-            "max",
+            "mean",
             "pae",
             "pae",
             "chain_pair",
@@ -947,7 +947,7 @@ def _interface_specs() -> tuple[MetricSpec, ...]:
         elif key == "interface_lis_kim":
             details = "Average 1−PAE/12 over interchain pairs with PAE ≤12 Å independently in each direction, then average the two scores. A pair exactly at 12 Å contributes zero and remains in the denominator. LIA is a residue-pair count, not surface area."
         elif key == "interface_lis_dunbrack":
-            details = "Average 1−PAE/12 over interchain pairs with PAE strictly <12 Å independently in each direction, then report their maximum. This differs from Kim's inclusive cutoff and directional mean. The maximum is FoldQC's explicitly labeled aggregation of the Dunbrack directional values; the pinned upstream script writes their mean in its pair-summary row."
+            details = "Average 1−PAE/12 over interchain pairs with PAE strictly <12 Å independently in each direction, then average the two directional scores, matching the pinned Dunbrack pair summary. A direction with no qualifying pairs contributes zero. This differs from Kim's inclusive PAE ≤12 Å cutoff."
         elif key in {"interface_clis", "interface_ilis"}:
             details = "cLIS is Kim LIS restricted to physical Cβ contacts ≤8 Å (Cα for glycine); average directional scores. iLIS is sqrt(LIS × cLIS), using the already-averaged components. The published iLIS threshold 0.223 is a top-model threshold at 10% false-positive rate, benchmarked on 774 positive PPIs (yeast/fly/human Y2H reference sets and ELM interactions) and 6,004 controls (random reference sets, GFP and Wingless controls). It is not calibrated for ensemble means, a universal classification, or a binding probability."
         elif key == "interface_pdockq":
