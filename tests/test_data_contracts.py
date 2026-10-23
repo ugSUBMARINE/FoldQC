@@ -87,6 +87,7 @@ def test_validation_normalizes_arrays_and_preserves_embedding_dtype() -> None:
             "shape",
         ),
         ({"pae": [[1.0, 2.0]]}, "shape"),
+        ({"pae": [[0.0, -1.0], [1.0, 0.0]]}, "nonnegative"),
         ({"pde": [[0.0, np.inf], [1.0, 0.0]]}, "infinity"),
         ({"contact_probs": [[1.0, 1.1], [0.2, 1.0]]}, "within 0–1"),
         ({"pae": [["x", "y"], ["z", "w"]]}, "numeric"),

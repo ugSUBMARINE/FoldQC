@@ -16,11 +16,13 @@ from . import metrics
 from .dependencies import DependencyKey
 from .ensemble import EnsembleMember, EnsembleState
 from .gui_state import MetricContext, PluginState, ResolvedTarget
+from .interface_analysis import InterfaceAnalysisOptions
 from .loader_models import DataCapability, PredictionFiles
 from .model_state import ModelState
 from .presentation import Notice
 
 AnalysisAction = Literal[
+    "interfaces",
     "color",
     "export",
     "line",
@@ -47,8 +49,15 @@ class AnalysisRequest:
     reference_selection: str = ""
     cutoff_angstrom: float | None = None
     ui_revision: int = 0
+    interface_options: InterfaceAnalysisOptions | None = None
 
     def __post_init__(self) -> None:
+        if self.action == "interfaces" and (
+            self.metric_key is not None or self.interface_options is None
+        ):
+            raise ValueError(
+                "Interface analysis requires captured presets and no token metric."
+            )
         if not self.target_name.strip():
             raise ValueError("AnalysisRequest requires a viewer target.")
         if self.action in {"color", "export"} and self.metric_key is None:
@@ -245,6 +254,12 @@ class AnalysisResolver:
             if request.metric_key is None
             else metrics.METRICS.require(request.metric_key)
         )
+        if metric is not None and metric.result_scope != "token":
+            raise AnalysisPreflightError(
+                Notice(
+                    "interface_scope", "Use Analyze interfaces for interface scores."
+                )
+            )
         plot = (
             metrics.PLOTS.require(request.action)
             if request.action in _PLOT_ACTIONS
@@ -271,13 +286,22 @@ class AnalysisResolver:
                 )
             )
         coverage: CoveragePolicy = (
-            "available" if request.action in _PARTIAL_ACTIONS else "strict"
+            "available"
+            if request.action in _PARTIAL_ACTIONS or request.action == "interfaces"
+            else "strict"
         )
         capabilities: set[DataCapability] = set(
             () if metric is None else metric.load_capabilities
         )
         if request.action == "pae_summary":
             capabilities.add("pae")
+        elif request.action == "interfaces":
+            capabilities.update(
+                requirement
+                for spec in metrics.METRICS
+                if spec.result_scope != "token"
+                for requirement in spec.load_capabilities
+            )
         elif request.action == "pde_summary":
             capabilities.add("pde")
         elif request.action == "binding_site_fingerprint":

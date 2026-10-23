@@ -27,6 +27,113 @@ class _AtomRecord:
     chain_id: str
     b_factor: float
     element: str
+    xyz: tuple[float, float, float] = (np.nan, np.nan, np.nan)
+
+
+PROTEIN_RESIDUES = frozenset(
+    "ALA ARG ASN ASP CYS GLN GLU GLY HIS ILE LEU LYS MET PHE PRO SER THR TRP TYR VAL "
+    "ASX GLX SEC PYL UNK MSE".split()
+)
+
+
+@dataclass(frozen=True, eq=False)
+class StructureGeometry:
+    """Original representative atoms in canonical token order (never viewer data)."""
+
+    ca: np.ndarray
+    cb: np.ndarray
+    ca_plddt: np.ndarray
+    cb_plddt: np.ndarray
+    protein_mask: np.ndarray
+
+    def __post_init__(self) -> None:
+        n = len(self.protein_mask)
+        for name in ("ca", "cb", "ca_plddt", "cb_plddt", "protein_mask"):
+            value = np.array(
+                getattr(self, name),
+                dtype=bool if name == "protein_mask" else np.float64,
+                order="C",
+                copy=True,
+            )
+            shape = (n, 3) if name in {"ca", "cb"} else (n,)
+            if value.shape != shape or (
+                name != "protein_mask" and np.isinf(value).any()
+            ):
+                raise ValueError(f"Invalid structure geometry {name}.")
+            value.setflags(write=False)
+            object.__setattr__(self, name, value)
+
+
+def protein_token_indices(
+    token_map: TokenMap, geometry: StructureGeometry | None = None
+) -> tuple[int, ...]:
+    """Protein polymer tokens only; HETATM atom tokens are never retokenized."""
+    return tuple(
+        token.token_idx
+        for token in token_map
+        if not token.is_hetatm
+        and (
+            token.res_name.upper() in PROTEIN_RESIDUES
+            or (geometry is not None and geometry.protein_mask[token.token_idx])
+        )
+    )
+
+
+def _coordinate(
+    parts: list[str], columns: tuple[int | None, ...]
+) -> tuple[float, float, float]:
+    try:
+        values = tuple(float(parts[c]) if c is not None else np.nan for c in columns)
+        return (values[0], values[1], values[2])
+    except (ValueError, IndexError):
+        return (np.nan, np.nan, np.nan)
+
+
+def _geometry(
+    atoms: list[_AtomRecord], token_map: TokenMap, mapping: tuple[int | None, ...]
+) -> StructureGeometry:
+    n = len(token_map)
+    ca = np.full((n, 3), np.nan)
+    cb = np.full((n, 3), np.nan)
+    ca_conf = np.full(n, np.nan)
+    cb_conf = np.full(n, np.nan)
+    names: dict[int, set[str]] = {}
+    representatives: dict[tuple[int, str], list[_AtomRecord]] = {}
+    for atom, index in zip(atoms, mapping, strict=True):
+        if index is None or token_map[index].is_hetatm:
+            continue
+        names.setdefault(index, set()).add(atom.name)
+        if atom.name in {"CA", "CB"}:
+            representatives.setdefault((index, atom.name), []).append(atom)
+    mask = np.array(
+        [
+            not token.is_hetatm
+            and (
+                token.res_name.upper() in PROTEIN_RESIDUES
+                or {"N", "CA", "C"} <= names.get(token.token_idx, set())
+            )
+            for token in token_map
+        ]
+    )
+    for (index, name), matches in representatives.items():
+        # Ambiguous representatives remain missing, rather than choosing an altloc.
+        if len(matches) != 1:
+            continue
+        atom = matches[0]
+        coords, confidence = (ca, ca_conf) if name == "CA" else (cb, cb_conf)
+        coords[index] = atom.xyz
+        confidence[index] = atom.b_factor
+    # FoldQC accepts percentage or fractional structure confidence. Normalize once,
+    # consistently with structure_plddt, then expose the published 0–100 scale.
+    for values in (ca_conf, cb_conf):
+        fractional = np.isfinite(values) & (values <= 1.5)
+        values[fractional] *= 100.0
+        values[(values < 0) | (values > 100)] = np.nan
+    for token in token_map:
+        if token.res_name.upper() == "GLY":
+            cb[token.token_idx] = ca[token.token_idx]
+            cb_conf[token.token_idx] = ca_conf[token.token_idx]
+    return StructureGeometry(ca, cb, ca_conf, cb_conf, mask)
 
 
 @dataclass(frozen=True)
@@ -39,6 +146,7 @@ class StructureIndex:
     atom_count: int
     atom_to_token: tuple[int | None, ...]
     structure_plddt: np.ndarray
+    geometry: StructureGeometry | None = None
 
     def __post_init__(self) -> None:
         path = Path(self.path)
@@ -56,6 +164,10 @@ class StructureIndex:
             raise ValueError(
                 "StructureIndex structure pLDDT must contain one value per token."
             )
+        if self.geometry is not None and len(self.geometry.protein_mask) != len(
+            self.token_map
+        ):
+            raise ValueError("Structure geometry must match the canonical token map.")
         if np.isinf(values).any():
             raise ValueError(
                 "StructureIndex structure pLDDT must not contain infinity."
@@ -104,6 +216,7 @@ class StructureIndex:
             atom_count=len(atoms),
             atom_to_token=atom_to_token,
             structure_plddt=structure_plddt,
+            geometry=_geometry(atoms, token_map, atom_to_token),
         )
 
     def collapse_atom_plddt(self, atom_plddt: np.ndarray) -> np.ndarray:
@@ -161,15 +274,36 @@ def _parse_cif_atoms(handle: TextIO) -> list[_AtomRecord]:
             parts = shlex.split(stripped, comments=False, posix=True)
         except ValueError:
             continue
-        if len(parts) <= max(col.values()):
-            continue
         res_name_col = col.get("auth_comp_id", col.get("label_comp_id"))
         if res_name_col is None:
             continue
+        # Some Boltz exports omit trailing, unused fields such as the model
+        # number. Keep these atom rows when their identity fields are present;
+        # missing optional coordinates/confidence remain explicitly undefined.
+        required_columns = (
+            col["group_PDB"],
+            col["label_atom_id"],
+            col["auth_seq_id"],
+            col["auth_asym_id"],
+            res_name_col,
+        )
+        if len(parts) <= max(required_columns):
+            continue
         b_col = col.get("B_iso_or_equiv")
-        b_factor = float(parts[b_col]) if b_col is not None else np.nan
+        try:
+            b_factor = (
+                float(parts[b_col])
+                if b_col is not None and b_col < len(parts)
+                else np.nan
+            )
+        except ValueError:
+            b_factor = np.nan
         insertion_col = col.get("pdbx_PDB_ins_code")
-        insertion_code = parts[insertion_col] if insertion_col is not None else ""
+        insertion_code = (
+            parts[insertion_col]
+            if insertion_col is not None and insertion_col < len(parts)
+            else ""
+        )
         element_col = col.get("type_symbol")
         atoms.append(
             _AtomRecord(
@@ -179,7 +313,12 @@ def _parse_cif_atoms(handle: TextIO) -> list[_AtomRecord]:
                 residue_id=ResidueId(int(parts[col["auth_seq_id"]]), insertion_code),
                 chain_id=parts[col["auth_asym_id"]],
                 b_factor=b_factor,
-                element=parts[element_col] if element_col is not None else "",
+                element=parts[element_col]
+                if element_col is not None and element_col < len(parts)
+                else "",
+                xyz=_coordinate(
+                    parts, (col.get("Cartn_x"), col.get("Cartn_y"), col.get("Cartn_z"))
+                ),
             )
         )
     return atoms
@@ -210,6 +349,7 @@ def _parse_pdb_atoms(handle: TextIO) -> list[_AtomRecord]:
                 chain_id=raw[21:22].strip(),
                 b_factor=b_factor,
                 element=raw[76:78].strip(),
+                xyz=_coordinate([raw[30:38], raw[38:46], raw[46:54]], (0, 1, 2)),
             )
         )
     return atoms

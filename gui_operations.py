@@ -10,6 +10,7 @@ from .gui_services import (
     JobHandlePort,
     OperationKind,
     OperationLease,
+    OperationStateObserver,
 )
 from .presentation import PresentationPort, ProgressRequest
 
@@ -27,6 +28,15 @@ class GuiOperationCoordinator:
         self._generation: int = 0
         self._active: OperationLease | None = None
         self._handle: JobHandlePort | None = None
+        self._observers: list[OperationStateObserver] = []
+
+    def observe(self, observer: OperationStateObserver) -> None:
+        self._observers.append(observer)
+
+    def _render_busy(self, busy: bool) -> None:
+        self._view.set_busy(BusyViewState(busy, not busy))
+        for observer in self._observers:
+            observer.operation_busy_changed(busy)
 
     @property
     def is_busy(self) -> bool:
@@ -56,7 +66,7 @@ class GuiOperationCoordinator:
         lease = OperationLease(self._generation, kind)
         self._active = lease
         self._handle = None
-        self._view.set_busy(BusyViewState(True, False))
+        self._render_busy(True)
         cancel_callback = None
         if cancellable:
 
@@ -99,7 +109,7 @@ class GuiOperationCoordinator:
         self._presenter.finish_progress(self._progress_id(lease))
         self._active = None
         self._handle = None
-        self._view.set_busy(BusyViewState(False, True))
+        self._render_busy(False)
         return True
 
     def abandon(self) -> None:
@@ -113,4 +123,4 @@ class GuiOperationCoordinator:
         self._presenter.finish_progress(self._progress_id(lease))
         self._active = None
         self._handle = None
-        self._view.set_busy(BusyViewState(False, True))
+        self._render_busy(False)

@@ -9,6 +9,7 @@ assembly and writing.
 from __future__ import annotations
 
 import csv
+import json
 from collections.abc import Iterable
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -16,12 +17,202 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from . import metrics
+from .interface_analysis import InterfaceReport
 
 if TYPE_CHECKING:
     from .loader_models import PredictionData, PredictionFiles
     from .token_map import TokenMap
 
 SCHEMA_VERSION = "2"
+
+INTERFACE_SCHEMA_VERSION = "1"
+INTERFACE_COLUMNS = (
+    "interface_schema_version",
+    "provider",
+    "prediction_name",
+    "input_path",
+    "target_name",
+    "model_rank",
+    "model_label",
+    "structure_path",
+    "scope",
+    "chain_a",
+    "partner_chains",
+    "metric_key",
+    "metric_label",
+    "value_units",
+    "value_semantics",
+    "implementation",
+    "implementation_revision",
+    "citation",
+    "parameters",
+    "direction",
+    "aggregation",
+    "confidence_source",
+    "value",
+    "status",
+    "reason",
+    "counts",
+    "interface_plddt",
+    "contributors_a",
+    "contributors_b",
+    "n_models",
+    "member_ranks",
+    "residue_identities",
+)
+
+
+def interface_report_rows(report: InterfaceReport) -> list[dict[str, object]]:
+    """Complete snapshot export, independent of UI filtering, sorting or tab."""
+    rows: list[dict[str, object]] = []
+    base: dict[str, object] = {
+        "interface_schema_version": INTERFACE_SCHEMA_VERSION,
+        "provider": report.provider,
+        "prediction_name": report.prediction_name,
+        "input_path": report.input_path,
+        "target_name": report.target_name,
+    }
+
+    def metadata(key: str) -> dict[str, object]:
+        spec = metrics.METRICS.require(key)
+        definition = spec.interface
+        if definition is None:
+            raise ValueError("Interface export requires an interface metric.")
+        return {
+            "metric_key": key,
+            "metric_label": spec.label,
+            "scope": spec.result_scope,
+            "value_units": spec.value_unit,
+            "value_semantics": spec.value_semantics,
+            "implementation": definition.implementation,
+            "implementation_revision": definition.revision,
+            "citation": definition.citation,
+        }
+
+    for model in report.models:
+
+        def identities(indices: tuple[int, ...]) -> str:
+            return json.dumps(
+                [
+                    {
+                        "chain_id": model.token_map[i].chain_id,
+                        "residue_id": model.token_map[i].resi,
+                        "res_name": model.token_map[i].res_name,
+                        "token_index": i,
+                    }
+                    for i in indices
+                ],
+                ensure_ascii=False,
+            )
+
+        for score in model.scores:
+            spec = metrics.METRICS.require(score.metric_key)
+            assert spec.interface is not None
+            common = (
+                base
+                | metadata(score.metric_key)
+                | {
+                    "model_rank": model.rank,
+                    "model_label": model.label,
+                    "structure_path": model.structure_path,
+                    "chain_a": score.chain_a,
+                    "partner_chains": json.dumps(score.partners),
+                    "parameters": json.dumps(dict(score.parameters)),
+                    "confidence_source": score.confidence_source,
+                    "status": score.status,
+                    "reason": score.reason,
+                    "counts": json.dumps(dict(score.counts)),
+                    "interface_plddt": ""
+                    if score.interface_plddt is None
+                    else score.interface_plddt,
+                    "contributors_a": identities(score.support_a),
+                    "contributors_b": identities(score.support_b),
+                    "n_models": int(score.value is not None),
+                    "member_ranks": json.dumps([model.rank]),
+                }
+            )
+            rows.append(
+                common
+                | {
+                    "direction": "summary",
+                    "aggregation": spec.interface.aggregation,
+                    "value": "" if score.value is None else score.value,
+                }
+            )
+            for direction, value in (
+                ("a_to_b", score.forward),
+                ("b_to_a", score.reverse),
+            ):
+                if value is not None:
+                    rows.append(
+                        common
+                        | {
+                            "direction": direction,
+                            "aggregation": "directional",
+                            "value": value,
+                            "status": "ok",
+                            "reason": "" if score.value is None else score.reason,
+                            "n_models": 1,
+                        }
+                    )
+    for aggregate in report.aggregates:
+        # Parameters and input provenance are identical within this report/key.
+        exemplar = next(
+            score
+            for model in report.models
+            if model.rank in aggregate.ranks
+            for score in model.scores
+            if score.metric_key == aggregate.metric_key
+            and (
+                {score.chain_a, *score.partners}
+                == {aggregate.chain_a, *aggregate.partners}
+                if metrics.METRICS.require(score.metric_key).result_scope
+                == "chain_pair"
+                else score.chain_a == aggregate.chain_a
+                and set(score.partners) == set(aggregate.partners)
+            )
+        )
+        common = (
+            base
+            | metadata(aggregate.metric_key)
+            | {
+                "chain_a": aggregate.chain_a,
+                "partner_chains": json.dumps(aggregate.partners),
+                "parameters": json.dumps(dict(exemplar.parameters)),
+                "confidence_source": exemplar.confidence_source,
+                "status": "ok",
+                "n_models": aggregate.n_models,
+                "member_ranks": json.dumps(aggregate.ranks),
+                "residue_identities": json.dumps(aggregate.identities),
+                "direction": "summary",
+            }
+        )
+        for name, value in (
+            ("mean", aggregate.mean),
+            ("population_std", aggregate.std),
+            ("minimum", aggregate.minimum),
+            ("maximum", aggregate.maximum),
+        ):
+            rows.append(common | {"aggregation": name, "value": value})
+        for direction, value in (
+            ("a_to_b", aggregate.forward),
+            ("b_to_a", aggregate.reverse),
+        ):
+            if value is not None:
+                rows.append(
+                    common
+                    | {"direction": direction, "aggregation": "mean", "value": value}
+                )
+    return rows
+
+
+def write_interface_report(path: str | Path, report: InterfaceReport) -> None:
+    """Write the interface schema without changing the token export schema."""
+    with Path(path).open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.DictWriter(stream, fieldnames=INTERFACE_COLUMNS)
+        writer.writeheader()
+        writer.writerows(interface_report_rows(report))
+
 
 BASE_COLUMNS = [
     "export_schema_version",

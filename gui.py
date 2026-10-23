@@ -131,6 +131,8 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
         """Populate a provided metric combo while the widget registry is built."""
         current_group = None
         for spec in metrics.METRICS:
+            if spec.result_scope != "token":
+                continue
             group = spec.group
             if group != current_group:
                 combo.addItem(str(group), None)
@@ -160,6 +162,9 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
         self.widgets._afdb_combo.activated.connect(self._load_recent_afdb_accession)
         self.widgets._model_combo.currentIndexChanged.connect(self._model_changed)
         self.widgets._compare_models_btn.clicked.connect(self._compare_models)
+        self.widgets._interfaces_btn.clicked.connect(
+            self.services.analysis.open_interfaces
+        )
         self.widgets._obj_refresh_btn.clicked.connect(
             self.services.context.refresh_objects
         )

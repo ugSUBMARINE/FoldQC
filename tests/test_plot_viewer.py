@@ -411,6 +411,7 @@ def test_busy_state_disables_the_complete_editable_history_control() -> None:
         _model_combo=model_combo,
         _ensemble_btn=ensemble_button,
         _compare_models_btn=comparison_button,
+        _interfaces_btn=_EnabledWidget(),
     )
     view = QtDialogView(None, widgets)
 

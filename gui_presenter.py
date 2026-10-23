@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 from .compat import (
     AbstractItemViewNoEditTriggers,
@@ -17,6 +18,11 @@ from .compat import (
     UserRole,
     WindowCloseButtonHint,
 )
+from .interface_analysis import (
+    InterfaceReport,
+    InterfaceReportObserver,
+    InterfaceReportViewPort,
+)
 from .presentation import (
     ChoiceRequest,
     ModelComparisonRequest,
@@ -27,6 +33,9 @@ from .presentation import (
 )
 from .reports import sort_model_comparison_rows
 
+if TYPE_CHECKING:
+    from .interface_viewer import InterfaceDialog
+
 
 class QtPresenter:
     def __init__(self, dialog) -> None:
@@ -34,6 +43,34 @@ class QtPresenter:
         self._progress: dict[str, object] = {}
         self._progress_generation: dict[str, int] = {}
         self._plot_windows: list[object] = []
+        self._interface_window: InterfaceDialog | None = None
+
+    def show_interface_report(
+        self, report: InterfaceReport, observer: InterfaceReportObserver
+    ) -> InterfaceReportViewPort:
+        from .interface_viewer import InterfaceDialog
+
+        def forget() -> None:
+            self._interface_window = None
+
+        if self._interface_window is None:
+            self._interface_window = InterfaceDialog(
+                report, observer, self.dialog, forget
+            )
+        else:
+            self._interface_window.render(report, current=True)
+        self._interface_window.show()
+        self._interface_window.raise_()
+        self._interface_window.activateWindow()
+        return self._interface_window
+
+    def raise_interface_report(self) -> bool:
+        if self._interface_window is None:
+            return False
+        self._interface_window.show()
+        self._interface_window.raise_()
+        self._interface_window.activateWindow()
+        return True
 
     def present_notice(self, notice: Notice) -> None:
         title = notice.title
@@ -282,6 +319,8 @@ class QtPresenter:
                 )
 
     def close(self) -> None:
+        if self._interface_window is not None:
+            self._interface_window.close()
         for operation_id in tuple(self._progress):
             self.finish_progress(operation_id)
         for window in tuple(self._plot_windows):

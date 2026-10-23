@@ -251,3 +251,12 @@ class DataAcquisitionService:
         self._pending = None
         if pending is not None and self._operations.is_current(pending[0]):
             self._operations.abandon()
+
+    def cancel_action(self, action: DeferredAnalysisAction) -> None:
+        """Cancel only the exact captured action owned by the requesting service."""
+        pending = self._pending
+        if pending is not None and pending[1] is action:
+            lease = pending[0]
+            self._cancel()
+            if self._operations.is_current(lease):
+                self._operations.abandon()

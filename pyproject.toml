@@ -10,7 +10,7 @@ authors = [
 ]
 
 [dependency-groups]
-dev = ["mypy"]
+dev = ["mypy", "numpy<2.4"]
 test = ["matplotlib", "numpy", "pytest", "scikit-learn", "scipy"]
 
 [tool.pytest.ini_options]
@@ -41,6 +41,10 @@ files = [
   "gui_operations.py",
   "gui_services.py",
   "gui_state.py",
+  "interface_analysis.py",
+  "interface_compute.py",
+  "interface_report_data.py",
+  "interface_service.py",
   "lifecycle_support.py",
   "plot_coordinator.py",
   "plot_preparation.py",

@@ -18,10 +18,12 @@ from .gui_services import (
     ViewerPort,
 )
 from .gui_state import PluginState
+from .interface_service import InterfaceReportService
 from .loader import load_prediction_confidence_summaries
 from .loader_models import DataCapability, PlddtSource
 from .model_state import ModelState
 from .presentation import Notice, PresentationPort
+from .structure_index import protein_token_indices
 from .token_map import TokenMap
 
 TargetKind = Literal["none", "single", "ensemble_member", "ensemble_group"]
@@ -43,6 +45,7 @@ class ContextService:
         presenter: PresentationPort,
         view: DialogViewPort,
         metric_rows: dict[str, int],
+        interfaces: InterfaceReportService | None = None,
     ) -> None:
         self._state = state
         self._viewer = viewer
@@ -50,6 +53,7 @@ class ContextService:
         self._view = view
         self._metric_rows = dict(metric_rows)
         self._selection = ContextSelection()
+        self._interfaces = interfaces
 
     @property
     def selection(self) -> ContextSelection:
@@ -64,6 +68,8 @@ class ContextService:
         self._select_fallback_metric_for_hidden_group()
         state = self.derive_view_state()
         self._view.apply_context(state)
+        if self._interfaces is not None:
+            self._interfaces.refresh_current(self._selection.target_name)
         return state
 
     def refresh_objects(self, preferred_target: str | None = None) -> ContextViewState:
@@ -82,6 +88,8 @@ class ContextService:
         self._select_fallback_metric_for_hidden_group()
         state = self.derive_view_state(target_names=names)
         self._view.apply_context(state)
+        if self._interfaces is not None:
+            self._interfaces.refresh_current(self._selection.target_name)
         return state
 
     def _ordered_target_names(self, names: list[str]) -> list[str]:
@@ -245,6 +253,8 @@ class ContextService:
         )
         availability: list[tuple[str, bool]] = []
         for spec in metrics.METRICS:
+            if spec.result_scope != "token":
+                continue
             available = all(family_available[item] for item in spec.requirements)
             if spec.key == "chain_iptm":
                 available = available and has_chain_iptm
@@ -270,6 +280,8 @@ class ContextService:
             return ()
         visible: dict[str, bool] = {}
         for spec in metrics.METRICS:
+            if spec.result_scope != "token":
+                continue
             visible[spec.group] = (
                 visible.get(spec.group, False) or availability[spec.key]
             )
@@ -391,7 +403,25 @@ class ContextService:
             )
         )
         active = self._state.active_model_state
+        interface_enabled = bool(selection.target_name) and any(
+            len(
+                {
+                    model.token_map[i].chain_id
+                    for i in protein_token_indices(
+                        model.token_map, model.structure_index.geometry
+                    )
+                }
+            )
+            >= 2
+            for model in self.target_model_states()
+        )
         return ContextViewState(
+            interfaces_enabled=interface_enabled,
+            interfaces_tooltip=(
+                "Analyze published protein-interface scores using original prediction coordinates."
+                if interface_enabled
+                else "Select a loaded model with at least two protein chains."
+            ),
             metric_availability=self.metric_availability(),
             metric_group_visibility=self.metric_group_visibility(),
             metric_labels=self.metric_labels(),

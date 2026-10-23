@@ -1,0 +1,128 @@
+{
+  "description": "Four-residue asymmetric dimer. Expected values generated from pinned reference execution; separate CA/CB confidence, glycine CA fallback, three CA contacts versus two CB contacts.",
+  "references": {
+    "Dunbrack": "6174cf9e71cb1bd660cc805856a18c4871a6dec3",
+    "Kim": "9921567e186e0caa14cdbcd6bc51b9b02b36e36d",
+    "Zhu": "5866c6d45abc802217a618290f76390999a83461"
+  },
+  "chains": [
+    "A",
+    "A",
+    "B",
+    "B"
+  ],
+  "residues": [
+    "ALA",
+    "GLY",
+    "ALA",
+    "ALA"
+  ],
+  "ca": [
+    [
+      0,
+      0,
+      0
+    ],
+    [
+      5,
+      0,
+      0
+    ],
+    [
+      0,
+      4,
+      0
+    ],
+    [
+      10,
+      4,
+      0
+    ]
+  ],
+  "cb": [
+    [
+      0,
+      0,
+      1
+    ],
+    [
+      5,
+      0,
+      0
+    ],
+    [
+      0,
+      5,
+      1
+    ],
+    [
+      20,
+      4,
+      1
+    ]
+  ],
+  "ca_plddt": [
+    70,
+    80,
+    90,
+    100
+  ],
+  "cb_plddt": [
+    50,
+    80,
+    60,
+    95
+  ],
+  "pae": [
+    [
+      0,
+      0,
+      2,
+      12
+    ],
+    [
+      0,
+      0,
+      6,
+      14
+    ],
+    [
+      1,
+      4,
+      0,
+      0
+    ],
+    [
+      12,
+      20,
+      0,
+      0
+    ]
+  ],
+  "expected": {
+    "ipsae_10_ab": 0.2,
+    "ipsae_10_ba": 0.27941176470588236,
+    "lis_kim_ab": 0.4444444444444445,
+    "lis_kim_ba": 0.5277777777777778,
+    "lis_kim_mean": 0.48611111111111116,
+    "lis_dunbrack_max": 0.7916666666666666,
+    "clis_mean": 0.7291666666666667,
+    "ilis": 0.5953620902598002,
+    "pdockq": 0.018697291271682098,
+    "pdockq2_ab": 0.12168657383901992,
+    "pdockq2_ba": 0.16729895997885227,
+    "zhu_a": 0.1095086965595092,
+    "zhu_b": 0.23244030614069927,
+    "zhu_empty": 0.007347788261141951
+  },
+  "generation": {
+    "Dunbrack": "Executed unmodified ipsae.py with synthetic AF3 CIF/full_data JSON; captured in-memory asymmetric ipSAE, LIS and pDockQ dictionaries, avoiding rounded text output. LIS max explicitly applied to directional dictionary; upstream pair-summary row uses mean.",
+    "Kim": "Called unmodified analyze_single_model on synthetic PDB and canonical PAE; captured symmetrized LIS/cLIS/iLIS. Directional LIS uses unmodified transform_pae_matrix and its inclusive mask.",
+    "Zhu": "Executed unmodified retrieve_IFplddt, retrieve_IFPAEinter and sigmoid functions extracted with Python AST. Minimal atom/residue/chain adapters expose exactly the coordinate and B-factor operations used by those functions; no FoldQC kernel involved.",
+    "source_sha256": {
+      "Dunbrack": "10cf9b08c68c91e06cb28526cf2026f47a3980c9048fd3226d13e3304eaf1c27",
+      "Kim": "885bdb8e5182c2c1f9306ee7eae1c67c885bef1332c5df7016d9ab1876ece6b7",
+      "Zhu": "bcf70044194af237a6df083ca9876c93e41c12986c3e3a1c8b915ace4f4c3502"
+    }
+  }
+}

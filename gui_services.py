@@ -358,6 +358,10 @@ class OperationCoordinatorPort(Protocol):
     def abandon(self) -> None: ...
 
 
+class OperationStateObserver(Protocol):
+    def operation_busy_changed(self, busy: bool) -> None: ...
+
+
 DataAcquisitionStatus = Literal["ready", "stale", "cancelled", "failed"]
 
 
@@ -404,6 +408,8 @@ class ContextViewState:
     """Complete contextual control state rendered by ``DialogViewPort``."""
 
     metric_availability: tuple[tuple[int, bool], ...] = ()
+    interfaces_enabled: bool = False
+    interfaces_tooltip: str = "Select a model with at least two protein chains."
     metric_group_visibility: tuple[tuple[str, bool], ...] = ()
     metric_labels: tuple[tuple[int, str], ...] = ()
     selected_metric_key: str | None = None

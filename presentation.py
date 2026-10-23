@@ -6,6 +6,12 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal, Protocol, runtime_checkable
 
+from .interface_analysis import (
+    InterfaceReport,
+    InterfaceReportObserver,
+    InterfaceReportViewPort,
+)
+
 NoticeSeverity = Literal["information", "warning", "error"]
 ChoiceRole = Literal["accept", "reject", "destructive", "help"]
 
@@ -135,6 +141,14 @@ class ModelComparisonRequest:
 
 @runtime_checkable
 class PresentationPort(Protocol):
+    def show_interface_report(
+        self,
+        report: InterfaceReport,
+        observer: InterfaceReportObserver,
+    ) -> InterfaceReportViewPort: ...
+
+    def raise_interface_report(self) -> bool: ...
+
     def present_notice(self, notice: Notice) -> None: ...
 
     def choose(self, request: ChoiceRequest) -> str | None: ...

@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
+from threading import Event
 
 from . import export as export_module
 from .analysis import (
@@ -34,6 +35,13 @@ from .gui_services import (
     OperationLease,
 )
 from .gui_state import PluginState
+from .interface_analysis import (
+    InterfaceAnalysisOptions,
+    InterfaceReport,
+    InterfaceSelectionRequest,
+)
+from .interface_compute import aggregate_interface_models, compute_interface_model
+from .interface_service import InterfaceReportService
 from .plot_coordinator import PlotCoordinator
 from .presentation import Notice, PresentationPort
 
@@ -46,6 +54,19 @@ class _PendingMetricComputation:
     lease: OperationLease
     action: DeferredAnalysisAction
     resolved: ResolvedAnalysis
+
+
+@dataclass(frozen=True)
+class _PendingInterfaces:
+    lease: OperationLease
+    resolved: ResolvedAnalysis
+    cancelled: Event
+
+
+@dataclass(frozen=True)
+class _InterfaceJobResult:
+    source: ResolvedAnalysis
+    report: InterfaceReport
 
 
 class AnalysisCoordinator(DataLoadObserver):
@@ -65,6 +86,7 @@ class AnalysisCoordinator(DataLoadObserver):
         accepted_overlap_warnings: set[tuple[str, str]],
         job_runner: JobRunner,
         operations: OperationCoordinatorPort,
+        interfaces: InterfaceReportService | None = None,
     ) -> None:
         self._state = state
         self._presenter = presenter
@@ -79,6 +101,8 @@ class AnalysisCoordinator(DataLoadObserver):
         self._job_runner = job_runner
         self._operations = operations
         self._resolver = AnalysisResolver()
+        self._interfaces = interfaces
+        self._pending_interfaces: _PendingInterfaces | None = None
         self._ui_revision: int = 0
         self._pending: DeferredAnalysisAction | None = None
         self._pending_computation: _PendingMetricComputation | None = None
@@ -89,6 +113,61 @@ class AnalysisCoordinator(DataLoadObserver):
 
     def invalidate_ui(self, *_args: object) -> None:
         self._ui_revision += 1
+        if self._interfaces is not None:
+            self._interfaces.refresh_current()
+
+    def open_interfaces(self) -> None:
+        if self._presenter.raise_interface_report():
+            if self._interfaces is not None:
+                self._interfaces.refresh_current()
+            return
+        self.analyze_current_interfaces(InterfaceAnalysisOptions())
+
+    def analyze_current_interfaces(self, options: InterfaceAnalysisOptions) -> None:
+        if not self._context.selection.target_name:
+            self._presenter.present_notice(
+                Notice(
+                    "interface_target_required",
+                    "Select a loaded prediction target first.",
+                )
+            )
+            return
+        self.submit(
+            DeferredAnalysisAction(
+                AnalysisRequest(
+                    "interfaces",
+                    self._context.selection.target_name,
+                    ui_revision=self._ui_revision,
+                    interface_options=options,
+                )
+            )
+        )
+
+    def select_interface_contributors(self, request: InterfaceSelectionRequest) -> None:
+        if self._interfaces is not None:
+            self._interfaces.select(request)
+
+    def clear_interface_selection(self) -> None:
+        if self._interfaces is not None:
+            self._interfaces.clear_selection()
+
+    def export_interface_report(self, path: str) -> None:
+        if self._interfaces is not None:
+            self._interfaces.export(path)
+
+    def interface_window_closed(self) -> None:
+        pending = self._pending_interfaces
+        self._pending_interfaces = None
+        if pending is not None:
+            pending.cancelled.set()
+            if self._operations.is_current(pending.lease):
+                self._operations.abandon()
+        if self._pending is not None and self._pending.request.action == "interfaces":
+            action = self._pending
+            self._pending = None
+            self._data.cancel_action(action)
+        if self._interfaces is not None:
+            self._interfaces.window_closed()
 
     def resolve_and_plan(
         self, request: AnalysisRequest
@@ -163,6 +242,9 @@ class AnalysisCoordinator(DataLoadObserver):
     def _execute(
         self, action: DeferredAnalysisAction, resolved: ResolvedAnalysis
     ) -> None:
+        if action.request.action == "interfaces":
+            self._start_interfaces(resolved)
+            return
         resolved = self._metric_computation.resolve_contexts(resolved)
         metric = resolved.metric_spec
         if metric is not None and metric.compute_in_background:
@@ -170,6 +252,145 @@ class AnalysisCoordinator(DataLoadObserver):
             return
         computed = self._metric_computation.compute(resolved)
         self._dispatch(action, resolved, computed)
+
+    def _start_interfaces(self, resolved: ResolvedAnalysis) -> None:
+        options = resolved.request.interface_options
+        if options is None or self._interfaces is None:
+            raise ValueError(
+                "Interface analysis requires captured options and a report service."
+            )
+        cancelled = Event()
+
+        def cancel() -> None:
+            cancelled.set()
+            self._pending_interfaces = None
+            if self._interfaces is not None:
+                self._interfaces.refresh_current()
+
+        lease = self._operations.begin(
+            "analysis",
+            title="FoldQC – Analyze interfaces",
+            label="Calculating published protein-interface scores…",
+            cancellable=True,
+            on_cancel=cancel,
+        )
+        if lease is None:
+            return
+        self._pending_interfaces = _PendingInterfaces(lease, resolved, cancelled)
+        self._interfaces.refresh_current()
+
+        def task(report_progress: Callable[[str], None]) -> _InterfaceJobResult:
+            def check() -> None:
+                if cancelled.is_set():
+                    raise InterruptedError("Interface analysis cancelled.")
+
+            models = []
+            for member in resolved.members:
+                check()
+                report_progress(f"Analyzing interfaces in {member.label}…")
+                model = member.model_state
+                models.append(
+                    compute_interface_model(
+                        model.structure_index,
+                        model.data.pae,
+                        model.data.confidence,
+                        options,
+                        rank=member.rank,
+                        label=member.label,
+                        object_name=member.obj_name,
+                        check_cancel=check,
+                    )
+                )
+            result = tuple(models)
+            files = resolved.prediction_files
+            report = InterfaceReport(
+                files.name,
+                files.provider.key,
+                files.provider.label,
+                str(files.input_path or files.pred_dir),
+                resolved.request.target_name,
+                options,
+                result,
+                aggregate_interface_models(result) if len(result) > 1 else (),
+            )
+            check()
+            return _InterfaceJobResult(resolved, report)
+
+        handle = self._job_runner.submit(
+            lease.request_id,
+            task,
+            self._interface_progress,
+            self._interface_result,
+            self._interface_error,
+        )
+        self._operations.attach(lease, handle)
+
+    def _interface_progress(self, request_id: int, label: str) -> None:
+        pending = self._pending_interfaces
+        if pending is not None and pending.lease.request_id == request_id:
+            self._operations.update(pending.lease, label)
+
+    def _interface_result(self, request_id: int, value: object) -> None:
+        pending = self._pending_interfaces
+        if (
+            pending is None
+            or pending.lease.request_id != request_id
+            or not self._operations.is_current(pending.lease)
+        ):
+            self._job_runner.dispose(value)
+            return
+        self._pending_interfaces = None
+        self._operations.finish(pending.lease)
+        if (
+            not isinstance(value, _InterfaceJobResult)
+            or value.source is not pending.resolved
+        ):
+            self._presenter.present_notice(
+                Notice(
+                    "interface_result_invalid",
+                    "Unexpected interface worker result.",
+                    severity="error",
+                )
+            )
+            return
+        if not value.source.validate_current(
+            self._state, ui_revision=self._ui_revision
+        ):
+            self._job_runner.dispose(value)
+            if self._interfaces is not None:
+                self._interfaces.refresh_current()
+            return
+        if self._interfaces is not None:
+            try:
+                self._interfaces.show(value.source, value.report, self)
+            except Exception as exc:
+                self._presenter.present_notice(
+                    Notice("interface_display_failed", str(exc), severity="error")
+                )
+
+    def _interface_error(self, request_id: int, failure: object) -> None:
+        pending = self._pending_interfaces
+        if (
+            pending is None
+            or pending.lease.request_id != request_id
+            or not self._operations.is_current(pending.lease)
+        ):
+            return
+        self._pending_interfaces = None
+        self._operations.finish(pending.lease)
+        if self._interfaces is not None:
+            self._interfaces.refresh_current()
+        if not pending.resolved.validate_current(
+            self._state, ui_revision=self._ui_revision
+        ):
+            return
+        self._presenter.present_notice(
+            Notice(
+                "interface_computation_failed",
+                str(getattr(failure, "message", failure)),
+                severity="error",
+            )
+        )
 
     def _start_metric_computation(
         self, action: DeferredAnalysisAction, resolved: ResolvedAnalysis
@@ -337,6 +558,7 @@ class AnalysisCoordinator(DataLoadObserver):
             self._presenter.show_plot(self._plots.prepare(resolved, computed))
 
     def close(self) -> None:
+        self.interface_window_closed()
         self._pending = None
         pending = self._pending_computation
         self._pending_computation = None

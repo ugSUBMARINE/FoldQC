@@ -488,3 +488,114 @@ binding pocket and interface confidence interpreted using the provider's
 definition. Low intra-ligand PAE supports a coherent internal arrangement but
 does not establish correct placement in the protein. A pTM value of 0.04 is a
 score, not a 4% probability that the prediction is correct.
+
+## Analyze interfaces
+
+**Interfaces** opens one non-modal **Analyze interfaces** report for the current model,
+selected ensemble member, or already-loaded ensemble. The action is independent
+of **Color by** and requires at least two protein chains in a loaded target.
+It does not load additional prediction ranks. Small molecules, nucleic acids,
+and modified residues represented as individual HETATM atom tokens are excluded;
+the report explains excluded modified-residue tokens without changing their
+canonical mapping.
+
+The report uses **original prediction coordinates and representative-atom
+confidence**, retained when the structure is first indexed. PyMOL alignment,
+coordinate transformations, and B-factor coloring do not alter these inputs.
+The report reads Cα or Cβ atom confidence where the reference requires it,
+including Cα for glycine, rather than substituting residue-averaged pLDDT.
+Fractional confidence is converted to the published 0–100 scale. Missing or
+ambiguous atoms/confidence produce **N/A with a reason**, not a zero score.
+
+**Chain pairs** lists all unordered protein-chain pairs, including pairs with
+no contacts. Click a score for its definition, parameters, direction-specific
+values, confidence source, support counts, contributors, and citation. **Chain
+versus rest** presents original Zhu pDockQ2 for each chain against all other
+protein chains. Original scores also appear in dimer pair details.
+
+| Score | Calculation and scope |
+|---|---|
+| ipSAE — Dunbrack (max) | For each alignment residue, retain opposite-chain residues with PAE strictly below the preset (10 Å by default, or 15 Å). Set `d0 = max(1, 1.24*cbrt(max(n,26)-15)-1.8)` from the number `n` of qualifying residues. Average `1/(1+(PAE/d0)^2)` over that set, then take the maximum over alignment residues. Retain both chain directions and display their maximum. No geometric distance filter. |
+| LIS — Kim | Mean `1-PAE/12` over PAE ≤12 Å in each direction; average the two directional means. Cells exactly at the cutoff contribute zero but remain in the denominator. |
+| LIS — Dunbrack (max) | Same transformation, with a strict PAE <12 Å cutoff and maximum over directional means. This is a separate labeled implementation. |
+| cLIS — Kim | Kim LIS restricted to Cβ–Cβ contacts ≤8 Å (Cα for glycine), with a mean over directions. |
+| iLIS — Kim | `sqrt(LIS_Kim * cLIS_Kim)`, calculated after directional averaging. |
+| pDockQ — Bryant | Corrected sigmoid `0.724/(1+exp(-0.052*(x-152.611)))+0.018`, where `x = mean_interface_pLDDT * log10(contact_pair_count)`. Cβ contacts ≤8 Å (Cα for glycine); interface residues from both chains counted once each. Requires no PAE. |
+| pDockQ2 — Dunbrack (max) | Pairwise Cβ contacts ≤8 Å (Cα for glycine), unique interface-residue pLDDT pooled across both chains, multiplied by directional mean `1/(1+(PAE/10)^2)`. Apply `1.31/(1+exp(-0.075*(x-84.733)))+0.005`; display the larger direction. No contacts returns zero. |
+| pDockQ2 — Zhu original | Chain versus all other protein chains, using Cα contacts ≤8 Å. Scored-chain Cα pLDDT is weighted by contact multiplicity; multiply by the mean transformed directional PAE over these contacts. Original sigmoid constants are `L=1.31034849`, `x0=84.7326239`, `k=0.0747157696`, `b=0.00501886443`. With no contacts the sigmoid baseline (~0.00735) remains. |
+| Pair ipTM — provider (max) | Existing normalized off-diagonal pair matrix only, with both directions retained and their maximum displayed. No diagonal pTM, global ipTM, or PAE-based reconstruction is substituted. |
+
+The numerical definitions are pinned to [Dunbrack/IPSAE
+6174cf9](https://github.com/DunbrackLab/IPSAE/blob/6174cf9e71cb1bd660cc805856a18c4871a6dec3/ipsae.py),
+[Kim/AFM-LIS
+9921567](https://github.com/flyark/AFM-LIS/blob/9921567e186e0caa14cdbcd6bc51b9b02b36e36d/lis.py),
+and [Zhu/AFM-Benchmark
+5866c6d](https://gitlab.com/ElofssonLab/afm-benchmark/-/blob/5866c6d45abc802217a618290f76390999a83461/src/pdockq2.py).
+FoldQC implements the equations locally; no upstream scripts run at analysis time.
+For LIS — Dunbrack, FoldQC explicitly takes the maximum of the reference's
+directional LIS values as requested for this report. The pinned script itself
+writes their mean in its pair-summary row; the `(max)` label and CSV aggregation
+field distinguish FoldQC's presentation choice.
+
+The **Heatmap** shows one model or the ensemble mean, with canonical chain
+order, a fixed viridis 0–1 scale, an undefined diagonal, and grey N/A cells.
+Directional views have alignment chains in rows and scored chains in columns.
+Clicking a cell selects the corresponding table row without modifying PyMOL.
+For incompatible ensemble residue identities there is no single heatmap value.
+
+**Select contributors** creates or replaces the FoldQC-owned
+`foldqc_interface` selection for both sides, A, or B/rest. It selects the chosen
+metric's actual low-PAE or geometric/contact-filtered contributors, without
+changing colors, B-factors, camera, or object visibility. Selection is disabled
+for ensemble aggregate rows. **Clear selection** and closing the window remove
+only the selection created by this report.
+
+Ensembles retain member rows plus means, population standard deviations,
+minima, maxima, and contributing-model counts. Statistics combine per-model
+scores only for matching chain/residue identity sets; mismatched members remain
+separate. Missing PAE does not prevent geometry-only pDockQ, while advertised
+data that fail loading or validation fail the refresh atomically. PAE remains
+lazy and is loaded only when requested by analysis.
+
+The report is an explicit snapshot. Change the preset and press **Analyze
+current target** to refresh. The header records the preset used by the displayed
+results. Changing the main target does not automatically recalculate; stale
+snapshots remain readable/exportable but cannot select residues on replacement
+models. Failed/canceled refreshes leave the previous report intact. The window
+closes with the plugin.
+
+These are confidence/quality estimates, **not binding probabilities or affinity
+measurements**. The [ipSAE manuscript](https://doi.org/10.1101/2025.02.10.637595)
+discusses cutoff and short-interface sensitivity. The
+[iLIS manuscript](https://doi.org/10.64898/2026.04.14.718529) calibrates 0.223
+for top-model scores at a 10% false-positive rate using 774 positive PPIs
+(yeast/fly/human Y2H reference sets and ELM interactions) and 6,004 controls
+(random reference sets, GFP and Wingless controls). It is not a universal
+threshold, and ensemble means need different
+calibration. The [pDockQ2 paper](https://doi.org/10.1093/bioinformatics/btad424)
+estimates protein-interface quality, not interaction strength. FoldQC applies
+no automatic binder classification. Imported AFDB scalar summaries remain
+separate from locally calculated, explicitly scoped results.
+
+### Interface CSV schema
+
+**Export CSV** exports the complete snapshot, regardless of tab, sort order, or
+selected row. This is a separate schema (`interface_schema_version=1`); the
+existing token CSV schema remains unchanged. Each row contains one model/scope/
+metric/direction or one ensemble statistic.
+
+| Columns | Meaning |
+|---|---|
+| `provider`, `prediction_name`, `input_path`, `target_name` | Prediction provenance and captured analysis target. |
+| `model_rank`, `model_label`, `structure_path` | Member provenance; empty for ensemble aggregates. |
+| `scope`, `chain_a`, `partner_chains` | Chain pair or chain-versus-rest; partner chain IDs are a JSON array. |
+| `metric_key`, `metric_label`, `value_units`, `value_semantics` | Stable implementation-specific metric identity; dimensionless `score` (or native `iptm`), higher is better. |
+| `implementation`, `implementation_revision`, `citation`, `parameters` | Source revision, scientific citation, and JSON parameter mapping. |
+| `direction`, `aggregation`, `confidence_source` | Summary or A→B/B→A direction; metric aggregation or ensemble statistic; confidence input provenance. |
+| `value`, `status`, `reason` | Numeric value or empty field; `ok`/`unavailable`; explanatory text including special no-contact behavior. |
+| `counts`, `interface_plddt` | JSON support/contact counts and representative-atom interface confidence. LIA/cLIA combined counts sum directional qualifying cells, so a pair qualifying both ways contributes twice. |
+| `contributors_a`, `contributors_b` | JSON arrays of token index, chain ID, lossless residue ID (including insertion code), and residue name. |
+| `n_models`, `member_ranks`, `residue_identities` | Coverage and JSON member ranks; aggregate identity groups. Ensemble rows provide mean, population standard deviation, minimum, maximum, and directional means where defined. |
+
+No palette, color range, or PyMOL selection expression is exported. Coloring and
+per-residue plots are not part of this interface window release.

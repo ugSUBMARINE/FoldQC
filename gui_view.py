@@ -21,6 +21,8 @@ class QtDialogView:
         self._ensemble_enabled = False
         self._ensemble_tooltip = "Load a prediction with at least two models first."
         self._comparison_enabled = False
+        self._interfaces_enabled = False
+        self._interfaces_tooltip = "Select a model with at least two protein chains."
         self._comparison_tooltip = "Load a prediction with at least two models first."
         self._preview_details_text = ""
 
@@ -178,6 +180,9 @@ class QtDialogView:
         self._comparison_enabled = state.model_comparison_enabled
         self._comparison_tooltip = state.model_comparison_tooltip
         self._render_comparison_button()
+        self._interfaces_enabled = state.interfaces_enabled
+        self._interfaces_tooltip = state.interfaces_tooltip
+        self._render_interfaces_button()
         if state.statistics_text is not None:
             self.widgets._stats_browser.setPlainText(state.statistics_text)
 
@@ -256,6 +261,16 @@ class QtDialogView:
             widget.setEnabled(enabled)
         self._render_ensemble_button()
         self._render_comparison_button()
+        self._render_interfaces_button()
+
+    def _render_interfaces_button(self) -> None:
+        button = self.widgets._interfaces_btn
+        button.setEnabled(self._interfaces_enabled and not self._busy)
+        button.setToolTip(
+            "Interface analysis is unavailable while another task is running."
+            if self._busy
+            else self._interfaces_tooltip
+        )
 
     def set_statistics_selection(self, state: StatisticsSelectionViewState) -> None:
         spin = self.widgets._stats_threshold_spin

@@ -141,6 +141,7 @@ class GuiWidgets:
     _afdb_combo: QtWidgets.QComboBox
     _afdb_edit: QtWidgets.QLineEdit
     _apply_btn: QtWidgets.QPushButton
+    _interfaces_btn: QtWidgets.QPushButton
     _compare_models_btn: QtWidgets.QPushButton
     _conf_browser: QtWidgets.QTextBrowser
     _cutoff_spin: QtWidgets.QDoubleSpinBox
@@ -183,6 +184,7 @@ class GuiWidgets:
             _afdb_combo=dialog._afdb_combo,
             _afdb_edit=dialog._afdb_edit,
             _apply_btn=dialog._apply_btn,
+            _interfaces_btn=dialog._interfaces_btn,
             _compare_models_btn=dialog._compare_models_btn,
             _conf_browser=dialog._conf_browser,
             _cutoff_spin=dialog._cutoff_spin,
@@ -481,6 +483,8 @@ def build_dialog_ui(dialog) -> GuiWidgets:
     analysis_actions.setSpacing(BASE_LAYOUT_SPACING)
     analysis_actions.addStretch(1)
     self._apply_btn = FixedMainButton("Apply Coloring")
+    self._interfaces_btn = FixedMainButton("Interfaces")
+    self._interfaces_btn.setEnabled(False)
     self._plot_btn = FixedMainButton("Plot")
     self._plot_menu = QtWidgets.QMenu(self._plot_btn)
     self._plot_actions = build_plot_actions(self._plot_menu)
@@ -490,7 +494,7 @@ def build_dialog_ui(dialog) -> GuiWidgets:
     self._plot_btn.setToolTip(
         "Open an available plot for the current target and inputs."
     )
-    for button in (self._apply_btn, self._plot_btn):
+    for button in (self._apply_btn, self._plot_btn, self._interfaces_btn):
         dialog._disable_default_button(button)
         analysis_actions.addWidget(button)
     prop_form.addRow(analysis_actions)

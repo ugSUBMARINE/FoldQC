@@ -29,11 +29,24 @@ PlotType = Literal[
     "ensemble_site_summary",
 ]
 MatrixSource = Literal["pae", "pde", "contact_probs", "chain_iptm"]
-ValueUnit = Literal["plddt", "angstrom", "probability", "iptm", "ptm", "label"]
+ValueUnit = Literal["plddt", "angstrom", "probability", "iptm", "ptm", "label", "score"]
 ValueSemantics = Literal["higher_is_better", "lower_is_better", "categorical_label"]
 AggregateKind = Literal[
     "single_model", "ensemble_mean", "ensemble_std", "ensemble_rmsd"
 ]
+ResultScope = Literal["token", "chain_pair", "chain_rest"]
+
+
+@dataclass(frozen=True)
+class InterfaceDefinition:
+    implementation: str
+    revision: str
+    citation: str
+    aggregation: Literal["max", "mean", "symmetric", "directional", "geometric_mean"]
+    support: Literal["pae", "cb_pae", "cb", "ca", "none"]
+    parameters: tuple[tuple[str, str], ...] = ()
+
+
 DEFAULT_METRIC_KEY = "plddt_class"
 _PREVIEW_FIELDS = frozenset({"target_text", "ref_sel", "cutoff"})
 _DATA_CAPABILITIES = frozenset({"plddt", "pae", "pde", "contact_probs"})
@@ -51,7 +64,9 @@ _PLOT_TYPES = frozenset(
     }
 )
 _MATRIX_SOURCES = frozenset({"pae", "pde", "contact_probs", "chain_iptm"})
-_VALUE_UNITS = frozenset({"plddt", "angstrom", "probability", "iptm", "ptm", "label"})
+_VALUE_UNITS = frozenset(
+    {"plddt", "angstrom", "probability", "iptm", "ptm", "label", "score"}
+)
 _VALUE_SEMANTICS = frozenset(
     {"higher_is_better", "lower_is_better", "categorical_label"}
 )
@@ -93,6 +108,8 @@ class MetricSpec:
     aggregate_kind: AggregateKind = "single_model"
     dependency_keys: tuple[DependencyKey, ...] = ()
     compute_in_background: bool = False
+    result_scope: ResultScope = "token"
+    interface: InterfaceDefinition | None = None
 
     @property
     def load_capabilities(self) -> frozenset[DataCapability]:
@@ -191,6 +208,10 @@ class PlotRegistry(Sequence[PlotSpec]):
 def _validate_metric_specs(specs: tuple[MetricSpec, ...]) -> dict[str, MetricSpec]:
     by_key: dict[str, MetricSpec] = {}
     for spec in specs:
+        if spec.result_scope not in {"token", "chain_pair", "chain_rest"}:
+            raise ValueError(f"Unknown result scope: {spec.result_scope}")
+        if (spec.result_scope == "token") != (spec.interface is None):
+            raise ValueError("Interface metadata must agree with result scope.")
         if not spec.key:
             raise ValueError("Metric keys must not be empty.")
         if spec.key in by_key:
@@ -785,6 +806,182 @@ METRICS = MetricRegistry(
         ),
     )
 )
+
+_DUNBRACK = "6174cf9e71cb1bd660cc805856a18c4871a6dec3"
+_KIM = "9921567e186e0caa14cdbcd6bc51b9b02b36e36d"
+_ZHU = "5866c6d45abc802217a618290f76390999a83461"
+
+
+def _interface_specs() -> tuple[MetricSpec, ...]:
+    definitions = (
+        (
+            "interface_ipsae",
+            "ipSAE — Dunbrack",
+            "Dunbrack",
+            _DUNBRACK,
+            "https://doi.org/10.1101/2025.02.10.637595",
+            "max",
+            "pae",
+            "pae",
+            "chain_pair",
+        ),
+        (
+            "interface_lis_kim",
+            "LIS — Kim",
+            "Kim",
+            _KIM,
+            "https://doi.org/10.1101/2024.02.19.580970",
+            "mean",
+            "pae",
+            "pae",
+            "chain_pair",
+        ),
+        (
+            "interface_lis_dunbrack",
+            "LIS — Dunbrack",
+            "Dunbrack",
+            _DUNBRACK,
+            "https://doi.org/10.1101/2024.02.19.580970",
+            "max",
+            "pae",
+            "pae",
+            "chain_pair",
+        ),
+        (
+            "interface_clis",
+            "cLIS — Kim",
+            "Kim",
+            _KIM,
+            "https://doi.org/10.64898/2026.04.14.718529",
+            "mean",
+            "cb_pae",
+            "pae",
+            "chain_pair",
+        ),
+        (
+            "interface_ilis",
+            "iLIS — Kim",
+            "Kim",
+            _KIM,
+            "https://doi.org/10.64898/2026.04.14.718529",
+            "geometric_mean",
+            "cb_pae",
+            "pae",
+            "chain_pair",
+        ),
+        (
+            "interface_pdockq",
+            "pDockQ — Bryant",
+            "Bryant (corrected)",
+            _DUNBRACK,
+            "https://doi.org/10.1038/s41467-022-28865-w",
+            "symmetric",
+            "cb",
+            "",
+            "chain_pair",
+        ),
+        (
+            "interface_pdockq2_dunbrack",
+            "pDockQ2 — Dunbrack",
+            "Dunbrack",
+            _DUNBRACK,
+            "https://doi.org/10.1093/bioinformatics/btad424",
+            "max",
+            "cb",
+            "pae",
+            "chain_pair",
+        ),
+        (
+            "interface_pdockq2_zhu",
+            "pDockQ2 — Zhu original",
+            "Zhu original",
+            _ZHU,
+            "https://doi.org/10.1093/bioinformatics/btad424",
+            "directional",
+            "ca",
+            "pae",
+            "chain_rest",
+        ),
+        (
+            "interface_iptm",
+            "Pair ipTM — provider",
+            "provider",
+            "provider-normalized",
+            "Provider confidence output; canonical alignment→scored axes",
+            "max",
+            "none",
+            "confidence",
+            "chain_pair",
+        ),
+    )
+    specs = []
+    for (
+        key,
+        label,
+        implementation,
+        revision,
+        citation,
+        aggregation,
+        support,
+        requirement,
+        scope,
+    ) in definitions:
+        params = (
+            (("pae_cutoff_angstrom", "10 or 15; strict"),)
+            if key == "interface_ipsae"
+            else (
+                (
+                    "pae_cutoff_angstrom",
+                    "12; strict"
+                    if key == "interface_lis_dunbrack"
+                    else "12; inclusive",
+                ),
+            )
+            if "lis" in key
+            else ()
+        )
+        if support in {"cb", "ca", "cb_pae"}:
+            params += (("contact_cutoff_angstrom", "8; inclusive"),)
+        if key == "interface_ipsae":
+            details = "For each alignment residue, keep partner residues with PAE below the preset, recalculate the TM distance scale from their count (minimum 1 Å), and average 1/(1+(PAE/d0)²). Report the largest residue score in each direction, then their maximum. There is no geometric contact filter. Short interfaces can score strictly; compare the two directions and PAE map."
+        elif key == "interface_lis_kim":
+            details = "Average 1−PAE/12 over interchain pairs with PAE ≤12 Å independently in each direction, then average the two scores. A pair exactly at 12 Å contributes zero and remains in the denominator. LIA is a residue-pair count, not surface area."
+        elif key == "interface_lis_dunbrack":
+            details = "Average 1−PAE/12 over interchain pairs with PAE strictly <12 Å independently in each direction, then report their maximum. This differs from Kim's inclusive cutoff and directional mean. The maximum is FoldQC's explicitly labeled aggregation of the Dunbrack directional values; the pinned upstream script writes their mean in its pair-summary row."
+        elif key in {"interface_clis", "interface_ilis"}:
+            details = "cLIS is Kim LIS restricted to physical Cβ contacts ≤8 Å (Cα for glycine); average directional scores. iLIS is sqrt(LIS × cLIS), using the already-averaged components. The published iLIS threshold 0.223 is a top-model threshold at 10% false-positive rate, benchmarked on 774 positive PPIs (yeast/fly/human Y2H reference sets and ELM interactions) and 6,004 controls (random reference sets, GFP and Wingless controls). It is not calibrated for ensemble means, a universal classification, or a binding probability."
+        elif key == "interface_pdockq":
+            details = "Published corrected Bryant sigmoid of mean interface pLDDT × log10(number of Cβ contact pairs ≤8 Å; Cα for glycine). Interface residues from both chains contribute once each. No PAE required. Calibrated on protein heterodimers; interface size and local confidence alone can overestimate docking quality."
+        elif key == "interface_pdockq2_dunbrack":
+            details = "Pairwise Dunbrack implementation: Cβ contacts ≤8 Å (Cα for glycine), unique interface-residue pLDDT from both chains, and mean 1/(1+(PAE/10)²) over contacts in each direction. Apply the rounded published sigmoid and report the maximum. With no contacts, this implementation returns zero."
+        elif key == "interface_pdockq2_zhu":
+            details = "Original Zhu chain-versus-rest implementation: Cα contacts ≤8 Å to all other protein chains, scored-chain Cα pLDDT weighted by contact multiplicity, and mean 1/(1+(PAE/10)²). Apply the original full-precision sigmoid. With no contacts the small sigmoid baseline is retained. This is not a pairwise score in a multimer."
+        else:
+            details = "Imported normalized pair ipTM only: alignment/reference chain → scored chain. Report both off-diagonal directions and their maximum; diagonal pTM/self scores and global ipTM are never substituted. Provider definitions differ; compare within the same provider."
+        specs.append(
+            MetricSpec(
+                key,
+                label,
+                "Protein interfaces",
+                frozenset({requirement}) if requirement else frozenset(),
+                "iptm" if key == "interface_iptm" else "score",
+                "higher_is_better",
+                label,
+                "Analyzes protein interfaces in {target_text}.",
+                details
+                + " Confidence is not a measurement of binding affinity. Compare the same implementation, scope and parameters.",
+                plot_modes=frozenset(),
+                result_scope=scope,
+                interface=InterfaceDefinition(
+                    implementation, revision, citation, aggregation, support, params
+                ),
+            )
+        )
+    return tuple(specs)
+
+
+METRICS = MetricRegistry((*METRICS, *_interface_specs()))
+
 
 PLOTS = PlotRegistry(
     (

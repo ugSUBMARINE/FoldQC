@@ -101,6 +101,8 @@ def normalize_and_validate_prediction_data(
         if value is None:
             continue
         matrix = _validate_matrix(value, field, token_count)
+        if field == "pae" and (matrix < 0.0).any():
+            raise ValueError("Finite pae values must be nonnegative.")
         if field == "contact_probs":
             finite = matrix[np.isfinite(matrix)]
             if finite.size and ((finite < 0.0).any() or (finite > 1.0).any()):

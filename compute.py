@@ -170,7 +170,11 @@ _DISPATCH: dict[str, _Dispatch] = {
 
 def validate_dispatch_registry() -> None:
     """Fail fast when metric metadata and executable dispatch drift apart."""
-    expected = {spec.key for spec in metrics.METRICS if not spec.ensemble_level}
+    expected = {
+        spec.key
+        for spec in metrics.METRICS
+        if not spec.ensemble_level and spec.result_scope == "token"
+    }
     actual = set(_DISPATCH)
     missing = sorted(expected - actual)
     extra = sorted(actual - expected)

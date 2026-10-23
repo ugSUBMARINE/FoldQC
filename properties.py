@@ -11,12 +11,75 @@ metric is undefined (e.g. no predicted contact within the cutoff distance).
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 
 import numpy as np
 
 from .confidence import PredictionConfidence
 from .token_map import TokenMap
+
+
+def interface_contact_mask(
+    first: np.ndarray,
+    second: np.ndarray,
+    check_cancel: Callable[[], None],
+) -> np.ndarray:
+    """Cα/Cβ contact pairs at inclusive 8 Å; distances allocated in row tiles."""
+    contacts = np.empty((len(first), len(second)), dtype=bool)
+    for start in range(0, len(first), 256):
+        check_cancel()
+        delta = first[start : start + 256, None, :] - second[None, :, :]
+        contacts[start : start + 256] = np.einsum("ijk,ijk->ij", delta, delta) <= 64.0
+    return contacts
+
+
+def interface_ipsae(pae: np.ndarray, cutoff: int) -> tuple[float, np.ndarray]:
+    """Dunbrack d0res formulation (protein floor 1 Å), strict PAE cutoff."""
+    mask = pae < cutoff
+    counts = mask.sum(axis=1)
+    d0 = np.maximum(1.0, 1.24 * np.cbrt(np.maximum(counts, 26) - 15) - 1.8)
+    transformed = 1.0 / (1.0 + (pae / d0[:, None]) ** 2)
+    values = np.divide(
+        np.where(mask, transformed, 0.0).sum(axis=1),
+        counts,
+        out=np.zeros(len(counts), dtype=np.float64),
+        where=counts > 0,
+    )
+    values.setflags(write=False)
+    return float(values.max(initial=0.0)), values
+
+
+def interface_lis(pae: np.ndarray, mask: np.ndarray) -> float:
+    """Mean inverted PAE of the caller's exact qualifying set; empty is zero."""
+    return float((1.0 - pae[mask] / 12.0).mean()) if mask.any() else 0.0
+
+
+def interface_pdockq(plddt: float, contacts: int) -> float:
+    """Bryant corrected fit, log10 of geometric residue-pair count."""
+    if not contacts:
+        return 0.0
+    x = plddt * np.log10(contacts)
+    return float(0.724 / (1.0 + np.exp(-0.052 * (x - 152.611))) + 0.018)
+
+
+def interface_pdockq2(
+    plddt: float, transformed_pae: float, *, original: bool = False
+) -> float:
+    """Zhu original full precision or Dunbrack rounded sigmoid coefficients."""
+    if original:
+        amplitude, midpoint, slope, offset = (
+            1.31034849,
+            84.7326239,
+            0.0747157696,
+            0.00501886443,
+        )
+    else:
+        amplitude, midpoint, slope, offset = (1.31, 84.733, 0.075, 0.005)
+    return float(
+        amplitude / (1.0 + np.exp(-slope * (plddt * transformed_pae - midpoint)))
+        + offset
+    )
+
 
 # ---------------------------------------------------------------------------
 # pLDDT

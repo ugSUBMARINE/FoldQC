@@ -20,6 +20,7 @@ from .gui_services import (
     ViewerPort,
 )
 from .gui_state import PluginState
+from .interface_service import InterfaceReportService
 from .plot_coordinator import PlotCoordinator
 from .plot_preparation import PlotPreparationService
 from .prediction_lifecycle import PredictionLifecycleService
@@ -59,7 +60,13 @@ class GuiApplicationServices:
         self.alphafold_database = alphafold_database
 
         self.operations = GuiOperationCoordinator(presenter, view)
-        self.context = ContextService(state, viewer, presenter, view, metric_rows)
+        self.interfaces = InterfaceReportService(
+            state, viewer, presenter, self.operations
+        )
+        self.operations.observe(self.interfaces)
+        self.context = ContextService(
+            state, viewer, presenter, view, metric_rows, self.interfaces
+        )
         accepted_overlap_warnings: set[tuple[str, str]] = set()
         self.metric_computation = MetricComputationService(
             state,
@@ -98,6 +105,7 @@ class GuiApplicationServices:
             accepted_overlap_warnings,
             job_runner,
             self.operations,
+            self.interfaces,
         )
         self.lifecycle = PredictionLifecycleService(
             state,

@@ -21,6 +21,7 @@ from pymol.Qt import QtCore, QtGui, QtWidgets  # noqa: F401  (re-exported)
 
 # Persistent settings: exposed here so GUI code stays routed through pymol.Qt.
 QSettings = QtCore.QSettings
+SettingsIniFormat = getattr(getattr(QSettings, "Format", QSettings), "IniFormat", 1)
 
 # Detect Qt major version
 QT_MAJOR: int = int(QtCore.QT_VERSION_STR.split(".")[0])
@@ -59,6 +60,13 @@ ElideLeft = getattr(_TextElideMode, "ElideLeft", 0)
 # Model comparison keeps stable rank metadata and renders its own sort indicator.
 _ItemDataRole = getattr(QtCore.Qt, "ItemDataRole", QtCore.Qt)
 UserRole = getattr(_ItemDataRole, "UserRole", 256)
+DisplayRole = getattr(_ItemDataRole, "DisplayRole", 0)
+ToolTipRole = getattr(_ItemDataRole, "ToolTipRole", 3)
+BackgroundRole = getattr(_ItemDataRole, "BackgroundRole", 8)
+ForegroundRole = getattr(_ItemDataRole, "ForegroundRole", 9)
+TextAlignmentRole = getattr(_ItemDataRole, "TextAlignmentRole", 7)
+_ItemFlags = getattr(QtCore.Qt, "ItemFlag", QtCore.Qt)
+ItemIsSelectable = getattr(_ItemFlags, "ItemIsSelectable", 1)
 _SortOrder = getattr(QtCore.Qt, "SortOrder", QtCore.Qt)
 AscendingOrder = getattr(_SortOrder, "AscendingOrder", 0)
 DescendingOrder = getattr(_SortOrder, "DescendingOrder", 1)

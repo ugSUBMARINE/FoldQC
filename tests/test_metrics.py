@@ -12,7 +12,7 @@ from FoldQC import compute, metrics
 
 
 def test_metric_keys_preserve_gui_order() -> None:
-    assert [spec.key for spec in metrics.METRICS] == [
+    assert [spec.key for spec in metrics.METRICS if spec.result_scope == "token"] == [
         "plddt_class",
         "plddt",
         "pae_row_mean",
