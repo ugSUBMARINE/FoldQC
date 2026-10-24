@@ -22,11 +22,12 @@ class InterfaceTableRow:
 
 
 def report_rows(report: InterfaceReport, scope: str) -> tuple[InterfaceTableRow, ...]:
+    visible = {spec.key for spec in report_metric_specs(scope)}
     rows: list[InterfaceTableRow] = []
     for model in report.models:
         pairs: dict[tuple[str, tuple[str, ...]], list[InterfaceScoreResult]] = {}
         for score in model.scores:
-            if metrics.METRICS.require(score.metric_key).result_scope == scope:
+            if score.metric_key in visible:
                 pairs.setdefault((score.chain_a, score.partners), []).append(score)
         rows.extend(
             InterfaceTableRow(model.label, model.rank, a, b, tuple(scores))
@@ -40,7 +41,7 @@ def report_rows(report: InterfaceReport, scope: str) -> tuple[InterfaceTableRow,
         tuple[str, tuple[str, ...], tuple[tuple[str, str, str], ...]], set[int]
     ] = {}
     for agg in report.aggregates:
-        if metrics.METRICS.require(agg.metric_key).result_scope != scope:
+        if agg.metric_key not in visible:
             continue
         key = agg.chain_a, agg.partners, agg.identities
         aggregates.setdefault(key, []).append(
@@ -69,10 +70,18 @@ def report_rows(report: InterfaceReport, scope: str) -> tuple[InterfaceTableRow,
     return tuple(rows)
 
 
-def pair_metric_specs() -> tuple[metrics.MetricSpec, ...]:
+def report_metric_specs(scope: str) -> tuple[metrics.MetricSpec, ...]:
     return tuple(
-        spec for spec in interface_metric_specs() if spec.result_scope == "chain_pair"
+        spec
+        for spec in interface_metric_specs()
+        if spec.result_scope == scope
+        and spec.interface is not None
+        and spec.interface.report_label is not None
     )
+
+
+def pair_metric_specs() -> tuple[metrics.MetricSpec, ...]:
+    return report_metric_specs("chain_pair")
 
 
 def heatmap_value(

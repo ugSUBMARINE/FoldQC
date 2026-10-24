@@ -45,6 +45,8 @@ class InterfaceDefinition:
     aggregation: Literal["max", "mean", "symmetric", "directional", "geometric_mean"]
     support: Literal["pae", "cb_pae", "cb", "ca", "none"]
     parameters: tuple[tuple[str, str], ...] = ()
+    # None retains a compatibility calculation/export without report controls.
+    report_label: str | None = None
 
 
 DEFAULT_METRIC_KEY = "plddt_class"
@@ -817,6 +819,7 @@ def _interface_specs() -> tuple[MetricSpec, ...]:
         (
             "interface_ipsae",
             "ipSAE — Dunbrack",
+            "ipSAE",
             "Dunbrack",
             _DUNBRACK,
             "https://doi.org/10.1101/2025.02.10.637595",
@@ -828,6 +831,7 @@ def _interface_specs() -> tuple[MetricSpec, ...]:
         (
             "interface_lis_kim",
             "LIS — Kim",
+            "LIS",
             "Kim",
             _KIM,
             "https://doi.org/10.1101/2024.02.19.580970",
@@ -839,6 +843,7 @@ def _interface_specs() -> tuple[MetricSpec, ...]:
         (
             "interface_lis_dunbrack",
             "LIS — Dunbrack",
+            None,
             "Dunbrack",
             _DUNBRACK,
             "https://doi.org/10.1101/2024.02.19.580970",
@@ -850,6 +855,7 @@ def _interface_specs() -> tuple[MetricSpec, ...]:
         (
             "interface_clis",
             "cLIS — Kim",
+            "cLIS",
             "Kim",
             _KIM,
             "https://doi.org/10.64898/2026.04.14.718529",
@@ -861,6 +867,7 @@ def _interface_specs() -> tuple[MetricSpec, ...]:
         (
             "interface_ilis",
             "iLIS — Kim",
+            "iLIS",
             "Kim",
             _KIM,
             "https://doi.org/10.64898/2026.04.14.718529",
@@ -872,6 +879,7 @@ def _interface_specs() -> tuple[MetricSpec, ...]:
         (
             "interface_pdockq",
             "pDockQ — Bryant",
+            "pDockQ",
             "Bryant (corrected)",
             _DUNBRACK,
             "https://doi.org/10.1038/s41467-022-28865-w",
@@ -883,6 +891,7 @@ def _interface_specs() -> tuple[MetricSpec, ...]:
         (
             "interface_pdockq2_dunbrack",
             "pDockQ2 — Dunbrack",
+            "pDockQ2",
             "Dunbrack",
             _DUNBRACK,
             "https://doi.org/10.1093/bioinformatics/btad424",
@@ -894,6 +903,7 @@ def _interface_specs() -> tuple[MetricSpec, ...]:
         (
             "interface_pdockq2_zhu",
             "pDockQ2 — Zhu original",
+            "pDockQ2",
             "Zhu original",
             _ZHU,
             "https://doi.org/10.1093/bioinformatics/btad424",
@@ -905,6 +915,7 @@ def _interface_specs() -> tuple[MetricSpec, ...]:
         (
             "interface_iptm",
             "Pair ipTM — provider",
+            "Pair ipTM",
             "provider",
             "provider-normalized",
             "Provider confidence output; canonical alignment→scored axes",
@@ -918,6 +929,7 @@ def _interface_specs() -> tuple[MetricSpec, ...]:
     for (
         key,
         label,
+        report_label,
         implementation,
         revision,
         citation,
@@ -973,7 +985,13 @@ def _interface_specs() -> tuple[MetricSpec, ...]:
                 plot_modes=frozenset(),
                 result_scope=scope,
                 interface=InterfaceDefinition(
-                    implementation, revision, citation, aggregation, support, params
+                    implementation,
+                    revision,
+                    citation,
+                    aggregation,
+                    support,
+                    params,
+                    report_label,
                 ),
             )
         )

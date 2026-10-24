@@ -20,16 +20,26 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from FoldQC.compat import (  # noqa: E402
     QT_MAJOR,
+    AlignCenter,
+    BackgroundRole,
     DescendingOrder,
+    ForegroundRole,
+    HeaderResizeFixed,
+    HeaderResizeToContents,
     QtCore,
     QtWidgets,
     SettingsIniFormat,
+    TextAlignmentRole,
 )
 from FoldQC.gui import FoldQCPluginDialog  # noqa: E402
 from FoldQC.gui_session import QtSessionAdapter  # noqa: E402
 from FoldQC.interface_analysis import InterfaceAnalysisOptions, InterfaceReport  # noqa: E402
 from FoldQC.interface_compute import aggregate_interface_models, compute_interface_model  # noqa: E402
-from FoldQC.interface_viewer import InterfaceDialog  # noqa: E402
+from FoldQC.interface_viewer import (  # noqa: E402
+    INTERFACE_COLUMN_WIDTH,
+    InterfaceDialog,
+    InterfaceHeatmapModel,
+)
 from FoldQC.mol_viewer import PyMOLViewer  # noqa: E402
 from FoldQC.structure_index import StructureGeometry, StructureIndex  # noqa: E402
 from FoldQC.token_map import ResidueId, TokenInfo, TokenMap  # noqa: E402
@@ -96,17 +106,66 @@ def main() -> None:
     window.show()
     app.processEvents()
     assert window.pairs.model().rowCount() == 3
-    dunbrack_column = 3 + next(
+    assert window.pairs.model().headers == [
+        "Model",
+        "Chain A",
+        "Partner(s)",
+        "ipSAE",
+        "LIS",
+        "cLIS",
+        "iLIS",
+        "pDockQ",
+        "pDockQ2",
+        "Pair ipTM",
+        "Cβ pairs",
+    ]
+    assert window.heat_metric.findData("interface_lis_dunbrack") == -1
+    lis_column = 3 + next(
         i
         for i, spec in enumerate(window.pairs.model().specs)
-        if spec.key == "interface_lis_dunbrack"
+        if spec.key == "interface_lis_kim"
     )
-    assert window.pairs.model().headers[dunbrack_column] == "LIS — Dunbrack"
     np.testing.assert_allclose(
-        window.pairs.model().value(window.pairs.model().rows[0], dunbrack_column),
-        fixture["expected"]["lis_dunbrack_mean"],
+        window.pairs.model().value(window.pairs.model().rows[0], lis_column),
+        fixture["expected"]["lis_kim_mean"],
     )
+    assert (
+        window.pairs.model().data(window.pairs.model().index(0, lis_column)) == "0.486"
+    )
+    member_row = next(
+        i for i, row in enumerate(window.pairs.model().rows) if row.rank == 0
+    )
+    assert window.pairs.model().data(window.pairs.model().index(member_row, 10)) == "2"
     assert window.rest.model().rowCount() == 6
+    rest_row = next(
+        i
+        for i, row in enumerate(window.rest.model().rows)
+        if row.rank == 0 and row.chain_a == "A"
+    )
+    assert window.rest.model().headers[3] == "pDockQ2"
+    assert window.rest.model().data(window.rest.model().index(rest_row, 5)) == "76.7"
+    assert window.rest.model().headers[4:] == ["Cα pairs", "pLDDT"]
+    for table in (window.pairs, window.rest):
+        header = table.horizontalHeader()
+        assert header.sectionResizeMode(0) == HeaderResizeToContents
+        for column in range(1, table.model().columnCount()):
+            assert header.sectionResizeMode(column) == HeaderResizeFixed
+            assert table.columnWidth(column) == INTERFACE_COLUMN_WIDTH
+            assert (
+                table.model().data(table.model().index(0, column), TextAlignmentRole)
+                == AlignCenter
+            )
+    bright = InterfaceHeatmapModel(
+        window.pair_rows, ("A", "B"), "interface_ipsae", 0, False
+    )
+    dark = InterfaceHeatmapModel(
+        window.pair_rows, ("A", "B"), "interface_clis", 0, False
+    )
+    assert bright.data(bright.index(0, 1), ForegroundRole).name() == "#000000"
+    assert dark.data(dark.index(0, 1), ForegroundRole).name() == "#ffffff"
+    assert sum(bright.data(bright.index(0, 1), BackgroundRole).getRgbF()[:3]) > sum(
+        dark.data(dark.index(0, 1), BackgroundRole).getRgbF()[:3]
+    )
     assert window.select.isEnabled()
     window._select()
     assert observer.select_interface_contributors.call_args.args[0].side == "both"

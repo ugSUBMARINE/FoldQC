@@ -102,6 +102,12 @@ _SizePolicy = getattr(_QSizePolicy, "Policy", _QSizePolicy)
 SizePolicyExpanding = getattr(_SizePolicy, "Expanding", 0)
 SizePolicyFixed = getattr(_SizePolicy, "Fixed", 0)
 
+# Uniform report columns, with only the model-name column sized to its contents.
+_HeaderView = getattr(QtWidgets, "QHeaderView", object)
+_HeaderResizeMode = getattr(_HeaderView, "ResizeMode", _HeaderView)
+HeaderResizeFixed = getattr(_HeaderResizeMode, "Fixed", 2)
+HeaderResizeToContents = getattr(_HeaderResizeMode, "ResizeToContents", 3)
+
 # Qt.ItemIsEnabled flag
 # Qt5: QtCore.Qt.ItemIsEnabled
 # Qt6: QtCore.Qt.ItemFlag.ItemIsEnabled

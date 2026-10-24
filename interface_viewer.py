@@ -15,6 +15,8 @@ from .compat import (
     BackgroundRole,
     DisplayRole,
     ForegroundRole,
+    HeaderResizeFixed,
+    HeaderResizeToContents,
     Horizontal,
     ItemIsEnabled,
     ItemIsSelectable,
@@ -34,29 +36,30 @@ from .interface_report_data import (
     InterfaceTableRow,
     heatmap_value,
     pair_metric_specs,
+    report_metric_specs,
     report_rows,
     score_details,
 )
 from .palettes import VIRIDIS_STOPS
+
+INTERFACE_COLUMN_WIDTH = 88
 
 
 class InterfaceTableModel(QtCore.QAbstractTableModel):
     def __init__(self, rows: tuple[InterfaceTableRow, ...], scope: str, parent=None):
         super().__init__(parent)
         self.rows = list(rows)
-        self.specs = tuple(s for s in metrics.METRICS if s.result_scope == scope)
+        self.specs = report_metric_specs(scope)
         self.scope = scope
         self.headers = [
             "Model",
-            "Chain A" if scope == "chain_pair" else "Scored chain",
+            "Chain A" if scope == "chain_pair" else "Chain",
             "Partner(s)",
         ]
-        self.headers += [s.label for s in self.specs]
-        self.headers += [
-            "Cβ contact pairs" if scope == "chain_pair" else "Cα contact pairs"
-        ]
+        self.headers += [s.interface.report_label for s in self.specs]
+        self.headers += ["Cβ pairs" if scope == "chain_pair" else "Cα pairs"]
         if scope == "chain_rest":
-            self.headers += ["Interface pLDDT (0–100)"]
+            self.headers += ["pLDDT"]
 
     def rowCount(self, parent=QtCore.QModelIndex()):
         return 0 if parent.isValid() else len(self.rows)
@@ -86,16 +89,18 @@ class InterfaceTableModel(QtCore.QAbstractTableModel):
     def data(self, index, role=DisplayRole):
         if not index.isValid():
             return None
+        if role == TextAlignmentRole:
+            return AlignCenter
         row = self.rows[index.row()]
         value = self.value(row, index.column())
         if role == DisplayRole:
-            return (
-                "N/A"
-                if value is None
-                else f"{value:.5f}"
-                if isinstance(value, float)
-                else str(value)
-            )
+            if value is None:
+                return "N/A"
+            if 3 <= index.column() < 3 + len(self.specs):
+                return f"{value:.3f}"
+            if self.scope == "chain_rest" and index.column() == len(self.headers) - 1:
+                return f"{value:.1f}"
+            return str(value)
         if role == ToolTipRole and 3 <= index.column() < 3 + len(self.specs):
             score = row.score(self.specs[index.column() - 3].key)
             return (
@@ -109,6 +114,18 @@ class InterfaceTableModel(QtCore.QAbstractTableModel):
     def headerData(self, section, orientation, role=DisplayRole):
         if role == DisplayRole and orientation == Horizontal:
             return self.headers[section]
+        if role == ToolTipRole and orientation == Horizontal:
+            if self.scope == "chain_rest" and section == 1:
+                return "Scored chain"
+            if self.scope == "chain_rest" and section == len(self.headers) - 1:
+                return "Interface pLDDT (0–100)"
+        if (
+            role == ToolTipRole
+            and orientation == Horizontal
+            and 3 <= section < 3 + len(self.specs)
+        ):
+            spec = self.specs[section - 3]
+            return f"{spec.label}; summary: {spec.interface.aggregation}"
         return None
 
     def sort(self, column, order=AscendingOrder):
@@ -146,12 +163,12 @@ class InterfaceHeatmapModel(QtCore.QAbstractTableModel):
             return AlignCenter
         if role == ForegroundRole:
             return QtGui.QColor(
-                "white" if value is not None and value < 0.55 else "black"
+                "white" if value is not None and value > 0.45 else "black"
             )
         if role == BackgroundRole:
             if value is None:
                 return QtGui.QColor("#dedede")
-            position = max(0.0, min(1.0, value)) * (len(VIRIDIS_STOPS) - 1)
+            position = (1.0 - max(0.0, min(1.0, value))) * (len(VIRIDIS_STOPS) - 1)
             lo = min(int(position), len(VIRIDIS_STOPS) - 2)
             fraction = position - lo
             rgb = [
@@ -222,14 +239,14 @@ class InterfaceDialog(QtWidgets.QDialog):
         self.heat_metric, self.heat_model = QtWidgets.QComboBox(), QtWidgets.QComboBox()
         self.directional = QtWidgets.QCheckBox("Directional values")
         for spec in pair_metric_specs():
-            self.heat_metric.addItem(spec.label, spec.key)
+            self.heat_metric.addItem(spec.interface.report_label, spec.key)
         heatcontrols.addWidget(self.heat_metric)
         heatcontrols.addWidget(self.heat_model)
         heatcontrols.addWidget(self.directional)
         heatlayout.addLayout(heatcontrols)
         heatlayout.addWidget(
             QtWidgets.QLabel(
-                "Rows: alignment chain · Columns: scored chain · Viridis scale: 0–1 · Grey: undefined/N/A"
+                "Rows: alignment chain · Columns: scored chain · Reversed viridis: 0 bright → 1 dark · Grey: undefined/N/A"
             )
         )
         self.heat = QtWidgets.QTableView()
@@ -241,8 +258,8 @@ class InterfaceDialog(QtWidgets.QDialog):
         selection.addWidget(QtWidgets.QLabel("Contributors for:"))
         self.selection_metric = QtWidgets.QComboBox()
         for spec in metrics.METRICS:
-            if spec.interface is not None:
-                self.selection_metric.addItem(spec.label, spec.key)
+            if spec.interface is not None and spec.interface.report_label is not None:
+                self.selection_metric.addItem(spec.interface.report_label, spec.key)
         self.side = QtWidgets.QComboBox()
         for name, key in (
             ("Both chains", "both"),
@@ -302,7 +319,12 @@ class InterfaceDialog(QtWidgets.QDialog):
             if previous_selection is not None:
                 previous_selection.deleteLater()
             table.setSortingEnabled(True)
-            table.resizeColumnsToContents()
+            header = table.horizontalHeader()
+            header.setStretchLastSection(False)
+            header.setSectionResizeMode(HeaderResizeFixed)
+            for column in range(1, model.columnCount()):
+                header.resizeSection(column, INTERFACE_COLUMN_WIDTH)
+            header.setSectionResizeMode(0, HeaderResizeToContents)
             table.selectionModel().currentChanged.connect(
                 lambda index, _previous, t=table: self._table_selected(t, index)
             )
@@ -373,9 +395,8 @@ class InterfaceDialog(QtWidgets.QDialog):
         self.selection_metric.blockSignals(True)
         self.selection_metric.clear()
         for score in row.scores:
-            self.selection_metric.addItem(
-                metrics.METRICS.require(score.metric_key).label, score.metric_key
-            )
+            spec = metrics.METRICS.require(score.metric_key)
+            self.selection_metric.addItem(spec.interface.report_label, score.metric_key)
         self.selection_metric.setCurrentIndex(self.selection_metric.findData(key))
         self.selection_metric.blockSignals(False)
         self._details()
@@ -417,7 +438,6 @@ class InterfaceDialog(QtWidgets.QDialog):
         directional = key in {
             "interface_ipsae",
             "interface_lis_kim",
-            "interface_lis_dunbrack",
             "interface_clis",
             "interface_pdockq2_dunbrack",
             "interface_iptm",

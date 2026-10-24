@@ -513,7 +513,16 @@ values, confidence source, support counts, contributors, and citation. **Chain
 versus rest** presents original Zhu pDockQ2 for each chain against all other
 protein chains. Original scores also appear in dimer pair details.
 
-| Score | Calculation and scope |
+Tables use compact metric names, with three decimal places for scores and one
+for pLDDT on the 0–100 scale. Values are centered; all columns have the same fixed
+width except Model, which sizes to its contents. Contact counts use the compact
+headers **Cβ pairs** and **Cα pairs**. Header tooltips and score details identify the
+implementation and aggregation. Numeric sorting and CSV exports retain full
+precision. The report presents Kim LIS only; strict-cutoff Dunbrack LIS remains
+available in the complete CSV export for compatibility, without an extra column
+or report selector.
+
+| Implementation | Calculation and scope |
 |---|---|
 | ipSAE — Dunbrack | For each alignment residue, retain opposite-chain residues with PAE strictly below the preset (10 Å by default, or 15 Å). Set `d0 = max(1, 1.24*cbrt(max(n,26)-15)-1.8)` from the number `n` of qualifying residues. Average `1/(1+(PAE/d0)^2)` over that set, then take the maximum over alignment residues. Retain both chain directions and display their maximum. No geometric distance filter. |
 | LIS — Kim | Mean `1-PAE/12` over PAE ≤12 Å in each direction; average the two directional means. Cells exactly at the cutoff contribute zero but remain in the denominator. |
@@ -534,7 +543,8 @@ and [Zhu/AFM-Benchmark
 FoldQC implements the equations locally; no upstream scripts run at analysis time.
 
 The **Heatmap** shows one model or the ensemble mean, with canonical chain
-order, a fixed viridis 0–1 scale, an undefined diagonal, and grey N/A cells.
+order, a fixed reversed-viridis 0–1 scale (low values bright, high values dark),
+an undefined diagonal, and grey N/A cells.
 Directional views have alignment chains in rows and scored chains in columns.
 Clicking a cell selects the corresponding table row without modifying PyMOL.
 For incompatible ensemble residue identities there is no single heatmap value.

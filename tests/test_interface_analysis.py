@@ -32,7 +32,12 @@ from FoldQC.interface_compute import (
     compute_interface_model,
     validate_interface_dispatch,
 )
-from FoldQC.interface_report_data import heatmap_value, report_rows, score_details
+from FoldQC.interface_report_data import (
+    heatmap_value,
+    pair_metric_specs,
+    report_rows,
+    score_details,
+)
 from FoldQC.interface_service import INTERFACE_SELECTION, InterfaceReportService
 from FoldQC.loader import load_prediction_data, scan_prediction_path
 from FoldQC.loader_models import PredictionData
@@ -178,6 +183,39 @@ def test_dunbrack_lis_directional_mean_includes_an_empty_direction():
     )
     assert summary["aggregation"] == "mean"
     assert summary["value"] == 0.5
+
+
+def test_compact_report_omits_duplicate_lis_but_preserves_complete_export():
+    model = compute()
+    second = replace(model, rank=1)
+    snapshot = replace(
+        report(model),
+        models=(model, second),
+        aggregates=aggregate_interface_models((model, second)),
+    )
+    specs = pair_metric_specs()
+    assert [s.interface.report_label for s in specs] == [
+        "ipSAE",
+        "LIS",
+        "cLIS",
+        "iLIS",
+        "pDockQ",
+        "pDockQ2",
+        "Pair ipTM",
+    ]
+    assert all(s.key != "interface_lis_dunbrack" for s in specs)
+    for row in report_rows(snapshot, "chain_pair"):
+        assert row.score("interface_lis_dunbrack") is None
+        assert row.score("interface_lis_kim") is not None
+    exported = interface_report_rows(snapshot)
+    assert any(r["metric_key"] == "interface_lis_dunbrack" for r in exported)
+    lis = next(
+        r
+        for r in exported
+        if r["metric_key"] == "interface_lis_kim" and r["direction"] == "summary"
+    )
+    assert lis["value"] == REFERENCE["expected"]["lis_kim_mean"]
+    assert lis["value"] != round(lis["value"], 3)
 
 
 def test_empty_interfaces_preserve_each_reference_convention():
