@@ -392,7 +392,7 @@ class InterfaceDialog(QtWidgets.QDialog):
         self._current = current
         report = self.report
         status = (
-            "Current source"
+            "Matches current target"
             if current
             else "Snapshot — source is no longer current; viewer selection disabled"
         )
