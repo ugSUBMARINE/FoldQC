@@ -11,6 +11,7 @@ from .compat import (
     AbstractItemViewSelectRows,
     AbstractItemViewSingleSelection,
     AlignCenter,
+    AlignLeft,
     AscendingOrder,
     BackgroundRole,
     DisplayRole,
@@ -26,6 +27,7 @@ from .compat import (
     TextAlignmentRole,
     ToolTipRole,
 )
+from .gui_layout import BASE_LAYOUT_SPACING, FixedMainButton
 from .interface_analysis import (
     InterfaceAnalysisOptions,
     InterfaceReport,
@@ -43,6 +45,8 @@ from .interface_report_data import (
 from .palettes import VIRIDIS_STOPS
 
 INTERFACE_COLUMN_WIDTH = 88
+INTERFACE_DETAILS_CONTROL_WIDTH = 200
+INTERFACE_DETAILS_DROPDOWN_WIDTH = 160
 
 
 class InterfaceTableModel(QtCore.QAbstractTableModel):
@@ -219,13 +223,22 @@ class InterfaceDialog(QtWidgets.QDialog):
         for cutoff in (10, 15):
             self.preset.addItem(f"PAE <{cutoff} Å", cutoff)
         controls.addWidget(self.preset)
-        self.analyze = QtWidgets.QPushButton("Analyze current target")
+        self.analyze = FixedMainButton("Analyze target")
+        self.analyze.setToolTip(
+            "Analyze the current target selected in the main FoldQC window using this ipSAE preset."
+        )
         self.analyze.clicked.connect(
             lambda: self._observer.analyze_current_interfaces(
                 InterfaceAnalysisOptions(int(self.preset.currentData()))
             )
         )
         controls.addWidget(self.analyze)
+        self.export = FixedMainButton("Export CSV")
+        self.export.setToolTip(
+            "Export the complete displayed interface snapshot, including all models, metrics, and both interface scopes."
+        )
+        self.export.clicked.connect(self._export)
+        controls.addWidget(self.export)
         controls.addStretch()
         layout.addLayout(controls)
         self.tabs = QtWidgets.QTabWidget()
@@ -254,39 +267,70 @@ class InterfaceDialog(QtWidgets.QDialog):
         heatlayout.addWidget(self.heat)
         self.tabs.addTab(heatmap, "Heatmap")
         layout.addWidget(self.tabs, 3)
-        selection = QtWidgets.QHBoxLayout()
-        selection.addWidget(QtWidgets.QLabel("Contributors for:"))
+        details_row = QtWidgets.QHBoxLayout()
+        self.details_controls = QtWidgets.QWidget()
+        self.details_controls.setFixedWidth(INTERFACE_DETAILS_CONTROL_WIDTH)
+        selection = QtWidgets.QVBoxLayout(self.details_controls)
+        selection.setContentsMargins(0, 0, 0, 0)
+        selection.setSpacing(BASE_LAYOUT_SPACING)
+        details_label = QtWidgets.QLabel("Details for:")
+        details_label.setAlignment(AlignLeft)
+        selection.addWidget(details_label)
         self.selection_metric = QtWidgets.QComboBox()
+        self.selection_metric.setFixedWidth(INTERFACE_DETAILS_DROPDOWN_WIDTH)
         for spec in metrics.METRICS:
             if spec.interface is not None and spec.interface.report_label is not None:
                 self.selection_metric.addItem(spec.interface.report_label, spec.key)
+        selection.addWidget(self.selection_metric, 0, AlignCenter)
+        selection_label = QtWidgets.QLabel("Select contributing\nresidues in:")
+        selection_label.setAlignment(AlignLeft)
+        selection.addWidget(selection_label)
         self.side = QtWidgets.QComboBox()
+        self.side.setFixedWidth(INTERFACE_DETAILS_DROPDOWN_WIDTH)
         for name, key in (
             ("Both chains", "both"),
             ("A / scored chain", "a"),
             ("B / rest", "b"),
         ):
             self.side.addItem(name, key)
-        self.select = QtWidgets.QPushButton("Select contributors")
+        self.select = FixedMainButton("Select")
+        self.select.setToolTip(
+            "Select contributor residues for the chosen metric and side in PyMOL."
+        )
         self.select.clicked.connect(self._select)
-        self.clear = QtWidgets.QPushButton("Clear selection")
-        self.clear.clicked.connect(self._observer.clear_interface_selection)
-        for widget in (self.selection_metric, self.side, self.select, self.clear):
-            selection.addWidget(widget)
-        layout.addLayout(selection)
+        selection.addWidget(self.side, 0, AlignCenter)
+        selection.addWidget(self.select, 0, AlignCenter)
+        selection.addStretch(1)
+        details_row.addWidget(self.details_controls)
         self.details = QtWidgets.QTextBrowser()
         self.details.setOpenExternalLinks(True)
-        layout.addWidget(self.details, 2)
-        footer = QtWidgets.QHBoxLayout()
-        self.export = QtWidgets.QPushButton("Export CSV")
-        self.export.clicked.connect(self._export)
-        close = QtWidgets.QPushButton("Close")
-        close.clicked.connect(self.close)
-        footer.addWidget(self.export)
-        footer.addStretch()
-        footer.addWidget(close)
-        layout.addLayout(footer)
-        for button in (self.analyze, self.select, self.clear, self.export, close):
+        details_row.addWidget(self.details, 1)
+        layout.addLayout(details_row, 2)
+        self.details_controls.ensurePolished()
+        control_stack = (
+            details_label,
+            self.selection_metric,
+            selection_label,
+            self.side,
+            self.select,
+        )
+        # Native macOS layout hints can be shorter than the full control bounds.
+        # Include actual widget size requirements so the last button cannot clip.
+        control_height = sum(
+            widget.sizeHint()
+            .boundedTo(widget.maximumSize())
+            .expandedTo(widget.minimumSize())
+            .height()
+            for widget in control_stack
+        )
+        margins = selection.contentsMargins()
+        self.details_controls.setMinimumHeight(
+            control_height
+            + (len(control_stack) - 1) * selection.spacing()
+            + margins.top()
+            + margins.bottom()
+        )
+        for button in (self.analyze, self.select, self.export):
             button.setAutoDefault(False)
             button.setDefault(False)
         self.heat_metric.currentIndexChanged.connect(self._heatmap)
@@ -362,7 +406,6 @@ class InterfaceDialog(QtWidgets.QDialog):
         self._busy = busy
         self.analyze.setEnabled(not busy)
         self.export.setEnabled(not busy)
-        self.clear.setEnabled(not busy)
         self._enable_selection()
 
     def _enable_selection(self) -> None:

@@ -343,6 +343,9 @@ class FoldQCPluginDialog(QtWidgets.QDialog):
 
     def closeEvent(self, event) -> None:
         """Hide the dialog while retaining its in-session state and services."""
+        if not self._presenter.close_interface_report():
+            # A first analysis may still be running without a child window yet.
+            self.services.analysis.interface_window_closed()
         event.ignore()
         self.hide()
 

@@ -1,7 +1,8 @@
 """Real PyMOL/Qt smoke check; run with a PyMOL Python, QT_QPA_PLATFORM=offscreen.
 
 Uses temporary settings and structures; never changes the user's PyMOL session.
-Writes optional screenshots to the directory passed as the sole argument.
+Writes optional screenshots to the directory passed as the first argument.
+An optional second argument selects a Qt style (e.g. macOS) for layout checks.
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from FoldQC.compat import (  # noqa: E402
     QT_MAJOR,
     AlignCenter,
+    AlignLeft,
     BackgroundRole,
     DescendingOrder,
     ForegroundRole,
@@ -32,11 +34,17 @@ from FoldQC.compat import (  # noqa: E402
     TextAlignmentRole,
 )
 from FoldQC.gui import FoldQCPluginDialog  # noqa: E402
+from FoldQC.gui_layout import (  # noqa: E402
+    PRIMARY_BUTTON_HEIGHT,
+    PRIMARY_BUTTON_WIDTH,
+    FixedMainButton,
+)
 from FoldQC.gui_session import QtSessionAdapter  # noqa: E402
 from FoldQC.interface_analysis import InterfaceAnalysisOptions, InterfaceReport  # noqa: E402
 from FoldQC.interface_compute import aggregate_interface_models, compute_interface_model  # noqa: E402
 from FoldQC.interface_viewer import (  # noqa: E402
     INTERFACE_COLUMN_WIDTH,
+    INTERFACE_DETAILS_CONTROL_WIDTH,
     InterfaceDialog,
     InterfaceHeatmapModel,
 )
@@ -54,6 +62,10 @@ def main() -> None:
         .read_text()
     )
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    if len(sys.argv) > 2:
+        assert app.setStyle(sys.argv[2]) is not None, (
+            "Requested Qt style is unavailable."
+        )
     output = Path(sys.argv[1]) if len(sys.argv) > 1 else None
     if output is not None:
         output.mkdir(parents=True, exist_ok=True)
@@ -104,6 +116,56 @@ def main() -> None:
     observer = Mock()
     window = InterfaceDialog(report, observer)
     window.show()
+    app.processEvents()
+    buttons = window.findChildren(QtWidgets.QPushButton)
+    assert {button.text() for button in buttons} == {
+        "Analyze target",
+        "Export CSV",
+        "Select",
+    }
+    assert len(buttons) == 3
+    for button in buttons:
+        assert isinstance(button, FixedMainButton)
+        assert button.width() == PRIMARY_BUTTON_WIDTH
+        assert button.height() == PRIMARY_BUTTON_HEIGHT
+    assert window.analyze.y() == window.export.y()
+    assert window.export.x() > window.analyze.x()
+    panel = window.details_controls
+    assert (
+        panel.minimumWidth() == panel.maximumWidth() == INTERFACE_DETAILS_CONTROL_WIDTH
+    )
+    labels = panel.findChildren(QtWidgets.QLabel)
+    assert [label.text() for label in labels] == [
+        "Details for:",
+        "Select contributing\nresidues in:",
+    ]
+    assert all(label.alignment() & AlignLeft for label in labels)
+    for control in (window.selection_metric, window.side, window.select):
+        assert abs(2 * control.x() + control.width() - panel.width()) <= 1
+    stack = (labels[0], window.selection_metric, labels[1], window.side, window.select)
+    original_stack = [(widget.y(), widget.height()) for widget in stack]
+    original_size = window.size()
+    original_details = window.details.size()
+    window.resize(window.width() + 160, window.height() + 120)
+    app.processEvents()
+    assert panel.width() == INTERFACE_DETAILS_CONTROL_WIDTH
+    assert [(widget.y(), widget.height()) for widget in stack] == original_stack
+    assert window.details.width() == original_details.width() + 160
+    assert window.details.height() > original_details.height()
+    window.resize(original_size.width(), window.minimumSizeHint().height())
+    app.processEvents()
+    assert panel.height() >= panel.minimumSizeHint().height()
+    assert window.select.geometry().bottom() < panel.height()
+    assert window.details.height() == panel.height()
+    assert [(widget.y(), widget.height()) for widget in stack] == original_stack
+    window.resize(1, 1)
+    app.processEvents()
+    window.layout().activate()
+    app.processEvents()
+    assert all(panel.rect().contains(widget.geometry()) for widget in stack)
+    if output is not None:
+        assert window.grab().save(str(output / f"qt{QT_MAJOR}-minimum.png"))
+    window.resize(original_size)
     app.processEvents()
     assert window.pairs.model().rowCount() == 3
     assert window.pairs.model().headers == [
@@ -202,6 +264,7 @@ def main() -> None:
     window.set_current(True)
     window.set_busy(True)
     assert not window.select.isEnabled() and not window.analyze.isEnabled()
+    assert not window.export.isEnabled()
     window.set_busy(False)
     window.preset.setCurrentIndex(1)
     window.analyze.click()
@@ -295,11 +358,34 @@ def main() -> None:
             assert before == after
             child.export.setEnabled(True)
             csv = folder / "interfaces.csv"
-            dialog.services.analysis.export_interface_report(str(csv))
+            with patch.object(
+                QtWidgets.QFileDialog,
+                "getSaveFileName",
+                return_value=(str(csv), "CSV files (*.csv)"),
+            ):
+                child.export.click()
             assert "interface_pdockq" in csv.read_text()
             assert dialog._presenter.raise_interface_report()
-            child.close()
+            child.select.click()
+            assert viewer.name_exists("foldqc_interface")
+            active_model = dialog.state.active_model_state
+            dialog.close()
+            assert not child.isVisible()
+            assert not dialog.isVisible()
+            assert dialog._presenter._interface_window is None
             assert not viewer.name_exists("foldqc_interface")
+            assert dialog.services.interfaces.report is None
+            assert dialog.state.active_model_state is active_model
+            assert not dialog._shutdown_complete
+            dialog.show()
+            dialog.widgets._interfaces_btn.click()
+            wait_until(
+                lambda: (
+                    dialog._presenter._interface_window is not None
+                    and not dialog.services.operations.is_busy
+                )
+            )
+            assert dialog._presenter._interface_window.isVisible()
             if output is not None:
                 app.processEvents()
                 assert dialog.grab().save(str(output / f"qt{QT_MAJOR}-main.png"))

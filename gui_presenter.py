@@ -72,6 +72,13 @@ class QtPresenter:
         self._interface_window.activateWindow()
         return True
 
+    def close_interface_report(self) -> bool:
+        """Close the child report through its normal cleanup path, if open."""
+        if self._interface_window is None:
+            return False
+        self._interface_window.close()
+        return True
+
     def present_notice(self, notice: Notice) -> None:
         title = notice.title
         if notice.severity == "error" and title == "FoldQC":
@@ -319,8 +326,7 @@ class QtPresenter:
                 )
 
     def close(self) -> None:
-        if self._interface_window is not None:
-            self._interface_window.close()
+        self.close_interface_report()
         for operation_id in tuple(self._progress):
             self.finish_progress(operation_id)
         for window in tuple(self._plot_windows):

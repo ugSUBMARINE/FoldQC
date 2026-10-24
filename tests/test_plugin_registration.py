@@ -162,12 +162,31 @@ class PluginRegistrationTests(unittest.TestCase):
     def test_dialog_close_hides_without_shutting_down_services(self) -> None:
         harness = _dialog_lifecycle_harness()()
         calls: list[str] = []
+        harness._presenter = types.SimpleNamespace(
+            close_interface_report=lambda: calls.append("close interfaces") or True
+        )
         harness.hide = lambda: calls.append("hide")
         event = types.SimpleNamespace(ignore=lambda: calls.append("ignore"))
 
         harness.closeEvent(event)
 
-        self.assertEqual(calls, ["ignore", "hide"])
+        self.assertEqual(calls, ["close interfaces", "ignore", "hide"])
+
+    def test_dialog_close_cancels_interfaces_without_a_child_window(self) -> None:
+        harness = _dialog_lifecycle_harness()()
+        calls: list[str] = []
+        harness._presenter = types.SimpleNamespace(close_interface_report=lambda: False)
+        harness.services = types.SimpleNamespace(
+            analysis=types.SimpleNamespace(
+                interface_window_closed=lambda: calls.append("cancel interfaces")
+            )
+        )
+        harness.hide = lambda: calls.append("hide")
+        event = types.SimpleNamespace(ignore=lambda: calls.append("ignore"))
+
+        harness.closeEvent(event)
+
+        self.assertEqual(calls, ["cancel interfaces", "ignore", "hide"])
 
     def test_dialog_shutdown_saves_and_closes_services_once(self) -> None:
         harness = _dialog_lifecycle_harness()()
