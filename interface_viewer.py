@@ -47,6 +47,8 @@ from .palettes import VIRIDIS_STOPS
 INTERFACE_COLUMN_WIDTH = 88
 INTERFACE_DETAILS_CONTROL_WIDTH = 200
 INTERFACE_DETAILS_DROPDOWN_WIDTH = 160
+INTERFACE_WINDOW_WIDTH = 840
+INTERFACE_WINDOW_HEIGHT = 520
 
 
 class InterfaceTableModel(QtCore.QAbstractTableModel):
@@ -208,7 +210,7 @@ class InterfaceDialog(QtWidgets.QDialog):
         super().__init__(parent)
         self.setWindowTitle("FoldQC — Analyze interfaces")
         self.setModal(False)
-        self.resize(1100, 720)
+        self.resize(INTERFACE_WINDOW_WIDTH, INTERFACE_WINDOW_HEIGHT)
         self._observer, self._on_close = observer, on_close
         self._current, self._busy = True, False
         self._closed = False
