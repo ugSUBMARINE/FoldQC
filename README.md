@@ -511,7 +511,7 @@ ambiguous atoms/confidence produce **N/A with a reason**, not a zero score.
 no contacts. Click a score for its definition, parameters, direction-specific
 values, confidence source, support counts, contributors, and citation. **Chain
 versus rest** presents original Zhu pDockQ2 for each chain against all other
-protein chains. Original scores also appear in dimer pair details.
+protein chains, including dimers.
 
 Tables use compact metric names, with three decimal places for scores and one
 for pLDDT on the 0–100 scale. Values are centered; all columns have the same fixed
@@ -521,6 +521,16 @@ implementation and aggregation. Numeric sorting and CSV exports retain full
 precision. The report presents Kim LIS only; strict-cutoff Dunbrack LIS remains
 available in the complete CSV export for compatibility, without an extra column
 or report selector.
+
+Details show named literature references, marking the ipSAE, LIS, and
+FlyPredictome cLIS/iLIS sources as bioRxiv preprints, and link the pinned code
+separately to identify implementation variants. pDockQ also links the
+[Bryant et al. author correction](https://doi.org/10.1038/s41467-022-29480-5)
+that specifies the corrected sigmoid coefficients used by FoldQC. Both pDockQ2
+variants cite Zhu et al. (2023), with their different source implementations
+identified separately. Provider pair ipTM cites the provider output rather than
+assigning it a generic metric-paper reference. The CSV `citation` field retains
+the primary source.
 
 | Implementation | Calculation and scope |
 |---|---|

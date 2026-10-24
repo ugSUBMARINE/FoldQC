@@ -38,6 +38,12 @@ ResultScope = Literal["token", "chain_pair", "chain_rest"]
 
 
 @dataclass(frozen=True)
+class InterfaceReference:
+    label: str
+    url: str | None = None
+
+
+@dataclass(frozen=True)
 class InterfaceDefinition:
     implementation: str
     revision: str
@@ -47,6 +53,8 @@ class InterfaceDefinition:
     parameters: tuple[tuple[str, str], ...] = ()
     # None retains a compatibility calculation/export without report controls.
     report_label: str | None = None
+    references: tuple[InterfaceReference, ...] = ()
+    implementation_url: str | None = None
 
 
 DEFAULT_METRIC_KEY = "plddt_class"
@@ -813,6 +821,31 @@ _DUNBRACK = "6174cf9e71cb1bd660cc805856a18c4871a6dec3"
 _KIM = "9921567e186e0caa14cdbcd6bc51b9b02b36e36d"
 _ZHU = "5866c6d45abc802217a618290f76390999a83461"
 
+_IPSAE_REFERENCE = InterfaceReference(
+    "Dunbrack (2025). Rēs ipSAE loquuntur: What’s wrong with AlphaFold’s ipTM score and how to fix it. bioRxiv preprint.",
+    "https://doi.org/10.1101/2025.02.10.637595",
+)
+_LIS_REFERENCE = InterfaceReference(
+    "Kim et al. (2024). Enhanced Protein-Protein Interaction Discovery via AlphaFold-Multimer. bioRxiv preprint.",
+    "https://doi.org/10.1101/2024.02.19.580970",
+)
+_ILIS_REFERENCE = InterfaceReference(
+    "Kim et al. (2026). FlyPredictome: A structural atlas of predicted protein-protein interactions in Drosophila. bioRxiv preprint.",
+    "https://doi.org/10.64898/2026.04.14.718529",
+)
+_PDOCKQ_REFERENCE = InterfaceReference(
+    "Bryant, Pozzati & Elofsson (2022). Improved prediction of protein-protein interactions using AlphaFold2. Nature Communications.",
+    "https://doi.org/10.1038/s41467-022-28865-w",
+)
+_PDOCKQ_CORRECTION = InterfaceReference(
+    "Bryant, Pozzati & Elofsson (2022). Author Correction: Improved prediction of protein-protein interactions using AlphaFold2. Corrected sigmoid coefficients.",
+    "https://doi.org/10.1038/s41467-022-29480-5",
+)
+_PDOCKQ2_REFERENCE = InterfaceReference(
+    "Zhu, Shenoy, Kundrotas & Elofsson (2023). Evaluation of AlphaFold-Multimer prediction on multi-chain protein complexes. Bioinformatics.",
+    "https://doi.org/10.1093/bioinformatics/btad424",
+)
+
 
 def _interface_specs() -> tuple[MetricSpec, ...]:
     definitions = (
@@ -822,7 +855,7 @@ def _interface_specs() -> tuple[MetricSpec, ...]:
             "ipSAE",
             "Dunbrack",
             _DUNBRACK,
-            "https://doi.org/10.1101/2025.02.10.637595",
+            _IPSAE_REFERENCE,
             "max",
             "pae",
             "pae",
@@ -834,7 +867,7 @@ def _interface_specs() -> tuple[MetricSpec, ...]:
             "LIS",
             "Kim",
             _KIM,
-            "https://doi.org/10.1101/2024.02.19.580970",
+            _LIS_REFERENCE,
             "mean",
             "pae",
             "pae",
@@ -846,7 +879,7 @@ def _interface_specs() -> tuple[MetricSpec, ...]:
             None,
             "Dunbrack",
             _DUNBRACK,
-            "https://doi.org/10.1101/2024.02.19.580970",
+            _LIS_REFERENCE,
             "mean",
             "pae",
             "pae",
@@ -858,7 +891,7 @@ def _interface_specs() -> tuple[MetricSpec, ...]:
             "cLIS",
             "Kim",
             _KIM,
-            "https://doi.org/10.64898/2026.04.14.718529",
+            _ILIS_REFERENCE,
             "mean",
             "cb_pae",
             "pae",
@@ -870,7 +903,7 @@ def _interface_specs() -> tuple[MetricSpec, ...]:
             "iLIS",
             "Kim",
             _KIM,
-            "https://doi.org/10.64898/2026.04.14.718529",
+            _ILIS_REFERENCE,
             "geometric_mean",
             "cb_pae",
             "pae",
@@ -882,7 +915,7 @@ def _interface_specs() -> tuple[MetricSpec, ...]:
             "pDockQ",
             "Bryant (corrected)",
             _DUNBRACK,
-            "https://doi.org/10.1038/s41467-022-28865-w",
+            _PDOCKQ_REFERENCE,
             "symmetric",
             "cb",
             "",
@@ -894,7 +927,7 @@ def _interface_specs() -> tuple[MetricSpec, ...]:
             "pDockQ2",
             "Dunbrack",
             _DUNBRACK,
-            "https://doi.org/10.1093/bioinformatics/btad424",
+            _PDOCKQ2_REFERENCE,
             "max",
             "cb",
             "pae",
@@ -906,7 +939,7 @@ def _interface_specs() -> tuple[MetricSpec, ...]:
             "pDockQ2",
             "Zhu original",
             _ZHU,
-            "https://doi.org/10.1093/bioinformatics/btad424",
+            _PDOCKQ2_REFERENCE,
             "directional",
             "ca",
             "pae",
@@ -918,7 +951,9 @@ def _interface_specs() -> tuple[MetricSpec, ...]:
             "Pair ipTM",
             "provider",
             "provider-normalized",
-            "Provider confidence output; canonical alignment→scored axes",
+            InterfaceReference(
+                "Provider confidence output; canonical alignment→scored axes"
+            ),
             "max",
             "none",
             "confidence",
@@ -938,6 +973,18 @@ def _interface_specs() -> tuple[MetricSpec, ...]:
         requirement,
         scope,
     ) in definitions:
+        references = (citation,)
+        if key == "interface_pdockq":
+            references += (_PDOCKQ_CORRECTION,)
+        implementation_url = (
+            f"https://github.com/DunbrackLab/IPSAE/blob/{revision}/ipsae.py"
+            if revision == _DUNBRACK
+            else f"https://github.com/flyark/AFM-LIS/blob/{revision}/lis.py"
+            if revision == _KIM
+            else f"https://gitlab.com/ElofssonLab/afm-benchmark/-/blob/{revision}/src/pdockq2.py"
+            if revision == _ZHU
+            else None
+        )
         params = (
             (("pae_cutoff_angstrom", "10 or 15; strict"),)
             if key == "interface_ipsae"
@@ -987,11 +1034,13 @@ def _interface_specs() -> tuple[MetricSpec, ...]:
                 interface=InterfaceDefinition(
                     implementation,
                     revision,
-                    citation,
+                    citation.url or citation.label,
                     aggregation,
                     support,
                     params,
                     report_label,
+                    references,
+                    implementation_url,
                 ),
             )
         )

@@ -148,11 +148,4 @@ def score_details(report: InterfaceReport, row: InterfaceTableRow, key: str) -> 
                 )
             )
         lines.extend(model.diagnostics)
-        if len(model.chain_order) == 2 and spec.result_scope == "chain_pair":
-            lines.append("Original Zhu chain-versus-rest scores for this dimer:")
-            lines.extend(
-                f"  {s.chain_a} → {', '.join(s.partners)}: {s.value}"
-                for s in model.scores
-                if s.metric_key == "interface_pdockq2_zhu"
-            )
     return "\n".join(lines)

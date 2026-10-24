@@ -420,13 +420,54 @@ def test_csv_complete_provenance_and_lossless_contributors(tmp_path):
     write_interface_report(destination, snapshot)
     assert "interface_schema_version" in destination.read_text()
     row = report_rows(snapshot, "chain_pair")[0]
-    assert "Original Zhu" in score_details(snapshot, row, "interface_ipsae")
+    for spec in pair_metric_specs():
+        assert "Original Zhu chain-versus-rest scores" not in score_details(
+            snapshot, row, spec.key
+        )
+    rest = report_rows(snapshot, "chain_rest")
+    assert len(rest) == 2
+    assert all(row.score("interface_pdockq2_zhu").value is not None for row in rest)
 
 
 def test_registry_has_separate_scopes_and_dispatch():
     validate_interface_dispatch()
     assert metrics.METRICS.require("interface_pdockq2_zhu").result_scope == "chain_rest"
     assert all(not s.plot_modes for s in metrics.METRICS if s.interface is not None)
+
+
+def test_interface_references_identify_metric_papers_and_implementations():
+    expected = {
+        "interface_ipsae": "10.1101/2025.02.10.637595",
+        "interface_lis_kim": "10.1101/2024.02.19.580970",
+        "interface_lis_dunbrack": "10.1101/2024.02.19.580970",
+        "interface_clis": "10.64898/2026.04.14.718529",
+        "interface_ilis": "10.64898/2026.04.14.718529",
+        "interface_pdockq": "10.1038/s41467-022-28865-w",
+        "interface_pdockq2_dunbrack": "10.1093/bioinformatics/btad424",
+        "interface_pdockq2_zhu": "10.1093/bioinformatics/btad424",
+    }
+    for key, doi in expected.items():
+        definition = metrics.METRICS.require(key).interface
+        assert (
+            definition.citation
+            == definition.references[0].url
+            == f"https://doi.org/{doi}"
+        )
+        assert definition.references[0].label
+        assert definition.revision in definition.implementation_url
+        if key in {
+            "interface_ipsae",
+            "interface_lis_kim",
+            "interface_clis",
+            "interface_ilis",
+        }:
+            assert "bioRxiv preprint" in definition.references[0].label
+    pdockq = metrics.METRICS.require("interface_pdockq").interface
+    assert pdockq.references[1].url == "https://doi.org/10.1038/s41467-022-29480-5"
+    assert "Corrected sigmoid coefficients" in pdockq.references[1].label
+    provider = metrics.METRICS.require("interface_iptm").interface
+    assert provider.references[0].url is None
+    assert provider.implementation_url is None
 
 
 def test_geometry_is_read_once_and_preserves_legacy_token_mapping(tmp_path):

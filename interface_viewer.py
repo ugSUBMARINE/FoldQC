@@ -409,14 +409,22 @@ class InterfaceDialog(QtWidgets.QDialog):
         text = score_details(self.report, row, key)
         definition = metrics.METRICS.require(key).interface
         assert definition is not None
-        link = definition.citation
-        citation = (
-            f'<a href="{html.escape(link, quote=True)}">{html.escape(link)}</a>'
-            if link.startswith("https://")
-            else html.escape(link)
-        )
+        references = []
+        for reference in definition.references:
+            label = html.escape(reference.label)
+            references.append(
+                f'<li><a href="{html.escape(reference.url, quote=True)}">{label}</a></li>'
+                if reference.url is not None and reference.url.startswith("https://")
+                else f"<li>{label}</li>"
+            )
+        citation = "<b>References</b><ul>" + "".join(references) + "</ul>"
+        if definition.implementation_url is not None:
+            citation += (
+                f'<p><a href="{html.escape(definition.implementation_url, quote=True)}">'
+                "Pinned implementation</a></p>"
+            )
         self.details.setHtml(
-            f'<pre style="white-space: pre-wrap">{html.escape(text)}</pre><p>{citation}</p>'
+            f'<pre style="white-space: pre-wrap">{html.escape(text)}</pre>{citation}'
         )
         self._enable_selection()
 

@@ -167,6 +167,19 @@ def main() -> None:
         dark.data(dark.index(0, 1), BackgroundRole).getRgbF()[:3]
     )
     assert window.select.isEnabled()
+    assert "Original Zhu chain-versus-rest scores" not in window.details.toPlainText()
+    assert "Dunbrack (2025)" in window.details.toPlainText()
+    assert "10.1101/2025.02.10.637595" in window.details.toHtml()
+    assert "Pinned implementation" in window.details.toPlainText()
+    window.selection_metric.setCurrentIndex(
+        window.selection_metric.findData("interface_pdockq")
+    )
+    assert "10.1038/s41467-022-28865-w" in window.details.toHtml()
+    assert "10.1038/s41467-022-29480-5" in window.details.toHtml()
+    assert "Bryant, Pozzati & Elofsson (2022)" in window.details.toPlainText()
+    window.selection_metric.setCurrentIndex(
+        window.selection_metric.findData("interface_ipsae")
+    )
     window._select()
     assert observer.select_interface_contributors.call_args.args[0].side == "both"
     window.rest.model().sort(3, DescendingOrder)
