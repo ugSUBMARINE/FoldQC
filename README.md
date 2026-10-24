@@ -413,6 +413,25 @@ values, confidence source, support counts, contributors, and citation. **Chain
 versus rest** presents original Zhu pDockQ2 for each chain against all other
 protein chains, including dimers.
 
+The **Cβ pairs / Cα pairs** columns count geometric residue pairs. Details also
+show the number of **unique contacting residues on A and B/rest**, the atom
+convention, and the inclusive 8 Å cutoff. One residue may contact several partner
+residues, so pair counts can exceed either residue count. Chain-pair diagnostics
+use Cβ (Cα for glycine); chain-versus-rest diagnostics use Cα and count each
+partner residue once across the rest chains. These counts depend only on original
+geometry and remain available when PAE or pLDDT is missing. Missing or ambiguous
+required coordinates give N/A with a reason; valid interfaces without contacts
+give zero counts. Ensemble rows have no averaged contact diagnostic.
+
+**Contacts CSV** exports every geometric contact for the selected model and
+chain pair or chain-versus-rest row, including when selected through the heatmap.
+It uses that row's atom convention, independently of the metric or contributor
+side selected in the details controls, and applies no PAE filter. This export
+requires a current snapshot with available geometry; aggregate rows cannot be
+exported as contact lists. The existing **Export CSV** continues to export the
+complete report, including stale snapshots. Contact exports run in the background
+and can be canceled; failed or canceled exports preserve an existing output file.
+
 Header tooltips and score details identify each metric's implementation and
 aggregation. CSV exports retain full precision. The report presents Kim LIS;
 the strict-cutoff Dunbrack LIS variant is also included in the CSV export.
@@ -472,7 +491,7 @@ The report is a snapshot. Change the preset and press **Analyze target** to
 refresh. The header records the preset used by the displayed results. Changing
 the main target does not automatically recalculate; stale
 snapshots remain readable/exportable but cannot select residues on replacement
-models. Failed/canceled refreshes leave the previous report intact. The window
+models or generate contact-list exports. Failed/canceled refreshes leave the previous report intact. The window
 closes with the plugin.
 
 These are confidence/quality estimates, **not binding probabilities or affinity
@@ -491,7 +510,7 @@ separate from locally calculated, explicitly scoped results.
 ### Interface CSV schema
 
 **Export CSV** exports the complete snapshot, regardless of tab, sort order, or
-selected row. This is a separate schema (`interface_schema_version=1`); the
+selected row. This is a separate schema (`interface_schema_version=2`); the
 existing token CSV schema remains unchanged. Each row contains one model/scope/
 metric/direction or one ensemble statistic.
 
@@ -505,8 +524,27 @@ metric/direction or one ensemble statistic.
 | `direction`, `aggregation`, `confidence_source` | Summary or A→B/B→A direction; metric aggregation or ensemble statistic; confidence input provenance. |
 | `value`, `status`, `reason` | Numeric value or empty field; `ok`/`unavailable`; explanatory text including special no-contact behavior. |
 | `counts`, `interface_plddt` | JSON support/contact counts and representative-atom interface confidence. LIA/cLIA combined counts sum directional qualifying cells, so a pair qualifying both ways contributes twice. |
+| `contact_diagnostics` | JSON geometry-only diagnostic for the model/scope, repeated on its metric/direction rows: `scope`, `chain_a`, `partners`, `convention` (`cb_ca_gly` or `ca`), `cutoff_angstrom`, `comparison` (`<=`), `pair_count`, `residues_a`, `residues_b`, `status`, and `reason`. Unavailable counts are JSON `null`; aggregate rows leave this field empty. Added in v2; existing score/support fields retain their meaning. |
 | `contributors_a`, `contributors_b` | JSON arrays of token index, chain ID, lossless residue ID (including insertion code), and residue name. |
 | `n_models`, `member_ranks`, `residue_identities` | Coverage and JSON member ranks; aggregate identity groups. Ensemble rows provide mean, population standard deviation, minimum, maximum, and directional means where defined. |
 
 No palette, color range, or PyMOL selection expression is exported. Coloring and
 per-residue plots are not part of this interface window release.
+
+### Contact CSV schema
+
+**Contacts CSV** uses its own `contact_schema_version=1`, with one row per
+geometric contact, ordered by canonical token index A then B. It contains:
+
+| Columns | Meaning |
+|---|---|
+| `provider`, `prediction_name`, `input_path`, `target_name`, `model_rank`, `model_label`, `structure_path` | Captured prediction, target, and model provenance. Distances use original prediction coordinates. |
+| `scope`, `chain_a`, `partner_chains` | Selected interface scope and partners (JSON chain-ID array). For chain versus rest, each endpoint B retains its actual partner chain. |
+| `convention`, `cutoff_angstrom`, `comparison` | `cb_ca_gly` for Cβ/Cα-glycine chain pairs or `ca` for Cα chain versus rest; distance ≤8 Å. |
+| `token_index_a/b`, `chain_id_a/b`, `residue_number_a/b`, `insertion_code_a/b`, `res_name_a/b`, `atom_name_a/b` | Separate columns for both endpoints, preserving zero-based token indices, residue numbering/insertion codes, and actual `CA`/`CB` representative names. |
+| `distance_angstrom` | Representative-atom distance in Å, exported at full precision. |
+
+A valid zero-contact interface writes a header-only file. Unavailable geometry
+cannot be exported. Contact lists are generated on demand from the current
+snapshot's canonical structure; stale snapshots retain their compact counts but
+must be analyzed again before exporting a pair list.

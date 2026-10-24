@@ -10,14 +10,21 @@ from __future__ import annotations
 
 import csv
 import json
-from collections.abc import Iterable
+import tempfile
+import weakref
+from collections.abc import Callable, Iterable, Iterator
+from dataclasses import asdict
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
 
 from . import metrics
-from .interface_analysis import InterfaceReport
+from .interface_analysis import (
+    InterfaceContactDiagnostics,
+    InterfaceModelResult,
+    InterfaceReport,
+)
 
 if TYPE_CHECKING:
     from .loader_models import PredictionData, PredictionFiles
@@ -25,7 +32,7 @@ if TYPE_CHECKING:
 
 SCHEMA_VERSION = "2"
 
-INTERFACE_SCHEMA_VERSION = "1"
+INTERFACE_SCHEMA_VERSION = "2"
 INTERFACE_COLUMNS = (
     "interface_schema_version",
     "provider",
@@ -53,6 +60,7 @@ INTERFACE_COLUMNS = (
     "status",
     "reason",
     "counts",
+    "contact_diagnostics",
     "interface_plddt",
     "contributors_a",
     "contributors_b",
@@ -108,6 +116,16 @@ def interface_report_rows(report: InterfaceReport) -> list[dict[str, object]]:
         for score in model.scores:
             spec = metrics.METRICS.require(score.metric_key)
             assert spec.interface is not None
+            diagnostic = next(
+                (
+                    d
+                    for d in model.contacts
+                    if d.scope == spec.result_scope
+                    and d.chain_a == score.chain_a
+                    and d.partners == score.partners
+                ),
+                None,
+            )
             common = (
                 base
                 | metadata(score.metric_key)
@@ -122,6 +140,12 @@ def interface_report_rows(report: InterfaceReport) -> list[dict[str, object]]:
                     "status": score.status,
                     "reason": score.reason,
                     "counts": json.dumps(dict(score.counts)),
+                    "contact_diagnostics": ""
+                    if diagnostic is None
+                    else json.dumps(
+                        asdict(diagnostic) | {"status": diagnostic.status},
+                        ensure_ascii=False,
+                    ),
                     "interface_plddt": ""
                     if score.interface_plddt is None
                     else score.interface_plddt,
@@ -212,6 +236,129 @@ def write_interface_report(path: str | Path, report: InterfaceReport) -> None:
         writer = csv.DictWriter(stream, fieldnames=INTERFACE_COLUMNS)
         writer.writeheader()
         writer.writerows(interface_report_rows(report))
+
+
+CONTACT_SCHEMA_VERSION = "1"
+CONTACT_COLUMNS = (
+    "contact_schema_version",
+    "provider",
+    "prediction_name",
+    "input_path",
+    "target_name",
+    "model_rank",
+    "model_label",
+    "structure_path",
+    "scope",
+    "chain_a",
+    "partner_chains",
+    "convention",
+    "cutoff_angstrom",
+    "comparison",
+    "token_index_a",
+    "chain_id_a",
+    "residue_number_a",
+    "insertion_code_a",
+    "res_name_a",
+    "atom_name_a",
+    "token_index_b",
+    "chain_id_b",
+    "residue_number_b",
+    "insertion_code_b",
+    "res_name_b",
+    "atom_name_b",
+    "distance_angstrom",
+)
+
+
+def interface_contact_rows(
+    report: InterfaceReport,
+    model: InterfaceModelResult,
+    diagnostic: InterfaceContactDiagnostics,
+    pairs: Iterable[tuple[int, int, float]],
+) -> Iterator[dict[str, object]]:
+    """One row per geometric contact, with lossless canonical endpoints."""
+    base: dict[str, object] = {
+        "contact_schema_version": CONTACT_SCHEMA_VERSION,
+        "provider": report.provider,
+        "prediction_name": report.prediction_name,
+        "input_path": report.input_path,
+        "target_name": report.target_name,
+        "model_rank": model.rank,
+        "model_label": model.label,
+        "structure_path": model.structure_path,
+        "scope": diagnostic.scope,
+        "chain_a": diagnostic.chain_a,
+        "partner_chains": json.dumps(diagnostic.partners),
+        "convention": diagnostic.convention,
+        "cutoff_angstrom": diagnostic.cutoff_angstrom,
+        "comparison": diagnostic.comparison,
+    }
+    for a, b, distance in pairs:
+        row = base | {"distance_angstrom": distance}
+        for side, i in (("a", a), ("b", b)):
+            token = model.token_map[i]
+            row.update(
+                {
+                    f"token_index_{side}": i,
+                    f"chain_id_{side}": token.chain_id,
+                    f"residue_number_{side}": token.residue_id.number,
+                    f"insertion_code_{side}": token.residue_id.insertion_code,
+                    f"res_name_{side}": token.res_name,
+                    f"atom_name_{side}": "CA"
+                    if diagnostic.convention == "ca" or token.res_name.upper() == "GLY"
+                    else "CB",
+                }
+            )
+        yield row
+
+
+class PreparedContactCsv:
+    """Own an adjacent temporary output until validated commit or disposal."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self._cleanup = weakref.finalize(self, path.unlink, missing_ok=True)
+
+    def close(self) -> None:
+        self._cleanup()
+
+    def commit(self, destination: str) -> None:
+        self.path.replace(destination)
+        self._cleanup.detach()
+
+
+def prepare_interface_contact_csv(
+    destination: str,
+    rows: Iterable[dict[str, object]],
+    check_cancel: Callable[[], None],
+) -> PreparedContactCsv:
+    """Stream an audit to an owned sibling file; never publish from a worker."""
+    output = Path(destination)
+    check_cancel()
+    prepared: PreparedContactCsv | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            newline="",
+            encoding="utf-8",
+            dir=output.parent,
+            prefix=f".{output.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as stream:
+            prepared = PreparedContactCsv(Path(stream.name))
+            writer = csv.DictWriter(stream, fieldnames=CONTACT_COLUMNS)
+            writer.writeheader()
+            for row in rows:
+                check_cancel()
+                writer.writerow(row)
+            check_cancel()
+            stream.flush()
+    except BaseException:
+        if prepared is not None:
+            prepared.close()
+        raise
+    return prepared
 
 
 BASE_COLUMNS = [

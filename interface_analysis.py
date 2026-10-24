@@ -40,6 +40,33 @@ class InterfaceScoreResult:
 
 
 @dataclass(frozen=True)
+class InterfaceContactDiagnostics:
+    """Geometry-only counts, independent of metric confidence/support masks."""
+
+    scope: Literal["chain_pair", "chain_rest"]
+    chain_a: str
+    partners: tuple[str, ...]
+    convention: Literal["cb_ca_gly", "ca"]
+    pair_count: int | None
+    residues_a: int | None
+    residues_b: int | None
+    reason: str = ""
+    cutoff_angstrom: float = 8.0
+    comparison: Literal["<="] = "<="
+
+    @property
+    def status(self) -> str:
+        return "unavailable" if self.pair_count is None else "ok"
+
+
+@dataclass(frozen=True)
+class InterfaceContactExportRequest:
+    rank: int
+    diagnostic: InterfaceContactDiagnostics
+    path: str
+
+
+@dataclass(frozen=True)
 class InterfaceModelResult:
     rank: int
     label: str
@@ -50,6 +77,7 @@ class InterfaceModelResult:
     scores: tuple[InterfaceScoreResult, ...]
     diagnostics: tuple[str, ...] = ()
     protein_indices: tuple[int, ...] = ()
+    contacts: tuple[InterfaceContactDiagnostics, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -97,6 +125,9 @@ class InterfaceReportObserver(Protocol):
     ) -> None: ...
     def clear_interface_selection(self) -> None: ...
     def export_interface_report(self, path: str) -> None: ...
+    def export_interface_contacts(
+        self, request: InterfaceContactExportRequest
+    ) -> None: ...
     def interface_window_closed(self) -> None: ...
 
 

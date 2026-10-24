@@ -61,7 +61,7 @@ class GuiApplicationServices:
 
         self.operations = GuiOperationCoordinator(presenter, view)
         self.interfaces = InterfaceReportService(
-            state, viewer, presenter, self.operations
+            state, viewer, presenter, self.operations, job_runner
         )
         self.operations.observe(self.interfaces)
         self.context = ContextService(

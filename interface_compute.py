@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import replace
 from itertools import combinations
 
@@ -15,6 +15,7 @@ from .confidence import PredictionConfidence
 from .interface_analysis import (
     InterfaceAggregate,
     InterfaceAnalysisOptions,
+    InterfaceContactDiagnostics,
     InterfaceModelResult,
     InterfaceScoreResult,
 )
@@ -76,6 +77,48 @@ def _finite_pae(pae: np.ndarray | None) -> bool:
     return bool(pae is not None and np.isfinite(pae).all() and (pae >= 0).all())
 
 
+def iter_interface_contacts(
+    index: StructureIndex,
+    diagnostic: InterfaceContactDiagnostics,
+    check_cancel: Callable[[], None],
+) -> Iterator[tuple[int, int, float]]:
+    """Canonical endpoint indices and distances; no pairs retained in reports."""
+    geometry = index.geometry
+    if geometry is None or diagnostic.pair_count is None:
+        raise ValueError("Contact geometry is unavailable.")
+    if (
+        diagnostic.cutoff_angstrom != P.INTERFACE_CONTACT_CUTOFF
+        or diagnostic.comparison != "<="
+    ):
+        raise ValueError("Unsupported contact definition.")
+    tm = index.token_map
+    eligible = protein_token_indices(tm, geometry)
+    ia = tuple(i for i in eligible if tm[i].chain_id == diagnostic.chain_a)
+    ib = tuple(i for i in eligible if tm[i].chain_id in diagnostic.partners)
+    coords = geometry.ca if diagnostic.convention == "ca" else geometry.cb
+    first, second = coords[list(ia)], coords[list(ib)]
+    if not np.isfinite(first).all() or not np.isfinite(second).all():
+        raise ValueError("Required representative-atom coordinates are unavailable.")
+    count = 0
+    support_a: set[int] = set()
+    support_b: set[int] = set()
+    for start, mask, squared in P.interface_contact_tiles(first, second, check_cancel):
+        rows, columns = np.nonzero(mask)
+        for row, column in zip(rows, columns, strict=True):
+            a, b = ia[start + int(row)], ib[int(column)]
+            count += 1
+            support_a.add(a)
+            support_b.add(b)
+            yield a, b, float(np.sqrt(squared[row, column]))
+    check_cancel()
+    if (count, len(support_a), len(support_b)) != (
+        diagnostic.pair_count,
+        diagnostic.residues_a,
+        diagnostic.residues_b,
+    ):
+        raise ValueError("Contact audit does not match the captured diagnostic.")
+
+
 def compute_interface_model(
     index: StructureIndex,
     pae: np.ndarray | None,
@@ -98,6 +141,7 @@ def compute_interface_model(
         if any(i in eligible for i in tm.chain_to_indices[chain])
     }
     scores: list[InterfaceScoreResult] = []
+    contacts: list[InterfaceContactDiagnostics] = []
     ca_contacts: dict[tuple[str, str], np.ndarray | None] = {}
     # Store CA contact masks for the original chain-versus-rest calculation.
     # PAE chain blocks are released after each pair (never cached in reports).
@@ -123,6 +167,18 @@ def compute_interface_model(
                         cb = contact
         ca_contacts[a, b] = ca
         ca_contacts[b, a] = None if ca is None else ca.T
+        contacts.append(
+            InterfaceContactDiagnostics(
+                "chain_pair",
+                a,
+                (b,),
+                "cb_ca_gly",
+                None if cb is None else int(cb.sum()),
+                None if cb is None else len(_support(ia, cb, axis=1)),
+                None if cb is None else len(_support(ib, cb, axis=0)),
+                "Missing or ambiguous Cβ/Cα-glycine coordinates." if cb is None else "",
+            )
+        )
         valid_pae = _finite_pae(ab) and _finite_pae(ba)
         pae_reason = (
             "PAE unavailable."
@@ -285,6 +341,31 @@ def compute_interface_model(
         partners = tuple(b for b in groups if b != a)
         if not partners:
             continue
+        contact_count = 0
+        contact_a: set[int] = set()
+        contact_b: set[int] = set()
+        contact_reason = ""
+        for b in partners:
+            check_cancel()
+            mask = ca_contacts[a, b]
+            if mask is None:
+                contact_reason = "Missing or ambiguous Cα coordinates."
+                break
+            contact_count += int(mask.sum())
+            contact_a.update(_support(ia, mask, axis=1))
+            contact_b.update(_support(groups[b], mask, axis=0))
+        contacts.append(
+            InterfaceContactDiagnostics(
+                "chain_rest",
+                a,
+                partners,
+                "ca",
+                None if contact_reason else contact_count,
+                None if contact_reason else len(contact_a),
+                None if contact_reason else len(contact_b),
+                contact_reason,
+            )
+        )
         n, pae_sum, plddt_sum = 0, 0.0, 0.0
         support_a: set[int] = set()
         support_b: set[int] = set()
@@ -361,6 +442,7 @@ def compute_interface_model(
         tuple(scores),
         diagnostics,
         tuple(sorted(eligible)),
+        tuple(contacts),
     )
 
 

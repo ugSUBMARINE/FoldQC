@@ -2,23 +2,39 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
+from threading import Event
 from weakref import ReferenceType, ref
 
 from .analysis import ResolvedAnalysis
 from .ensemble import EnsembleState
-from .export import write_interface_report
-from .gui_services import ObjectTokenSelection, OperationCoordinatorPort, ViewerPort
+from .export import (
+    PreparedContactCsv,
+    interface_contact_rows,
+    prepare_interface_contact_csv,
+    write_interface_report,
+)
+from .gui_services import (
+    JobRunner,
+    ObjectTokenSelection,
+    OperationCoordinatorPort,
+    OperationLease,
+    ViewerPort,
+)
 from .gui_state import PluginState
 from .interface_analysis import (
+    InterfaceContactExportRequest,
     InterfaceReport,
     InterfaceReportObserver,
     InterfaceReportViewPort,
     InterfaceSelectionRequest,
 )
+from .interface_compute import iter_interface_contacts
 from .loader_models import PredictionFiles
 from .model_state import ModelState
 from .presentation import Notice, PresentationPort
+from .structure_index import StructureIndex
 
 INTERFACE_SELECTION = "foldqc_interface"
 
@@ -40,6 +56,15 @@ class _ReportSource:
     members: tuple[_MemberSource, ...]
 
 
+@dataclass(frozen=True)
+class _PendingContactExport:
+    lease: OperationLease
+    request: InterfaceContactExportRequest
+    report: InterfaceReport
+    index: StructureIndex
+    cancelled: Event
+
+
 class InterfaceReportService:
     def __init__(
         self,
@@ -47,11 +72,14 @@ class InterfaceReportService:
         viewer: ViewerPort,
         presenter: PresentationPort,
         operations: OperationCoordinatorPort,
+        job_runner: JobRunner,
     ) -> None:
         self._state = state
         self._viewer = viewer
         self._presenter = presenter
         self._operations = operations
+        self._job_runner = job_runner
+        self._pending_contacts: _PendingContactExport | None = None
         self._report: InterfaceReport | None = None
         self._source: _ReportSource | None = None
         self._view: InterfaceReportViewPort | None = None
@@ -246,7 +274,143 @@ class InterfaceReportService:
             self._operations.finish(lease)
 
     def window_closed(self) -> None:
+        self._cancel_contact_export()
         self.clear_selection()
         self._view = None
         self._report = None
         self._source = None
+
+    def _contact_index(
+        self, request: InterfaceContactExportRequest
+    ) -> StructureIndex | None:
+        report, source = self._report, self._source
+        if report is None or source is None or not self.is_current():
+            return None
+        model = next((m for m in report.models if m.rank == request.rank), None)
+        member = next((m for m in source.members if m.rank == request.rank), None)
+        canonical = None if member is None else member.model()
+        if (
+            model is None
+            or canonical is None
+            or canonical.token_map is not model.token_map
+            or not any(d is request.diagnostic for d in model.contacts)
+            or request.diagnostic.pair_count is None
+        ):
+            return None
+        return canonical.structure_index
+
+    def export_contacts(self, request: InterfaceContactExportRequest) -> None:
+        if self._operations.is_busy:
+            return
+        index = self._contact_index(request)
+        report = self._report
+        if index is None or report is None:
+            self.refresh_current()
+            self._presenter.present_notice(
+                Notice(
+                    "stale_interface_contacts",
+                    "Contact export requires available geometry in the current snapshot. Analyze the current target again.",
+                )
+            )
+            return
+        model = next(m for m in report.models if m.rank == request.rank)
+        cancelled = Event()
+        lease = self._operations.begin(
+            "analysis",
+            title="FoldQC – Contact export",
+            label="Exporting geometric contacts…",
+            cancellable=True,
+            on_cancel=self._cancel_contact_export,
+        )
+        if lease is None:
+            return
+        self._pending_contacts = _PendingContactExport(
+            lease, request, report, index, cancelled
+        )
+
+        def task(progress: Callable[[str], None]) -> PreparedContactCsv:
+            def check() -> None:
+                if cancelled.is_set():
+                    raise InterruptedError("Contact export cancelled.")
+
+            progress("Writing geometric contact pairs…")
+            pairs = iter_interface_contacts(index, request.diagnostic, check)
+            rows = interface_contact_rows(report, model, request.diagnostic, pairs)
+            return prepare_interface_contact_csv(request.path, rows, check)
+
+        try:
+            handle = self._job_runner.submit(
+                lease.request_id,
+                task,
+                self._contact_progress,
+                self._contact_result,
+                self._contact_error,
+            )
+            self._operations.attach(lease, handle)
+        except Exception as exc:
+            self._contact_error(lease.request_id, exc)
+
+    def _cancel_contact_export(self) -> None:
+        pending, self._pending_contacts = self._pending_contacts, None
+        if pending is not None:
+            pending.cancelled.set()
+            if self._operations.is_current(pending.lease):
+                self._operations.abandon()
+
+    def _contact_progress(self, request_id: int, label: str) -> None:
+        pending = self._pending_contacts
+        if pending is not None and pending.lease.request_id == request_id:
+            self._operations.update(pending.lease, label)
+
+    def _contact_is_current(self, pending: _PendingContactExport) -> bool:
+        return (
+            self._report is pending.report
+            and not pending.cancelled.is_set()
+            and self._contact_index(pending.request) is pending.index
+        )
+
+    def _contact_result(self, request_id: int, value: object) -> None:
+        pending = self._pending_contacts
+        if (
+            pending is None
+            or pending.lease.request_id != request_id
+            or not self._operations.is_current(pending.lease)
+        ):
+            self._job_runner.dispose(value)
+            return
+        self._pending_contacts = None
+        try:
+            if not self._contact_is_current(pending):
+                return
+            if not isinstance(value, PreparedContactCsv):
+                raise ValueError("Unexpected contact export result.")
+            value.commit(pending.request.path)
+        except Exception as exc:
+            self._presenter.present_notice(
+                Notice("interface_contact_export_failed", str(exc), severity="error")
+            )
+        finally:
+            self._job_runner.dispose(value)
+            self._operations.finish(pending.lease)
+            self.refresh_current()
+
+    def _contact_error(self, request_id: int, failure: object) -> None:
+        pending = self._pending_contacts
+        if (
+            pending is None
+            or pending.lease.request_id != request_id
+            or not self._operations.is_current(pending.lease)
+        ):
+            return
+        self._pending_contacts = None
+        current = self._contact_is_current(pending)
+        self._operations.finish(pending.lease)
+        self.refresh_current()
+        if current:
+            self._presenter.present_notice(
+                Notice(
+                    "interface_contact_export_failed",
+                    str(getattr(failure, "message", failure)),
+                    severity="error",
+                )
+            )

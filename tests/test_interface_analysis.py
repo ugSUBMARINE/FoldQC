@@ -19,7 +19,11 @@ from FoldQC.analysis import (
 from FoldQC.analysis_coordinator import AnalysisCoordinator
 from FoldQC.confidence import PredictionConfidence
 from FoldQC.data_acquisition import DataAcquisitionService
-from FoldQC.export import interface_report_rows, write_interface_report
+from FoldQC.export import (
+    interface_contact_rows,
+    interface_report_rows,
+    write_interface_report,
+)
 from FoldQC.gui_operations import GuiOperationCoordinator
 from FoldQC.gui_services import ContextSelection
 from FoldQC.interface_analysis import (
@@ -30,6 +34,7 @@ from FoldQC.interface_analysis import (
 from FoldQC.interface_compute import (
     aggregate_interface_models,
     compute_interface_model,
+    iter_interface_contacts,
     validate_interface_dispatch,
 )
 from FoldQC.interface_report_data import (
@@ -548,7 +553,7 @@ def harness(with_pae=True):
     presenter, runner = ReportPresenter(), DeferredRunner()
     operations = GuiOperationCoordinator(presenter, FakeView())
     viewer = Mock()
-    service = InterfaceReportService(state, viewer, presenter, operations)
+    service = InterfaceReportService(state, viewer, presenter, operations, runner)
     operations.observe(service)
     context = Mock()
     context.selection = ContextSelection(target_name="model_0")
@@ -788,6 +793,24 @@ def test_boltz_api_example_retains_geometry_for_all_models(rank, contacts):
             object_name=f"model_{rank}",
         )
         assert dict(score(result, "pdockq").counts)["cb_contact_pairs"] == contacts
+        if rank == 4:
+            diagnostic = next(d for d in result.contacts if d.scope == "chain_pair")
+            assert (
+                diagnostic.pair_count,
+                diagnostic.residues_a,
+                diagnostic.residues_b,
+            ) == (297, 100, 99)
+            rows = list(
+                interface_contact_rows(
+                    report(result),
+                    result,
+                    diagnostic,
+                    iter_interface_contacts(index, diagnostic, lambda: None),
+                )
+            )
+            assert len(rows) == 297
+            assert len({r["token_index_a"] for r in rows}) == 100
+            assert len({r["token_index_b"] for r in rows}) == 99
         for key in ("clis", "ilis", "pdockq", "pdockq2_dunbrack", "pdockq2_zhu"):
             assert score(result, key).value is not None
         assert score(result, "pdockq2_zhu", "B").value is not None

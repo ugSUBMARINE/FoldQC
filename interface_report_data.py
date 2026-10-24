@@ -5,7 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from . import metrics
-from .interface_analysis import InterfaceReport, InterfaceScoreResult
+from .interface_analysis import (
+    InterfaceContactDiagnostics,
+    InterfaceReport,
+    InterfaceScoreResult,
+)
 from .interface_compute import interface_metric_specs
 
 
@@ -16,6 +20,7 @@ class InterfaceTableRow:
     chain_a: str
     partners: tuple[str, ...]
     scores: tuple[InterfaceScoreResult, ...]
+    contacts: InterfaceContactDiagnostics | None = None
 
     def score(self, key: str) -> InterfaceScoreResult | None:
         return next((s for s in self.scores if s.metric_key == key), None)
@@ -30,7 +35,21 @@ def report_rows(report: InterfaceReport, scope: str) -> tuple[InterfaceTableRow,
             if score.metric_key in visible:
                 pairs.setdefault((score.chain_a, score.partners), []).append(score)
         rows.extend(
-            InterfaceTableRow(model.label, model.rank, a, b, tuple(scores))
+            InterfaceTableRow(
+                model.label,
+                model.rank,
+                a,
+                b,
+                tuple(scores),
+                next(
+                    (
+                        d
+                        for d in model.contacts
+                        if d.scope == scope and d.chain_a == a and d.partners == b
+                    ),
+                    None,
+                ),
+            )
             for (a, b), scores in pairs.items()
         )
     aggregates: dict[
@@ -118,6 +137,8 @@ def score_details(report: InterfaceReport, row: InterfaceTableRow, key: str) -> 
     assert definition is not None
     lines = [
         f"{row.label}: {row.chain_a} → {', '.join(row.partners)}",
+        contact_details(row.contacts),
+        "",
         spec.label,
         spec.details_template,
         "",
@@ -132,7 +153,8 @@ def score_details(report: InterfaceReport, row: InterfaceTableRow, key: str) -> 
             f"A→B: {score.forward}; B→A: {score.reverse}",
             f"Parameters: {dict(score.parameters)}",
             f"Confidence source: {score.confidence_source}",
-            f"Support counts: {dict(score.counts)}",
+            f"Metric support counts: {dict(score.counts)}",
+            "LIA/cLIA count directional qualifying cells, not areas or unique residues.",
             f"Interface pLDDT: {score.interface_plddt}",
             score.reason,
         ]
@@ -149,3 +171,19 @@ def score_details(report: InterfaceReport, row: InterfaceTableRow, key: str) -> 
             )
         lines.extend(model.diagnostics)
     return "\n".join(lines)
+
+
+def contact_details(diagnostic: InterfaceContactDiagnostics | None) -> str:
+    """Compact geometry summary shared by details and contact tooltips."""
+    if diagnostic is None:
+        return "Geometric contacts: N/A. Diagnostics are available per model only."
+    atoms = "Cβ, Cα for glycine" if diagnostic.convention == "cb_ca_gly" else "Cα"
+    definition = f"{atoms}; distance ≤{diagnostic.cutoff_angstrom:g} Å."
+    if diagnostic.pair_count is None:
+        return f"Geometric contacts: N/A. {definition} {diagnostic.reason}"
+    partner = "B" if diagnostic.scope == "chain_pair" else "rest"
+    return (
+        f"Geometric contacts: {diagnostic.pair_count} pairs; "
+        f"unique residues A: {diagnostic.residues_a}, {partner}: {diagnostic.residues_b}. "
+        f"{definition}"
+    )

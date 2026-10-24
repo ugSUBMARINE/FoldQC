@@ -37,6 +37,7 @@ from .gui_services import (
 from .gui_state import PluginState
 from .interface_analysis import (
     InterfaceAnalysisOptions,
+    InterfaceContactExportRequest,
     InterfaceReport,
     InterfaceSelectionRequest,
 )
@@ -154,6 +155,10 @@ class AnalysisCoordinator(DataLoadObserver):
     def export_interface_report(self, path: str) -> None:
         if self._interfaces is not None:
             self._interfaces.export(path)
+
+    def export_interface_contacts(self, request: InterfaceContactExportRequest) -> None:
+        if self._interfaces is not None:
+            self._interfaces.export_contacts(request)
 
     def interface_window_closed(self) -> None:
         pending = self._pending_interfaces

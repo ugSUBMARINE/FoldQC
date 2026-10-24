@@ -7,6 +7,7 @@ An optional second argument selects a Qt style (e.g. macOS) for layout checks.
 
 from __future__ import annotations
 
+import csv as csv_module
 import json
 import sys
 import tempfile
@@ -121,15 +122,18 @@ def main() -> None:
     assert {button.text() for button in buttons} == {
         "Analyze target",
         "Export CSV",
+        "Contacts CSV",
         "Select",
     }
-    assert len(buttons) == 3
+    assert len(buttons) == 4
     for button in buttons:
         assert isinstance(button, FixedMainButton)
         assert button.width() == PRIMARY_BUTTON_WIDTH
         assert button.height() == PRIMARY_BUTTON_HEIGHT
     assert window.analyze.y() == window.export.y()
     assert window.export.x() > window.analyze.x()
+    assert window.contacts_export.y() == window.export.y()
+    assert window.contacts_export.x() > window.export.x()
     panel = window.details_controls
     assert (
         panel.minimumWidth() == panel.maximumWidth() == INTERFACE_DETAILS_CONTROL_WIDTH
@@ -229,6 +233,23 @@ def main() -> None:
         dark.data(dark.index(0, 1), BackgroundRole).getRgbF()[:3]
     )
     assert window.select.isEnabled()
+    assert window.contacts_export.isEnabled()
+    assert "Geometric contacts: 2 pairs" in window.details.toPlainText()
+    captured_contact = window._selected[0].contacts
+
+    def change_selection_in_dialog(*_args):
+        window.tabs.setCurrentIndex(1)
+        return "/tmp/contact-capture-only.csv", "CSV files (*.csv)"
+
+    with patch.object(
+        QtWidgets.QFileDialog, "getSaveFileName", side_effect=change_selection_in_dialog
+    ):
+        window.contacts_export.click()
+    assert (
+        observer.export_interface_contacts.call_args.args[0].diagnostic
+        is captured_contact
+    )
+    window.tabs.setCurrentIndex(0)
     assert "Original Zhu chain-versus-rest scores" not in window.details.toPlainText()
     assert "Dunbrack (2025)" in window.details.toPlainText()
     assert "10.1101/2025.02.10.637595" in window.details.toHtml()
@@ -257,14 +278,18 @@ def main() -> None:
     window.heat_model.setCurrentIndex(2)
     window._heat_clicked(window.heat.model().index(0, 1))
     assert not window.select.isEnabled()  # ensemble mean is never a viewer target
+    assert not window.contacts_export.isEnabled()
     window.heat_model.setCurrentIndex(0)
     window._heat_clicked(window.heat.model().index(0, 1))
     window.set_current(False)
     assert not window.select.isEnabled()
+    assert not window.contacts_export.isEnabled()
+    assert window.export.isEnabled()  # snapshot CSV remains exportable
     window.set_current(True)
     window.set_busy(True)
     assert not window.select.isEnabled() and not window.analyze.isEnabled()
     assert not window.export.isEnabled()
+    assert not window.contacts_export.isEnabled()
     window.set_busy(False)
     window.preset.setCurrentIndex(1)
     window.analyze.click()
@@ -365,6 +390,24 @@ def main() -> None:
             ):
                 child.export.click()
             assert "interface_pdockq" in csv.read_text()
+            assert "contact_diagnostics" in csv.read_text()
+            contact_csv = folder / "contacts.csv"
+            with patch.object(
+                QtWidgets.QFileDialog,
+                "getSaveFileName",
+                return_value=(str(contact_csv), "CSV files (*.csv)"),
+            ):
+                assert child.contacts_export.isEnabled()
+                child.contacts_export.click()
+            wait_until(lambda: not dialog.services.operations.is_busy)
+            with contact_csv.open() as stream:
+                contact_rows = list(csv_module.DictReader(stream))
+            assert len(contact_rows) == 2
+            for row in contact_rows:
+                a, b = int(row["token_index_a"]), int(row["token_index_b"])
+                assert float(row["distance_angstrom"]) == float(
+                    np.linalg.norm(geometry.cb[a] - geometry.cb[b])
+                )
             assert dialog._presenter.raise_interface_report()
             child.select.click()
             assert viewer.name_exists("foldqc_interface")

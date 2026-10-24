@@ -30,12 +30,14 @@ from .compat import (
 from .gui_layout import BASE_LAYOUT_SPACING, FixedMainButton
 from .interface_analysis import (
     InterfaceAnalysisOptions,
+    InterfaceContactExportRequest,
     InterfaceReport,
     InterfaceReportObserver,
     InterfaceSelectionRequest,
 )
 from .interface_report_data import (
     InterfaceTableRow,
+    contact_details,
     heatmap_value,
     pair_metric_specs,
     report_metric_specs,
@@ -79,18 +81,10 @@ class InterfaceTableModel(QtCore.QAbstractTableModel):
         if column < 3 + len(self.specs):
             score = row.score(self.specs[column - 3].key)
             return None if score is None else score.value
-        score = row.score(
-            "interface_pdockq"
-            if self.scope == "chain_pair"
-            else "interface_pdockq2_zhu"
-        )
-        if score is None:
-            return None
         if column == len(self.headers) - 1 and self.scope == "chain_rest":
-            return score.interface_plddt
-        return dict(score.counts).get(
-            "cb_contact_pairs" if self.scope == "chain_pair" else "ca_contact_pairs"
-        )
+            score = row.score("interface_pdockq2_zhu")
+            return None if score is None else score.interface_plddt
+        return None if row.contacts is None else row.contacts.pair_count
 
     def data(self, index, role=DisplayRole):
         if not index.isValid():
@@ -115,12 +109,16 @@ class InterfaceTableModel(QtCore.QAbstractTableModel):
                 else score.reason
                 or "Published score; see details for scope and implementation."
             )
+        if role == ToolTipRole and index.column() == 3 + len(self.specs):
+            return contact_details(row.contacts)
         return None
 
     def headerData(self, section, orientation, role=DisplayRole):
         if role == DisplayRole and orientation == Horizontal:
             return self.headers[section]
         if role == ToolTipRole and orientation == Horizontal:
+            if section == 3 + len(self.specs):
+                return "Geometric residue pairs at distance ≤8 Å; Cβ (Cα for glycine) for chain pairs, Cα for chain versus rest. See details for unique residue counts."
             if self.scope == "chain_rest" and section == 1:
                 return "Scored chain"
             if self.scope == "chain_rest" and section == len(self.headers) - 1:
@@ -241,6 +239,9 @@ class InterfaceDialog(QtWidgets.QDialog):
         )
         self.export.clicked.connect(self._export)
         controls.addWidget(self.export)
+        self.contacts_export = FixedMainButton("Contacts CSV")
+        self.contacts_export.clicked.connect(self._export_contacts)
+        controls.addWidget(self.contacts_export)
         controls.addStretch()
         layout.addLayout(controls)
         self.tabs = QtWidgets.QTabWidget()
@@ -332,7 +333,7 @@ class InterfaceDialog(QtWidgets.QDialog):
             + margins.top()
             + margins.bottom()
         )
-        for button in (self.analyze, self.select, self.export):
+        for button in (self.analyze, self.select, self.export, self.contacts_export):
             button.setAutoDefault(False)
             button.setDefault(False)
         self.heat_metric.currentIndexChanged.connect(self._heatmap)
@@ -396,7 +397,7 @@ class InterfaceDialog(QtWidgets.QDialog):
         status = (
             "Matches current target"
             if current
-            else "Snapshot — source is no longer current; viewer selection disabled"
+            else "Snapshot — source is no longer current; viewer selection and contact export disabled"
         )
         self.header.setText(
             f"{report.prediction_name} · {report.provider_label} · {report.target_name}\n"
@@ -425,6 +426,17 @@ class InterfaceDialog(QtWidgets.QDialog):
         )
         self.select.setEnabled(
             enabled and score is not None and bool(score.support_a or score.support_b)
+        )
+        diagnostic = None if selected is None else selected[0].contacts
+        self.contacts_export.setEnabled(
+            enabled and diagnostic is not None and diagnostic.pair_count is not None
+        )
+        self.contacts_export.setToolTip(
+            "Export all geometric contacts for the selected model/interface. Requires a current per-model snapshot with available geometry."
+            if selected is None or diagnostic is None
+            else f"Export {selected[0].label}: {diagnostic.chain_a} versus {', '.join(diagnostic.partners)}. "
+            + contact_details(diagnostic)
+            + " Requires a current snapshot; independent of selected metric and contributor side."
         )
 
     def _table_selected(self, table, index) -> None:
@@ -560,6 +572,28 @@ class InterfaceDialog(QtWidgets.QDialog):
             self._observer.select_interface_contributors(
                 InterfaceSelectionRequest(row.rank, score, str(self.side.currentData()))
             )
+
+    def _export_contacts(self) -> None:
+        if not self.contacts_export.isEnabled() or self._selected is None:
+            return
+        row, _key = self._selected
+        diagnostic = row.contacts
+        if row.rank is None or diagnostic is None:
+            return
+        result = QtWidgets.QFileDialog.getSaveFileName(
+            self,
+            "Export selected interface contacts",
+            "foldqc_contacts.csv",
+            "CSV files (*.csv);;All files (*)",
+        )
+        path = result[0] if isinstance(result, tuple) else result
+        if path:
+            self._observer.export_interface_contacts(
+                InterfaceContactExportRequest(row.rank, diagnostic, str(path))
+            )
+        if not self._closed:
+            self.raise_()
+            self.activateWindow()
 
     def _export(self) -> None:
         result = QtWidgets.QFileDialog.getSaveFileName(

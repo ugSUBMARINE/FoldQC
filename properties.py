@@ -11,12 +11,29 @@ metric is undefined (e.g. no predicted contact within the cutoff distance).
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 
 import numpy as np
 
 from .confidence import PredictionConfidence
 from .token_map import TokenMap
+
+INTERFACE_CONTACT_CUTOFF = 8.0
+
+
+def interface_contact_tiles(
+    first: np.ndarray,
+    second: np.ndarray,
+    check_cancel: Callable[[], None],
+) -> Iterator[tuple[int, np.ndarray, np.ndarray]]:
+    """Yield row offset, inclusive contact mask and squared float64 distances."""
+    first = np.asarray(first, dtype=np.float64)
+    second = np.asarray(second, dtype=np.float64)
+    for start in range(0, len(first), 256):
+        check_cancel()
+        delta = first[start : start + 256, None, :] - second[None, :, :]
+        squared = np.einsum("ijk,ijk->ij", delta, delta)
+        yield start, squared <= INTERFACE_CONTACT_CUTOFF**2, squared
 
 
 def interface_contact_mask(
@@ -26,10 +43,8 @@ def interface_contact_mask(
 ) -> np.ndarray:
     """Cα/Cβ contact pairs at inclusive 8 Å; distances allocated in row tiles."""
     contacts = np.empty((len(first), len(second)), dtype=bool)
-    for start in range(0, len(first), 256):
-        check_cancel()
-        delta = first[start : start + 256, None, :] - second[None, :, :]
-        contacts[start : start + 256] = np.einsum("ijk,ijk->ij", delta, delta) <= 64.0
+    for start, mask, _squared in interface_contact_tiles(first, second, check_cancel):
+        contacts[start : start + len(mask)] = mask
     return contacts
 
 
