@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
+import numpy as np
+
 from .token_map import TokenMap
 
 
@@ -107,6 +109,43 @@ class InterfaceReport:
     options: InterfaceAnalysisOptions
     models: tuple[InterfaceModelResult, ...]
     aggregates: tuple[InterfaceAggregate, ...] = ()
+    generation: int = 0
+
+
+@dataclass(frozen=True)
+class InterfaceProjectionSelection:
+    """Compact captured identity; never retains source arrays or a report."""
+
+    generation: int
+    rank: int
+    metric_key: str
+    chain_a: str
+    partners: tuple[str, ...]
+    kind: Literal["ipsae_profile", "contributor_mask"]
+    side: Literal["both", "a", "b"] = "both"
+
+    def __post_init__(self) -> None:
+        if self.kind not in {"ipsae_profile", "contributor_mask"}:
+            raise ValueError("Unknown interface projection.")
+        if self.side not in {"both", "a", "b"}:
+            raise ValueError("Unknown interface projection side.")
+
+
+@dataclass(frozen=True)
+class InterfaceProjectionResult:
+    selection: InterfaceProjectionSelection
+    token_map: TokenMap
+    object_name: str
+    values: np.ndarray
+    title: str
+    description: str
+
+    def __post_init__(self) -> None:
+        values = np.array(self.values, dtype=np.float64, order="C", copy=True)
+        if values.shape != (len(self.token_map),):
+            raise ValueError("Projection values must match the canonical token map.")
+        values.setflags(write=False)
+        object.__setattr__(self, "values", values)
 
 
 @dataclass(frozen=True)
@@ -129,6 +168,11 @@ class InterfaceReportObserver(Protocol):
         self, request: InterfaceContactExportRequest
     ) -> None: ...
     def interface_window_closed(self) -> None: ...
+    def project_interface_residues(
+        self,
+        selection: InterfaceProjectionSelection,
+        action: Literal["interface_color", "interface_profile"],
+    ) -> None: ...
 
 
 class InterfaceReportViewPort(Protocol):

@@ -20,6 +20,7 @@ from .loader_models import DataCapability
 MetricTier = Literal["normal", "advanced", "experimental"]
 DataRequirement = Literal["plddt", "pae", "pde", "contact_probs", "confidence"]
 PlotType = Literal[
+    "interface_profile",
     "line",
     "distribution",
     "matrix",
@@ -64,6 +65,7 @@ _DATA_REQUIREMENTS = _DATA_CAPABILITIES | {"confidence"}
 _METRIC_TIERS = frozenset({"normal", "advanced", "experimental"})
 _PLOT_TYPES = frozenset(
     {
+        "interface_profile",
         "line",
         "distribution",
         "matrix",
@@ -146,6 +148,38 @@ class PlotSpec:
     label: str
     requires_metric: bool = True
     dependency_keys: tuple[DependencyKey, ...] = ("matplotlib",)
+    surface: Literal["main", "interface"] = "main"
+
+
+@dataclass(frozen=True)
+class InterfaceProjectionSpec:
+    key: str
+    label: str
+    metric_keys: frozenset[str]
+
+
+INTERFACE_PROJECTIONS = MappingProxyType(
+    {
+        "ipsae_profile": InterfaceProjectionSpec(
+            "ipsae_profile", "ipSAE profile", frozenset({"interface_ipsae"})
+        ),
+        "contributor_mask": InterfaceProjectionSpec(
+            "contributor_mask",
+            "Contributor mask",
+            frozenset(
+                {
+                    "interface_ipsae",
+                    "interface_lis_kim",
+                    "interface_clis",
+                    "interface_ilis",
+                    "interface_pdockq",
+                    "interface_pdockq2_dunbrack",
+                    "interface_pdockq2_zhu",
+                }
+            ),
+        ),
+    }
+)
 
 
 class MetricRegistry(Sequence[MetricSpec]):
@@ -191,6 +225,8 @@ class PlotRegistry(Sequence[PlotSpec]):
         for spec in self._specs:
             if spec.key not in _PLOT_TYPES:
                 raise ValueError(f"Unknown plot key: {spec.key!r}.")
+            if spec.surface not in {"main", "interface"}:
+                raise ValueError(f"Unknown plot surface: {spec.surface!r}.")
             required_dependency_keys(spec.dependency_keys)
         self._by_key = MappingProxyType({spec.key: spec for spec in self._specs})
 
@@ -1049,9 +1085,30 @@ def _interface_specs() -> tuple[MetricSpec, ...]:
 
 METRICS = MetricRegistry((*METRICS, *_interface_specs()))
 
+for _projection_key, _projection_spec in INTERFACE_PROJECTIONS.items():
+    if _projection_key != _projection_spec.key or not _projection_spec.metric_keys:
+        raise ValueError(
+            "Interface projection registry requires matching keys and metrics."
+        )
+    for _source_key in _projection_spec.metric_keys:
+        _source = METRICS.require(_source_key)
+        if _source.interface is None or _source.interface.report_label is None:
+            raise ValueError("Interface projections require visible interface metrics.")
+        if (
+            _projection_key == "contributor_mask"
+            and _source.interface.support == "none"
+        ):
+            raise ValueError("Contributor masks require defined metric support.")
+
 
 PLOTS = PlotRegistry(
     (
+        PlotSpec(
+            "interface_profile",
+            "Interface residues",
+            requires_metric=False,
+            surface="interface",
+        ),
         PlotSpec("line", "Line"),
         PlotSpec("distribution", "Distribution"),
         PlotSpec("matrix", "Matrix"),

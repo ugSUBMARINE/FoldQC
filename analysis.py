@@ -16,12 +16,14 @@ from . import metrics
 from .dependencies import DependencyKey
 from .ensemble import EnsembleMember, EnsembleState
 from .gui_state import MetricContext, PluginState, ResolvedTarget
-from .interface_analysis import InterfaceAnalysisOptions
+from .interface_analysis import InterfaceAnalysisOptions, InterfaceProjectionSelection
 from .loader_models import DataCapability, PredictionFiles
 from .model_state import ModelState
 from .presentation import Notice
 
 AnalysisAction = Literal[
+    "interface_color",
+    "interface_profile",
     "interfaces",
     "color",
     "export",
@@ -50,8 +52,16 @@ class AnalysisRequest:
     cutoff_angstrom: float | None = None
     ui_revision: int = 0
     interface_options: InterfaceAnalysisOptions | None = None
+    interface_projection: InterfaceProjectionSelection | None = None
 
     def __post_init__(self) -> None:
+        projection_action = self.action in {"interface_color", "interface_profile"}
+        if projection_action != (self.interface_projection is not None):
+            raise ValueError(
+                "Interface projection actions require a captured projection."
+            )
+        if projection_action and self.metric_key is not None:
+            raise ValueError("Interface projections do not use a token metric.")
         if self.action == "interfaces" and (
             self.metric_key is not None or self.interface_options is None
         ):

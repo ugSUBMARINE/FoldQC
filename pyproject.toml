@@ -43,6 +43,7 @@ files = [
   "gui_state.py",
   "interface_analysis.py",
   "interface_compute.py",
+  "interface_projection.py",
   "interface_report_data.py",
   "interface_service.py",
   "lifecycle_support.py",

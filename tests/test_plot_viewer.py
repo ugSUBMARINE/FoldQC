@@ -1184,3 +1184,25 @@ class PlotViewerSelectionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_interface_plot_port_bypasses_direct_viewer_commands_even_when_stale():
+    dialog = PlotDialog.__new__(PlotDialog)
+    dialog._selection_metadata = {"kind": "line"}
+    dialog._selection_port = mock.Mock()
+    dialog._selection_port.select.return_value = False
+    dialog._selection_port.clear.return_value = False
+    dialog._set_clear_action_enabled = mock.Mock()
+    dialog._remove_highlight_artists = mock.Mock()
+    dialog._restore_bar_styles = mock.Mock()
+    dialog._canvas = mock.Mock()
+    with (
+        mock.patch("FoldQC.plot_viewer.update_token_selection") as direct,
+        mock.patch("FoldQC.plot_viewer.clear_selections") as clear,
+    ):
+        dialog._apply_viewer_selection([0, 1])
+        dialog._clear_plot_selection()
+    dialog._selection_port.select.assert_called_once_with((0, 1))
+    dialog._selection_port.clear.assert_called_once()
+    direct.assert_not_called()
+    clear.assert_not_called()

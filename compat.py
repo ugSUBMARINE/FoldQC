@@ -52,6 +52,10 @@ else:
     ScrollBarAsNeeded = QtCore.Qt.ScrollBarAsNeeded
     WindowCloseButtonHint = QtCore.Qt.WindowCloseButtonHint
 
+# Use full widget bounds when native styles supply inset layout rectangles.
+_WidgetAttribute = getattr(QtCore.Qt, "WidgetAttribute", QtCore.Qt)
+LayoutUsesWidgetRect = getattr(_WidgetAttribute, "WA_LayoutUsesWidgetRect", 92)
+
 # Text elision used by the prediction-history popup.  Left elision retains the
 # final folder or filename when older Qt styles constrain an item's paint rect.
 _TextElideMode = getattr(QtCore.Qt, "TextElideMode", QtCore.Qt)

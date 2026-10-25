@@ -69,7 +69,9 @@ def coloring_widgets(minimum, maximum):
     )
 
 
-@pytest.mark.parametrize("action", [spec.key for spec in metrics.PLOTS])
+@pytest.mark.parametrize(
+    "action", [spec.key for spec in metrics.PLOTS if spec.surface == "main"]
+)
 @pytest.mark.parametrize(
     ("minimum", "maximum"),
     [("0.2", "0.6"), ("bad", "worse"), ("nan", "inf"), ("10", "1")],

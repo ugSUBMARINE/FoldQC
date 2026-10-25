@@ -50,6 +50,8 @@ def plot_action_state(
     plot_spec = metrics.PLOTS.find(plot_type)
     if plot_spec is None:
         return PlotActionState(False, f"Unknown plot type: {plot_type}")
+    if plot_spec.surface != "main":
+        return PlotActionState(False, "Use the interface report for residue plots.")
     if not metric_key and plot_spec.requires_metric:
         return PlotActionState(False, "Select a Color by metric before plotting.")
     spec = metrics.METRICS.find(metric_key)

@@ -407,3 +407,37 @@ def test_object_specific_token_selection_builds_one_consolidated_expression(
     assert " or " in expression
     assert cmd.enabled == ["foldqc_plddt_ge"]
     assert cmd.refreshes == 1
+
+
+def test_visual_snapshot_reads_actual_pymol_colors_and_restores_them(monkeypatch):
+    rows = [(1, 85.0, 13), (4, 24.0, 421)]
+    restored = []
+
+    def iterate(name, expression, *, space):
+        assert name == "model_0"
+        for index, b, color in rows:
+            exec(expression, {}, dict(space, index=index, b=b, color=color))
+
+    def alter(name, expression, *, space):
+        assert name == "model_0"
+        for index, _b, _color in rows:
+            values = dict(space, index=index)
+            exec(expression, {}, values)
+            restored.append((index, values["b"], values["color"]))
+
+    # Model atoms deliberately have no color attribute, as in real PyMOL.
+    cmd = types.SimpleNamespace(
+        iterate=iterate,
+        alter=alter,
+        recolor=lambda name: None,
+        get_model=lambda name: types.SimpleNamespace(
+            atom=[types.SimpleNamespace(index=i) for i, _, _ in rows]
+        ),
+    )
+    monkeypatch.setitem(sys.modules, "pymol", types.SimpleNamespace(cmd=cmd))
+    snapshot = mol_viewer.snapshot_atom_visuals("model_0")
+    assert snapshot.atom_indices == (1, 4)
+    np.testing.assert_array_equal(snapshot.color_indices, [13, 421])
+    np.testing.assert_array_equal(snapshot.b_factors, [85, 24])
+    mol_viewer.restore_atom_visuals(snapshot)
+    assert restored == rows

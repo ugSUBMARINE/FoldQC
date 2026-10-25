@@ -337,6 +337,8 @@ class ContextService:
         selection = self._selection
         availability: list[tuple[str, bool, str]] = []
         for spec in metrics.PLOTS:
+            if spec.surface != "main":
+                continue
             state = gui_rules.plot_action_state(
                 spec.key,
                 selection.metric_key,

@@ -105,6 +105,7 @@ def attach_viewer_selection_metadata(
     bar_x_positions: Sequence[float] | None = None,
     bar_widths: Sequence[float] | None = None,
     selection_prefix: str = "foldqc_plot",
+    token_values: Sequence[float] | None = None,
 ) -> plt.Figure:
     """Attach token-selection metadata for :mod:`plot_viewer`.
 
@@ -133,6 +134,10 @@ def attach_viewer_selection_metadata(
         metadata["token_map_obj_names"] = [str(name) for name in token_map_obj_names]
     if token_indices is not None:
         metadata["token_indices"] = [int(i) for i in token_indices]
+    if token_values is not None:
+        if len(token_values) != len(token_indices or []):
+            raise ValueError("Hover values must correspond to selected plot tokens.")
+        metadata["token_values"] = tuple(map(float, token_values))
     if x_positions is not None:
         metadata["x_positions"] = [float(x) for x in x_positions]
     if row_indices is not None:
@@ -830,5 +835,75 @@ def make_binding_site_fingerprint(
 
     ax.set_xticks(x)
     ax.set_xticklabels(labels, rotation=90, fontsize=7)
+    fig.tight_layout()
+    return fig
+
+
+def make_interface_residue_plot(
+    segments: Sequence[tuple[str, tuple[int, ...]]],
+    values: np.ndarray,
+    *,
+    title: str,
+    mask: bool,
+) -> plt.Figure:
+    """Render already-projected values without recomputing scientific metrics."""
+    from matplotlib.lines import Line2D
+    from matplotlib.ticker import MaxNLocator
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+    seen: set[str] = set()
+    chain_colors: dict[str, str] = {}
+    for chain, indices in segments:
+        color = chain_colors.setdefault(chain, f"C{len(chain_colors) % 10}")
+        x = np.asarray(indices)
+        y = values[x]
+        ax.plot(
+            x,
+            y,
+            color=color,
+            linewidth=1.3,
+            drawstyle="steps-mid" if mask else "default",
+            label=chain if chain not in seen else "_nolegend_",
+        )
+        if mask:
+            ax.scatter(
+                x,
+                y,
+                c=["#E69F00" if value else "#D9D9D9" for value in y],
+                edgecolors="0.4",
+                linewidths=0.4,
+                s=22,
+                zorder=3,
+                clip_on=False,
+            )
+        else:
+            ax.scatter(
+                x,
+                y,
+                c=y,
+                cmap="viridis_r",
+                vmin=0,
+                vmax=1,
+                s=18,
+                zorder=3,
+                clip_on=False,
+            )
+        seen.add(chain)
+    ax.set_ylim(0, 1)
+    ax.set_xlabel("Canonical token index (0-based)")
+    ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+    ax.set_ylabel("Contributor membership" if mask else "Residue ipSAE")
+    ax.set_title(title, fontsize=10, wrap=True)
+    if mask:
+        ax.set_yticks([0, 1], ["0 · Non-contributor", "1 · Contributor"])
+        handles, labels = ax.get_legend_handles_labels()
+        handles += [
+            Line2D([], [], marker="o", linestyle="none", color=c)
+            for c in ("#D9D9D9", "#E69F00")
+        ]
+        ax.legend(handles, labels + ["Non-contributor", "Contributor"], loc="best")
+    else:
+        ax.legend(title="Alignment chain", loc="best")
+    ax.grid(alpha=0.2)
     fig.tight_layout()
     return fig

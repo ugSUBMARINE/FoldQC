@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from threading import Event
 from weakref import ReferenceType, ref
 
@@ -25,15 +25,18 @@ from .gui_services import (
 from .gui_state import PluginState
 from .interface_analysis import (
     InterfaceContactExportRequest,
+    InterfaceModelResult,
+    InterfaceProjectionSelection,
     InterfaceReport,
     InterfaceReportObserver,
     InterfaceReportViewPort,
     InterfaceSelectionRequest,
 )
 from .interface_compute import iter_interface_contacts
+from .interface_projection import projection_score, projection_unavailable_reason
 from .loader_models import PredictionFiles
 from .model_state import ModelState
-from .presentation import Notice, PresentationPort
+from .presentation import Notice, PlotSelectionPort, PresentationPort
 from .structure_index import StructureIndex
 
 INTERFACE_SELECTION = "foldqc_interface"
@@ -45,6 +48,7 @@ class _MemberSource:
     model: ReferenceType[ModelState]
     version: int
     object_name: str
+    index: ReferenceType[StructureIndex]
 
 
 @dataclass(frozen=True)
@@ -63,6 +67,30 @@ class _PendingContactExport:
     report: InterfaceReport
     index: StructureIndex
     cancelled: Event
+
+
+@dataclass(frozen=True)
+class _ProjectionPlotSelection:
+    service: ReferenceType[InterfaceReportService]
+    selection: InterfaceProjectionSelection
+    indices: frozenset[int]
+
+    def select(self, token_indices: tuple[int, ...]) -> bool:
+        service = self.service()
+        return service is not None and service.select_projection_tokens(
+            self.selection, tuple(i for i in token_indices if i in self.indices)
+        )
+
+    def clear(self) -> bool:
+        service = self.service()
+        if (
+            service is None
+            or service.projection_model(self.selection) is None
+            or service._operations.is_busy
+        ):
+            return False
+        service.clear_selection()
+        return True
 
 
 class InterfaceReportService:
@@ -86,6 +114,7 @@ class InterfaceReportService:
         self._owns_selection = False
         self._clear_pending = False
         self._target_name: str | None = None
+        self._generation = 0
 
     @property
     def report(self) -> InterfaceReport | None:
@@ -113,12 +142,18 @@ class InterfaceReportService:
             source.target.kind == "single",
             tuple(
                 _MemberSource(
-                    m.rank, ref(m.model_state), m.expected_version, m.obj_name
+                    m.rank,
+                    ref(m.model_state),
+                    m.expected_version,
+                    m.obj_name,
+                    ref(m.model_state.structure_index),
                 )
                 for m in source.members
             ),
         )
+        report = replace(report, generation=self._generation + 1)
         new_view = self._presenter.show_interface_report(report, observer)
+        self._generation = report.generation
         self._source, self._report, self._view = new_source, report, new_view
         self.refresh_current()
 
@@ -145,6 +180,7 @@ class InterfaceReportService:
             (model := m.model()) is not None
             and self._state.model_states.get(m.rank) is model
             and model.version == m.version
+            and model.structure_index is m.index()
             and self._viewer.name_exists(m.object_name)
             for m in source.members
         )
@@ -274,11 +310,87 @@ class InterfaceReportService:
             self._operations.finish(lease)
 
     def window_closed(self) -> None:
+        self._generation += 1
         self._cancel_contact_export()
         self.clear_selection()
         self._view = None
         self._report = None
         self._source = None
+
+    def projection_model(
+        self, selection: InterfaceProjectionSelection
+    ) -> InterfaceModelResult | None:
+        report = self._report
+        if (
+            report is None
+            or selection.generation != self._generation
+            or not self.is_current()
+        ):
+            return None
+        model = next((m for m in report.models if m.rank == selection.rank), None)
+        canonical = self._state.model_states.get(selection.rank)
+        if (
+            model is None
+            or canonical is None
+            or model.token_map is not canonical.token_map
+        ):
+            return None
+        try:
+            score = projection_score(model, selection)
+            if projection_unavailable_reason(score, selection.kind):
+                return None
+        except ValueError:
+            return None
+        return model
+
+    def projection_selection_port(
+        self, selection: InterfaceProjectionSelection, indices: tuple[int, ...]
+    ) -> PlotSelectionPort:
+        return _ProjectionPlotSelection(ref(self), selection, frozenset(indices))
+
+    def select_projection_tokens(
+        self, selection: InterfaceProjectionSelection, indices: tuple[int, ...]
+    ) -> bool:
+        model = self.projection_model(selection)
+        if model is None or self._operations.is_busy or not indices:
+            return False
+        chains = (
+            (selection.chain_a,) + selection.partners
+            if selection.side == "both"
+            else (selection.chain_a,)
+            if selection.side == "a"
+            else selection.partners
+        )
+        eligible = frozenset(model.protein_indices)
+        if any(
+            i not in eligible or model.token_map[i].chain_id not in chains
+            for i in indices
+        ):
+            return False
+        lease = self._operations.begin(
+            "analysis",
+            title="FoldQC – Interface residues",
+            label="Selecting interface residues…",
+        )
+        if lease is None:
+            return False
+        try:
+            self._viewer.inspect_tokens(model.object_name, model.token_map)
+            if self.projection_model(selection) is not model:
+                return False
+            self._viewer.update_object_token_selection(
+                INTERFACE_SELECTION,
+                (ObjectTokenSelection(model.object_name, model.token_map, indices),),
+            )
+            self._owns_selection = True
+            return True
+        except Exception as exc:
+            self._presenter.present_notice(
+                Notice("interface_selection_failed", str(exc), severity="error")
+            )
+            return False
+        finally:
+            self._operations.finish(lease)
 
     def _contact_index(
         self, request: InterfaceContactExportRequest

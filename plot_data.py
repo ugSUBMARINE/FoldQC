@@ -19,6 +19,41 @@ from .token_map import TokenMap
 MAX_HISTOGRAM_BINS = 50
 
 
+def interface_residue_segments(
+    token_map: TokenMap, values: np.ndarray
+) -> tuple[tuple[str, tuple[int, ...]], ...]:
+    """Canonical plot runs, split at chain, token and lossless residue gaps."""
+    runs: list[tuple[str, tuple[int, ...]]] = []
+    current: list[int] = []
+    for raw_index in np.flatnonzero(np.isfinite(values)):
+        i = int(raw_index)
+        if current:
+            previous, token = token_map[current[-1]], token_map[i]
+            a, b = previous.residue_id, token.residue_id
+            adjacent_residue = (b.number == a.number + 1 and not b.insertion_code) or (
+                b.number == a.number
+                and bool(b.insertion_code)
+                and (
+                    (not a.insertion_code and b.insertion_code == "A")
+                    or (
+                        bool(a.insertion_code)
+                        and ord(b.insertion_code) == ord(a.insertion_code) + 1
+                    )
+                )
+            )
+            if (
+                i != current[-1] + 1
+                or previous.chain_id != token.chain_id
+                or not adjacent_residue
+            ):
+                runs.append((previous.chain_id, tuple(current)))
+                current = []
+        current.append(i)
+    if current:
+        runs.append((token_map[current[0]].chain_id, tuple(current)))
+    return tuple(runs)
+
+
 def chain_boundaries(
     token_map: TokenMap,
     indices: list[int] | None = None,

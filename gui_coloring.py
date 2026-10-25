@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
+import numpy as np
+
+from . import reports
 from .analysis import ColorOptions, ComputedMetric, ResolvedAnalysis
 from .context_service import ContextService
 from .gui_metrics import MetricComputationService
 from .gui_services import PaintTarget, StatisticsSelectionTarget, ViewerPort
+from .interface_analysis import InterfaceProjectionResult
 from .presentation import PresentationPort
 from .statistics_selection import StatisticsSelectionService
 from .viewer_transactions import ColorbarChange, PaintTransaction
@@ -56,61 +62,15 @@ class ColoringCoordinator:
         else:
             entries = computed
 
-        previous_mappings = self._viewer.capture_paint_mappings()
-        targets: list[PaintTarget] = []
-        try:
-            for item in entries:
-                token_map = item.model_state.token_map
-                mapping = self._metrics.prepare_paint_mapping(
-                    token_map, item.obj_name, item.model_state.data
-                )
-                if not self._metrics.confirm_token_overlap(
-                    token_map,
-                    item.obj_name,
-                    item.model_state.data,
-                    mapping,
-                ):
-                    self._viewer.restore_paint_mappings(previous_mappings)
-                    return
-                targets.append(
-                    PaintTarget(item.obj_name, token_map, item.values, mapping)
-                )
-
-            kind = (
-                "plddt_class"
-                if spec.key == "plddt_class"
-                else "categorical"
-                if spec.is_domain_label
-                else "continuous"
-            )
-            colorbar = ColorbarChange(
-                "replace" if kind == "continuous" else "remove",
-                palette=options.palette_key if kind == "continuous" else "",
-                reverse_palette=options.reverse_palette,
-            )
-            transaction = PaintTransaction(self._viewer, tuple(targets), colorbar)
-            if kind == "continuous":
-                transaction.execute(
-                    lambda: self._viewer.paint_continuous(
-                        targets,
-                        palette=options.palette_key,
-                        reverse_palette=options.reverse_palette,
-                        vmin=options.vmin,
-                        vmax=options.vmax,
-                        rebuild=False,
-                    )
-                )
-            elif kind == "categorical":
-                transaction.execute(
-                    lambda: self._viewer.paint_categorical(targets, rebuild=False)
-                )
-            else:
-                transaction.execute(
-                    lambda: self._viewer.paint_plddt_classes(targets, rebuild=False)
-                )
-        except Exception:
-            self._viewer.restore_paint_mappings(previous_mappings)
-            raise
+        kind = (
+            "plddt_class"
+            if spec.key == "plddt_class"
+            else "categorical"
+            if spec.is_domain_label
+            else "continuous"
+        )
+        if not self._paint(entries, options, kind):
+            return
 
         label = resolved.target.label
         if len(entries) == 1 or spec.ensemble_level:
@@ -147,5 +107,107 @@ class ColoringCoordinator:
                     item.values,
                 )
                 for item in entries
+            ),
+        )
+
+    def _paint(
+        self,
+        entries: tuple[ComputedMetric, ...],
+        options: ColorOptions,
+        kind: str,
+        *,
+        show_colorbar: bool = True,
+        validate: Callable[[], bool] | None = None,
+    ) -> bool:
+        previous_mappings = self._viewer.capture_paint_mappings()
+        targets: list[PaintTarget] = []
+        try:
+            for item in entries:
+                token_map = item.model_state.token_map
+                mapping = self._metrics.prepare_paint_mapping(
+                    token_map, item.obj_name, item.model_state.data
+                )
+                if not self._metrics.confirm_token_overlap(
+                    token_map,
+                    item.obj_name,
+                    item.model_state.data,
+                    mapping,
+                ):
+                    self._viewer.restore_paint_mappings(previous_mappings)
+                    return False
+                targets.append(
+                    PaintTarget(item.obj_name, token_map, item.values, mapping)
+                )
+
+            if validate is not None and not validate():
+                self._viewer.restore_paint_mappings(previous_mappings)
+                return False
+            colorbar = ColorbarChange(
+                "replace" if kind == "continuous" and show_colorbar else "remove",
+                palette=options.palette_key if kind == "continuous" else "",
+                reverse_palette=options.reverse_palette,
+            )
+            transaction = PaintTransaction(self._viewer, tuple(targets), colorbar)
+            if kind == "continuous":
+                transaction.execute(
+                    lambda: self._viewer.paint_continuous(
+                        targets,
+                        palette=options.palette_key,
+                        reverse_palette=options.reverse_palette,
+                        vmin=options.vmin,
+                        vmax=options.vmax,
+                        rebuild=False,
+                    )
+                )
+            elif kind == "categorical":
+                transaction.execute(
+                    lambda: self._viewer.paint_categorical(targets, rebuild=False)
+                )
+            else:
+                transaction.execute(
+                    lambda: self._viewer.paint_plddt_classes(targets, rebuild=False)
+                )
+        except Exception:
+            self._viewer.restore_paint_mappings(previous_mappings)
+            raise
+
+        return True
+
+    def execute_projection(
+        self,
+        resolved: ResolvedAnalysis,
+        projection: InterfaceProjectionResult,
+        options: ColorOptions,
+        validate: Callable[[], bool],
+    ) -> None:
+        member = resolved.members[0]
+        entry = ComputedMetric(
+            member.rank,
+            member.label,
+            member.obj_name,
+            member.model_state,
+            member.metric_context,
+            projection.values,
+        )
+        mask = projection.selection.kind == "contributor_mask"
+        if not validate() or not self._paint(
+            (entry,), options, "continuous", show_colorbar=not mask, validate=validate
+        ):
+            return
+        lines = [projection.title, projection.description, ""]
+        if mask:
+            lines += [
+                f"Contributors: {int(np.count_nonzero(entry.values == 1))}",
+                f"Eligible residues: {int(np.count_nonzero(np.isfinite(entry.values)))}",
+            ]
+        else:
+            lines += reports.format_numeric_statistics(entry.values)
+        self._presenter.show_statistics("\n".join(lines))
+        self._statistics_selection.set_coloring_result(
+            f"{projection.selection.metric_key}_{projection.selection.kind}",
+            (
+                StatisticsSelectionTarget(
+                    entry.obj_name, projection.token_map, entry.values
+                ),
             ),
         )

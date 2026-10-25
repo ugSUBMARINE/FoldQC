@@ -11,6 +11,24 @@ from .interface_analysis import (
     InterfaceScoreResult,
 )
 from .interface_compute import interface_metric_specs
+from .interface_projection import projection_unavailable_reason
+
+
+def residue_action_reason(
+    row: InterfaceTableRow | None, key: str, kind: str, *, current: bool, busy: bool
+) -> str:
+    if busy:
+        return "Wait for the active operation to finish."
+    if row is None:
+        return "Select an interface row first."
+    if row.rank is None:
+        return "Choose an individual model; aggregate rows have no residue projection."
+    if not current:
+        return "This snapshot is stale. Analyze the current target again."
+    score = row.score(key)
+    if score is None:
+        return "The selected interface metric is unavailable."
+    return projection_unavailable_reason(score, kind)
 
 
 @dataclass(frozen=True)

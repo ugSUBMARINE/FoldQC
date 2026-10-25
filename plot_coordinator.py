@@ -7,6 +7,7 @@ from typing import Literal, TypeAlias
 
 from . import metrics, plot_data
 from .analysis import ComputedMetric, ResolvedAnalysis
+from .interface_analysis import InterfaceProjectionResult
 from .plot_preparation import PlotPreparationService
 from .presentation import PreparedPlot
 from .token_map import TokenMap
@@ -28,9 +29,43 @@ class PlotCoordinator:
             "binding_site_fingerprint": self._fingerprint,
             "ensemble_site_summary": self._ensemble_site_summary,
         }
-        registered = {spec.key for spec in metrics.PLOTS}
-        if set(self._dispatch) != registered:
+        self._projection_dispatch = {"interface_profile": self._interface_profile}
+        if set(self._dispatch) != {
+            spec.key for spec in metrics.PLOTS if spec.surface == "main"
+        } or set(self._projection_dispatch) != {
+            spec.key for spec in metrics.PLOTS if spec.surface == "interface"
+        }:
             raise RuntimeError("Plot preparation dispatch does not match PlotRegistry.")
+
+    def prepare_projection(self, projection: InterfaceProjectionResult) -> PreparedPlot:
+        metrics.PLOTS.require("interface_profile")
+        return self._projection_dispatch["interface_profile"](projection)
+
+    def _interface_profile(self, projection: InterfaceProjectionResult) -> PreparedPlot:
+        import numpy as np
+
+        from . import plots
+
+        segments = plot_data.interface_residue_segments(
+            projection.token_map, projection.values
+        )
+        figure = plots.make_interface_residue_plot(
+            segments,
+            projection.values,
+            title=projection.title,
+            mask=projection.selection.kind == "contributor_mask",
+        )
+        indices = list(map(int, np.flatnonzero(np.isfinite(projection.values))))
+        plots.attach_viewer_selection_metadata(
+            figure,
+            kind="line",
+            token_map=projection.token_map,
+            obj_name=projection.object_name,
+            token_indices=indices,
+            x_positions=indices,
+            token_values=projection.values[indices].tolist(),
+        )
+        return PreparedPlot(figure, projection.title)
 
     def prepare(
         self,

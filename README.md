@@ -480,6 +480,46 @@ for ensemble aggregate rows. Clear selections in the viewer when needed. Closing
 the report with the operating system's window controls removes only the selection
 created by this report.
 
+**Plot residues** and **Color residues** use the selected individual model and
+interface. Choose a **Residue view** and its direction or side; changing these
+controls, selecting a table row, or clicking a heatmap cell does not color PyMOL.
+The actions use the displayed snapshot, including its analyzed ipSAE cutoff,
+without loading more ranks or rereading prediction data.
+
+- **ipSAE profile** shows the retained residue-specific ipSAE values. A→B assigns
+  values to alignment residues in A using their PAE toward B; B→A does the reverse.
+  **Both directions** shows each chain's own profile, without averaging or
+  broadcasting the scalar pair score. The fixed reversed-viridis scale runs from
+  yellow at 0 to purple at 1. A residue without qualifying PAE pairs has a valid
+  zero value; missing profiles are unavailable. There is no geometric contact
+  filter.
+- **Contributor mask** shows the selected metric's retained contributors:
+  orange (`1`) for contributors and light grey (`0`) for other eligible protein
+  residues on the selected side. Masks are available for ipSAE, LIS, cLIS, iLIS,
+  pDockQ, and both pDockQ2 variants. They combine directional support where
+  applicable and do not quantify each residue's share of the score. iLIS's
+  **contact-filtered support** represents its cLIS component, not every input to
+  iLIS. Provider pair ipTM has no defined contributor mask. Valid empty masks
+  contain zeros; unavailable metrics cannot be projected.
+
+Coloring writes these values to the selected member object's B-factors and
+paints out-of-scope tokens grey (`grey70`), including excluded ligands and other
+chains. Other objects, camera, and visibility remain unchanged. The main
+statistics panel describes the applied projection and its colors; threshold
+selections use the exact colored values. Masks remove the continuous colorbar.
+Appearance is fixed and independent of the main dialog's coloring controls.
+Closing the report keeps explicitly applied colors.
+
+Residue plots show a line profile or binary membership track on a fixed 0–1
+vertical scale. The horizontal coordinate is the original zero-based token index;
+hover text identifies the chain, lossless residue ID, and value. Lines break at
+chain and residue gaps. Click/drag selects plotted residues through
+`foldqc_interface` without changing colors. Aggregate rows and stale snapshots
+cannot start residue actions. Already-open plots remain readable, but successful
+report refresh, source replacement, or report closure invalidates their PyMOL
+selection and clear actions. LIS/cLIS continuous profiles and per-residue
+pDockQ/pDockQ2 scores are not provided.
+
 Ensembles retain member rows plus means, population standard deviations,
 minima, maxima, and contributing-model counts. Statistics combine per-model
 scores only for matching chain/residue identity sets; mismatched members remain
@@ -491,7 +531,7 @@ The report is a snapshot. Change the preset and press **Analyze target** to
 refresh. The header records the preset used by the displayed results. Changing
 the main target does not automatically recalculate; stale
 snapshots remain readable/exportable but cannot select residues on replacement
-models or generate contact-list exports. Failed/canceled refreshes leave the previous report intact. The window
+models, start residue actions, or generate contact-list exports. Failed/canceled refreshes leave the previous report intact. The window
 closes with the plugin.
 
 These are confidence/quality estimates, **not binding probabilities or affinity
@@ -528,8 +568,8 @@ metric/direction or one ensemble statistic.
 | `contributors_a`, `contributors_b` | JSON arrays of token index, chain ID, lossless residue ID (including insertion code), and residue name. |
 | `n_models`, `member_ranks`, `residue_identities` | Coverage and JSON member ranks; aggregate identity groups. Ensemble rows provide mean, population standard deviation, minimum, maximum, and directional means where defined. |
 
-No palette, color range, or PyMOL selection expression is exported. Coloring and
-per-residue plots are not part of this interface window release.
+No palette, color range, or PyMOL selection expression is exported. Residue
+profiles and masks are visualization projections and add no columns to this CSV.
 
 ### Contact CSV schema
 

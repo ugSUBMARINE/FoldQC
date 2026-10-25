@@ -165,6 +165,13 @@ PLDDT_CLASS_BAR_COLORS: tuple[ColorStop, ...] = tuple(
 
 PALETTE_SPECS: tuple[PaletteSpec, ...] = (
     PaletteSpec(
+        key="interface_mask",
+        label="Interface contributors",
+        mpl=("#D9D9D9", "#E69F00"),
+        rgb_stops=((217 / 255, 217 / 255, 217 / 255), (230 / 255, 159 / 255, 0.0)),
+        curated=False,
+    ),
+    PaletteSpec(
         key="viridis",
         label="Viridis",
         mpl="viridis",

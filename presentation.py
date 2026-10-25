@@ -94,6 +94,22 @@ class PreparedPlot:
 
     figure: object
     title: str
+    selection_port: PlotSelectionPort | None = None
+
+    def close(self) -> None:
+        """Dispose an abandoned Agg figure without opening a plot window."""
+        from matplotlib import pyplot as plt
+        from matplotlib.figure import Figure
+
+        if isinstance(self.figure, Figure):
+            plt.close(self.figure)
+
+
+class PlotSelectionPort(Protocol):
+    """Optional validated selection routing for source-associated plots."""
+
+    def select(self, token_indices: tuple[int, ...]) -> bool: ...
+    def clear(self) -> bool: ...
 
 
 @dataclass(frozen=True)

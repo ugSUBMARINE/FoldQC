@@ -21,6 +21,7 @@ from .compat import (
     Horizontal,
     ItemIsEnabled,
     ItemIsSelectable,
+    LayoutUsesWidgetRect,
     QtCore,
     QtGui,
     QtWidgets,
@@ -31,6 +32,7 @@ from .gui_layout import BASE_LAYOUT_SPACING, FixedMainButton
 from .interface_analysis import (
     InterfaceAnalysisOptions,
     InterfaceContactExportRequest,
+    InterfaceProjectionSelection,
     InterfaceReport,
     InterfaceReportObserver,
     InterfaceSelectionRequest,
@@ -42,6 +44,7 @@ from .interface_report_data import (
     pair_metric_specs,
     report_metric_specs,
     report_rows,
+    residue_action_reason,
     score_details,
 )
 from .palettes import VIRIDIS_STOPS
@@ -49,8 +52,8 @@ from .palettes import VIRIDIS_STOPS
 INTERFACE_COLUMN_WIDTH = 88
 INTERFACE_DETAILS_CONTROL_WIDTH = 200
 INTERFACE_DETAILS_DROPDOWN_WIDTH = 160
-INTERFACE_WINDOW_WIDTH = 840
-INTERFACE_WINDOW_HEIGHT = 520
+INTERFACE_WINDOW_WIDTH = 1120
+INTERFACE_WINDOW_HEIGHT = 690
 
 
 class InterfaceTableModel(QtCore.QAbstractTableModel):
@@ -213,6 +216,7 @@ class InterfaceDialog(QtWidgets.QDialog):
         self._current, self._busy = True, False
         self._closed = False
         self._selected: tuple[InterfaceTableRow, str] | None = None
+        self._projection_metric: str | None = None
         layout = QtWidgets.QVBoxLayout(self)
         self.header = QtWidgets.QLabel()
         self.header.setWordWrap(True)
@@ -303,6 +307,27 @@ class InterfaceDialog(QtWidgets.QDialog):
         self.select.clicked.connect(self._select)
         selection.addWidget(self.side, 0, AlignCenter)
         selection.addWidget(self.select, 0, AlignCenter)
+        selection.addSpacing(BASE_LAYOUT_SPACING)
+        projection_label = QtWidgets.QLabel("Residue view:")
+        selection.addWidget(projection_label)
+        self.residue_view = QtWidgets.QComboBox()
+        self.residue_view.setFixedWidth(INTERFACE_DETAILS_DROPDOWN_WIDTH)
+        selection.addWidget(self.residue_view, 0, AlignCenter)
+        self.residue_scope = QtWidgets.QComboBox()
+        self.residue_scope.setFixedWidth(INTERFACE_DETAILS_DROPDOWN_WIDTH)
+        selection.addWidget(self.residue_scope, 0, AlignCenter)
+        self.plot_residues = FixedMainButton("Plot residues")
+        self.color_residues = FixedMainButton("Color residues")
+        selection.addWidget(self.plot_residues, 0, AlignCenter)
+        selection.addWidget(self.color_residues, 0, AlignCenter)
+        self.plot_residues.clicked.connect(
+            lambda: self._project_residues("interface_profile")
+        )
+        self.color_residues.clicked.connect(
+            lambda: self._project_residues("interface_color")
+        )
+        self.residue_view.currentIndexChanged.connect(self._projection_kind_changed)
+        self.residue_scope.currentIndexChanged.connect(self._enable_selection)
         selection.addStretch(1)
         details_row.addWidget(self.details_controls)
         self.details = QtWidgets.QTextBrowser()
@@ -316,7 +341,16 @@ class InterfaceDialog(QtWidgets.QDialog):
             selection_label,
             self.side,
             self.select,
+            projection_label,
+            self.residue_view,
+            self.residue_scope,
+            self.plot_residues,
+            self.color_residues,
         )
+        # macOS otherwise subtracts button layout margins from the visible gap,
+        # which can make consecutive fixed-height buttons touch or overlap.
+        for widget in control_stack:
+            widget.setAttribute(LayoutUsesWidgetRect, True)
         # Native macOS layout hints can be shorter than the full control bounds.
         # Include actual widget size requirements so the last button cannot clip.
         control_height = sum(
@@ -330,10 +364,18 @@ class InterfaceDialog(QtWidgets.QDialog):
         self.details_controls.setMinimumHeight(
             control_height
             + (len(control_stack) - 1) * selection.spacing()
+            + BASE_LAYOUT_SPACING  # separation before the residue-view section
             + margins.top()
             + margins.bottom()
         )
-        for button in (self.analyze, self.select, self.export, self.contacts_export):
+        for button in (
+            self.analyze,
+            self.select,
+            self.export,
+            self.contacts_export,
+            self.plot_residues,
+            self.color_residues,
+        ):
             button.setAutoDefault(False)
             button.setDefault(False)
         self.heat_metric.currentIndexChanged.connect(self._heatmap)
@@ -397,7 +439,7 @@ class InterfaceDialog(QtWidgets.QDialog):
         status = (
             "Matches current target"
             if current
-            else "Snapshot — source is no longer current; viewer selection and contact export disabled"
+            else "Snapshot — source is no longer current; residue actions, viewer selection and contact export disabled"
         )
         self.header.setText(
             f"{report.prediction_name} · {report.provider_label} · {report.target_name}\n"
@@ -411,7 +453,7 @@ class InterfaceDialog(QtWidgets.QDialog):
         self.export.setEnabled(not busy)
         self._enable_selection()
 
-    def _enable_selection(self) -> None:
+    def _enable_selection(self, *_args) -> None:
         selected = self._selected
         enabled = bool(
             selected
@@ -437,6 +479,91 @@ class InterfaceDialog(QtWidgets.QDialog):
             else f"Export {selected[0].label}: {diagnostic.chain_a} versus {', '.join(diagnostic.partners)}. "
             + contact_details(diagnostic)
             + " Requires a current snapshot; independent of selected metric and contributor side."
+        )
+        reason = residue_action_reason(
+            None if selected is None else selected[0],
+            str(self.selection_metric.currentData()),
+            str(self.residue_view.currentData()),
+            current=self._current,
+            busy=self._busy,
+        )
+        self.plot_residues.setEnabled(not reason)
+        self.color_residues.setEnabled(not reason)
+        self.plot_residues.setToolTip(
+            reason
+            or "Plot retained residue values with a fixed 0–1 scale. Click/drag selects residues while the source remains current."
+        )
+        legend = (
+            "ipSAE: yellow 0 → purple 1; each chain uses its own alignment direction."
+            if self.residue_view.currentData() == "ipsae_profile"
+            else "Orange: contributor (1); light grey: eligible non-contributor (0)."
+        )
+        if self.selection_metric.currentData() == "interface_ilis":
+            legend += (
+                " iLIS shows contact-filtered cLIS support, not every input to iLIS."
+            )
+        self.residue_view.setToolTip(legend)
+        self.color_residues.setToolTip(
+            reason
+            or legend
+            + " Other tokens in this member object become grey70. Other objects keep their colors."
+        )
+
+    def _refresh_projection_controls(self) -> None:
+        key = str(self.selection_metric.currentData())
+        if key != self._projection_metric:
+            self._projection_metric = key
+            self.residue_view.blockSignals(True)
+            self.residue_view.clear()
+            for spec in metrics.INTERFACE_PROJECTIONS.values():
+                if key in spec.metric_keys:
+                    label = (
+                        "Contact-filtered support"
+                        if key == "interface_ilis"
+                        else spec.label
+                    )
+                    self.residue_view.addItem(label, spec.key)
+            self.residue_view.blockSignals(False)
+        self._projection_kind_changed()
+
+    def _projection_kind_changed(self, *_args) -> None:
+        side = self.residue_scope.currentData() or "both"
+        self.residue_scope.blockSignals(True)
+        self.residue_scope.clear()
+        if self._selected is not None and self.residue_view.currentData() is not None:
+            row = self._selected[0]
+            a, b = row.chain_a, ", ".join(row.partners)
+            profile = self.residue_view.currentData() == "ipsae_profile"
+            for label, value in (
+                ("Both directions" if profile else "Both sides", "both"),
+                (f"{a} → {b}" if profile else a, "a"),
+                (f"{b} → {a}" if profile else b, "b"),
+            ):
+                self.residue_scope.addItem(label, value)
+            self.residue_scope.setCurrentIndex(
+                max(0, self.residue_scope.findData(side))
+            )
+        self.residue_scope.blockSignals(False)
+        self._enable_selection()
+
+    def _project_residues(self, action) -> None:
+        button = (
+            self.color_residues if action == "interface_color" else self.plot_residues
+        )
+        if not button.isEnabled() or self._selected is None:
+            return
+        row = self._selected[0]
+        self._observer.project_interface_residues(
+            InterfaceProjectionSelection(
+                self.report.generation,
+                row.rank,
+                str(self.selection_metric.currentData()),
+                row.chain_a,
+                row.partners,
+                str(self.residue_view.currentData()),
+                str(self.residue_scope.currentData()),
+            ),
+            action,
         )
 
     def _table_selected(self, table, index) -> None:
@@ -483,6 +610,7 @@ class InterfaceDialog(QtWidgets.QDialog):
         self.details.setHtml(
             f'<pre style="white-space: pre-wrap">{html.escape(text)}</pre>{citation}'
         )
+        self._refresh_projection_controls()
         self._enable_selection()
 
     def _tab_changed(self, index) -> None:
@@ -562,6 +690,14 @@ class InterfaceDialog(QtWidgets.QDialog):
         pair_index = self.pairs.model().index(matches[0][0], column)
         self.pairs.setCurrentIndex(pair_index)
         self._table_selected(self.pairs, pair_index)
+        if model.directional and model.key == "interface_ipsae":
+            self.residue_view.setCurrentIndex(
+                self.residue_view.findData("ipsae_profile")
+            )
+            row = self._selected[0]
+            self.residue_scope.setCurrentIndex(
+                self.residue_scope.findData("a" if row.chain_a == a else "b")
+            )
 
     def _select(self) -> None:
         if self._selected is None:

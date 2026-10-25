@@ -226,6 +226,8 @@ def build_plot_actions(menu) -> dict[metrics.PlotType, QAction]:
     """Create plot actions with a real Qt owner on both Qt5 and Qt6."""
     actions = {}
     for spec in metrics.PLOTS:
+        if spec.surface != "main":
+            continue
         action = QAction(spec.label, menu)
         menu.addAction(action)
         actions[spec.key] = action

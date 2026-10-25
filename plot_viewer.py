@@ -23,6 +23,7 @@ from .mol_viewer import (
     show_token_groups,
     update_token_selection,
 )
+from .presentation import PlotSelectionPort
 
 if TYPE_CHECKING:
     from .token_map import TokenMap
@@ -108,9 +109,11 @@ class PlotDialog(QtWidgets.QDialog):
         title: str,
         parent: QtWidgets.QWidget | None = None,
         on_close: Callable[[PlotDialog], None] | None = None,
+        selection_port: PlotSelectionPort | None = None,
     ) -> None:
         super().__init__(parent)
         self._figure = figure
+        self._selection_port = selection_port
         self._on_close = on_close
         self._layout_pending = False
         self._selection_metadata: dict[str, Any] | None = None
@@ -464,7 +467,16 @@ class PlotDialog(QtWidgets.QDialog):
                 return
 
             def token_identity(x: float | None, _y: float | None) -> str | None:
-                return self._token_identity_for_index(token_map, token_lookup(x))
+                index = token_lookup(x)
+                identity = self._token_identity_for_index(token_map, index)
+                values = metadata.get("token_values")
+                if (
+                    identity is not None
+                    and values is not None
+                    and index in token_indices
+                ):
+                    identity += f" | value: {values[token_indices.index(index)]:.6g}"
+                return identity
 
             identity_for_coordinates = token_identity
         else:
@@ -1115,6 +1127,11 @@ class PlotDialog(QtWidgets.QDialog):
         self._selected_row_indices = row_indices
         self._selected_col_indices = col_indices
         try:
+            port = getattr(self, "_selection_port", None)
+            if port is not None:
+                if port.select(tuple(token_indices)):
+                    self._set_clear_action_enabled(True)
+                return
             object_token_maps = self._selection_object_token_maps()
             update_token_selection(
                 self._selection_name("selection"),
@@ -1154,7 +1171,10 @@ class PlotDialog(QtWidgets.QDialog):
             mask.fill(False)
         metadata = self._selection_metadata or {}
         try:
-            if metadata.get("kind") == "ensemble_site_summary":
+            port = getattr(self, "_selection_port", None)
+            if port is not None:
+                port.clear()
+            elif metadata.get("kind") == "ensemble_site_summary":
                 selection_name = str(
                     metadata.get("selection_name") or "foldqc_ensemble_site"
                 )
@@ -1254,9 +1274,16 @@ def show_figure(
     title: str,
     parent: QtWidgets.QWidget | None = None,
     on_close: Callable[[PlotDialog], None] | None = None,
+    selection_port: PlotSelectionPort | None = None,
 ) -> PlotDialog:
     """Create, show, and return a Qt dialog for *figure*."""
-    dialog = PlotDialog(figure, title=title, parent=parent, on_close=on_close)
+    dialog = PlotDialog(
+        figure,
+        title=title,
+        parent=parent,
+        on_close=on_close,
+        selection_port=selection_port,
+    )
     dialog.show()
     dialog.raise_()
     dialog.activateWindow()

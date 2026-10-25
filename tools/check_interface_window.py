@@ -36,6 +36,7 @@ from FoldQC.compat import (  # noqa: E402
 )
 from FoldQC.gui import FoldQCPluginDialog  # noqa: E402
 from FoldQC.gui_layout import (  # noqa: E402
+    BASE_LAYOUT_SPACING,
     PRIMARY_BUTTON_HEIGHT,
     PRIMARY_BUTTON_WIDTH,
     FixedMainButton,
@@ -124,8 +125,10 @@ def main() -> None:
         "Export CSV",
         "Contacts CSV",
         "Select",
+        "Plot residues",
+        "Color residues",
     }
-    assert len(buttons) == 4
+    assert len(buttons) == 6
     for button in buttons:
         assert isinstance(button, FixedMainButton)
         assert button.width() == PRIMARY_BUTTON_WIDTH
@@ -142,15 +145,40 @@ def main() -> None:
     assert [label.text() for label in labels] == [
         "Details for:",
         "Select contributing\nresidues in:",
+        "Residue view:",
     ]
     assert all(label.alignment() & AlignLeft for label in labels)
-    for control in (window.selection_metric, window.side, window.select):
+    for control in (
+        window.selection_metric,
+        window.side,
+        window.select,
+        window.residue_view,
+        window.residue_scope,
+        window.plot_residues,
+        window.color_residues,
+    ):
         assert abs(2 * control.x() + control.width() - panel.width()) <= 1
-    stack = (labels[0], window.selection_metric, labels[1], window.side, window.select)
+    stack = (
+        labels[0],
+        window.selection_metric,
+        labels[1],
+        window.side,
+        window.select,
+        labels[2],
+        window.residue_view,
+        window.residue_scope,
+        window.plot_residues,
+        window.color_residues,
+    )
     original_stack = [(widget.y(), widget.height()) for widget in stack]
+    # Check actual widget bounds: native macOS layout margins can hide overlaps
+    # even when QVBoxLayout.spacing() and the overall minimum height look right.
+    for previous, following in zip(stack, stack[1:]):
+        expected_gap = BASE_LAYOUT_SPACING * (2 if following is labels[2] else 1)
+        assert following.y() - previous.geometry().bottom() - 1 == expected_gap
     original_size = window.size()
     original_details = window.details.size()
-    window.resize(window.width() + 160, window.height() + 120)
+    window.resize(window.width() + 160, window.height() + 400)
     app.processEvents()
     assert panel.width() == INTERFACE_DETAILS_CONTROL_WIDTH
     assert [(widget.y(), widget.height()) for widget in stack] == original_stack
@@ -263,6 +291,23 @@ def main() -> None:
     window.selection_metric.setCurrentIndex(
         window.selection_metric.findData("interface_ipsae")
     )
+    assert window.residue_view.currentData() == "ipsae_profile"
+    assert window.plot_residues.isEnabled() and window.color_residues.isEnabled()
+    observer.project_interface_residues.assert_not_called()
+    window.residue_scope.setCurrentIndex(window.residue_scope.findData("b"))
+    window.plot_residues.click()
+    captured_projection, captured_action = (
+        observer.project_interface_residues.call_args.args
+    )
+    assert captured_action == "interface_profile" and captured_projection.side == "b"
+    assert captured_projection.metric_key == "interface_ipsae"
+    window.residue_view.setCurrentIndex(
+        window.residue_view.findData("contributor_mask")
+    )
+    window.color_residues.click()
+    assert (
+        observer.project_interface_residues.call_args.args[0].kind == "contributor_mask"
+    )
     window._select()
     assert observer.select_interface_contributors.call_args.args[0].side == "both"
     window.rest.model().sort(3, DescendingOrder)
@@ -275,21 +320,32 @@ def main() -> None:
     window.directional.setChecked(True)
     window._heat_clicked(window.heat.model().index(0, 1))
     assert window.selection_metric.currentData() == "interface_ipsae"
+    assert window.residue_view.currentData() == "ipsae_profile"
+    assert window.residue_scope.currentData() == "a"
     window.heat_model.setCurrentIndex(2)
     window._heat_clicked(window.heat.model().index(0, 1))
     assert not window.select.isEnabled()  # ensemble mean is never a viewer target
     assert not window.contacts_export.isEnabled()
+    assert (
+        not window.plot_residues.isEnabled() and not window.color_residues.isEnabled()
+    )
     window.heat_model.setCurrentIndex(0)
     window._heat_clicked(window.heat.model().index(0, 1))
     window.set_current(False)
     assert not window.select.isEnabled()
     assert not window.contacts_export.isEnabled()
     assert window.export.isEnabled()  # snapshot CSV remains exportable
+    assert (
+        not window.plot_residues.isEnabled() and not window.color_residues.isEnabled()
+    )
     window.set_current(True)
     window.set_busy(True)
     assert not window.select.isEnabled() and not window.analyze.isEnabled()
     assert not window.export.isEnabled()
     assert not window.contacts_export.isEnabled()
+    assert (
+        not window.plot_residues.isEnabled() and not window.color_residues.isEnabled()
+    )
     window.set_busy(False)
     window.preset.setCurrentIndex(1)
     window.analyze.click()
@@ -409,6 +465,135 @@ def main() -> None:
                     np.linalg.norm(geometry.cb[a] - geometry.cb[b])
                 )
             assert dialog._presenter.raise_interface_report()
+            # Exercise the new workflow using only in-memory canonical data.
+            active = dialog.state.active_model_state
+            active.merge_data(replace(active.data, pae=np.array(fixture["pae"])))
+            dialog.services.analysis.analyze_current_interfaces(
+                InterfaceAnalysisOptions()
+            )
+            wait_until(lambda: not dialog.services.operations.is_busy)
+            child.selection_metric.setCurrentIndex(
+                child.selection_metric.findData("interface_ipsae")
+            )
+            child.residue_scope.setCurrentIndex(child.residue_scope.findData("a"))
+            assert child.color_residues.isEnabled()
+            child.color_residues.click()
+            wait_until(lambda: not dialog.services.operations.is_busy)
+            visual = viewer.snapshot_atom_visuals(captured.object_name)
+            mapping = viewer.inspect_tokens(
+                captured.object_name, active.token_map
+            ).paint_mapping
+            atom_tokens = mapping.atom_token_indices[list(visual.atom_indices)]
+            colored = np.array(
+                [visual.b_factors[atom_tokens == i][0] for i in range(4)]
+            )
+            ipsae = next(
+                s
+                for s in dialog.services.interfaces.report.models[0].scores
+                if s.metric_key == "interface_ipsae"
+            )
+            np.testing.assert_allclose(
+                colored[:2], [dict(ipsae.residue_profile)[i] for i in (0, 1)], rtol=1e-6
+            )
+            assert np.all(colored[2:] < 0)  # viewer's undefined B-factor sentinel
+            assert dialog.services.viewer.get_managed_colorbar().reverse_palette
+            assert "ipSAE profile" in dialog.widgets._stats_browser.toPlainText()
+            child.plot_residues.click()
+            wait_until(lambda: not dialog.services.operations.is_busy)
+            assert dialog._presenter._plot_windows
+            residue_plot = dialog._presenter._plot_windows[-1]
+            assert residue_plot._selection_port is not None
+            assert residue_plot._figure.axes[0].get_ylim() == (0, 1)
+            assert "value:" in residue_plot._figure.axes[0].format_coord(0, 0.4)
+            residue_plot._apply_viewer_selection([0])
+            assert viewer.selection_token_indices(
+                active.token_map, "foldqc_interface", obj_name=captured.object_name
+            ) == [0]
+            child.residue_view.setCurrentIndex(
+                child.residue_view.findData("contributor_mask")
+            )
+            child.selection_metric.setCurrentIndex(
+                child.selection_metric.findData("interface_clis")
+            )
+            child.residue_scope.setCurrentIndex(child.residue_scope.findData("both"))
+            # Fail after a real PyMOL paint and verify restoration of actual colors.
+            old_visuals = dialog.services.viewer.snapshot_atom_visuals(
+                captured.object_name
+            )
+            old_ramp = dialog.services.viewer.get_managed_colorbar()
+            old_statistics = dialog.widgets._stats_browser.toPlainText()
+            paint = dialog.services.viewer.paint_continuous
+
+            def fail_after_paint(*args, **kwargs):
+                paint(*args, **kwargs)
+                raise RuntimeError("Injected residue paint failure")
+
+            with (
+                patch.object(
+                    dialog.services.viewer,
+                    "paint_continuous",
+                    side_effect=fail_after_paint,
+                ),
+                patch.object(dialog._presenter, "present_notice") as notice,
+            ):
+                child.color_residues.click()
+                wait_until(lambda: not dialog.services.operations.is_busy)
+                assert notice.call_args.args[0].code == "interface_projection_failed"
+            restored = dialog.services.viewer.snapshot_atom_visuals(
+                captured.object_name
+            )
+            np.testing.assert_array_equal(restored.b_factors, old_visuals.b_factors)
+            np.testing.assert_array_equal(
+                restored.color_indices, old_visuals.color_indices
+            )
+            assert dialog.services.viewer.get_managed_colorbar() == old_ramp
+            assert dialog.widgets._stats_browser.toPlainText() == old_statistics
+            child.color_residues.click()
+            wait_until(lambda: not dialog.services.operations.is_busy)
+            assert dialog.services.viewer.get_managed_colorbar() is None
+            assert "Contributors:" in dialog.widgets._stats_browser.toPlainText()
+            masked = viewer.snapshot_atom_visuals(captured.object_name)
+            mask_values = np.array(
+                [masked.b_factors[atom_tokens == i][0] for i in range(4)]
+            )
+            mask_colors = np.array(
+                [masked.color_indices[atom_tokens == i][0] for i in range(4)]
+            )
+            clis = next(
+                s
+                for s in dialog.services.interfaces.report.models[0].scores
+                if s.metric_key == "interface_clis"
+            )
+            expected_mask = np.array(
+                [int(i in clis.support_a + clis.support_b) for i in range(4)]
+            )
+            np.testing.assert_array_equal(mask_values, expected_mask)
+            assert len(set(mask_colors[expected_mask == 1])) == 1
+            assert len(set(mask_colors[expected_mask == 0])) == 1
+            assert (
+                mask_colors[expected_mask == 1][0] != mask_colors[expected_mask == 0][0]
+            )
+            child.plot_residues.click()
+            wait_until(lambda: not dialog.services.operations.is_busy)
+            mask_plot = dialog._presenter._plot_windows[-1]
+            if output is not None:
+                mask_plot._figure.savefig(output / f"qt{QT_MAJOR}-contributor-mask.png")
+            mask_plot.close()
+            # A successful refresh invalidates the old plot's select and clear events.
+            dialog.services.analysis.analyze_current_interfaces(
+                InterfaceAnalysisOptions(15)
+            )
+            wait_until(lambda: not dialog.services.operations.is_busy)
+            assert not residue_plot._selection_port.select((1,))
+            assert not residue_plot._selection_port.clear()
+            assert viewer.selection_token_indices(
+                active.token_map, "foldqc_interface", obj_name=captured.object_name
+            ) == [0]
+            if output is not None:
+                residue_plot._figure.savefig(
+                    output / f"qt{QT_MAJOR}-residue-profile.png"
+                )
+            residue_plot.close()
             child.select.click()
             assert viewer.name_exists("foldqc_interface")
             active_model = dialog.state.active_model_state
@@ -435,7 +620,7 @@ def main() -> None:
             dialog.shutdown()
             dialog.close()
     print(
-        f"Qt{QT_MAJOR} smoke passed: tables, heatmap, controls, main composition, workers, PyMOL contributors, export and cleanup."
+        f"Qt{QT_MAJOR} smoke passed: tables, heatmap, controls, workers, residue profiles/masks, transactional coloring, guarded plot selection, export and cleanup."
     )
 
 

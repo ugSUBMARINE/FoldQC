@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from threading import Event
+from typing import Literal
+
+import numpy as np
 
 from . import export as export_module
 from .analysis import (
@@ -38,10 +41,14 @@ from .gui_state import PluginState
 from .interface_analysis import (
     InterfaceAnalysisOptions,
     InterfaceContactExportRequest,
+    InterfaceModelResult,
+    InterfaceProjectionResult,
+    InterfaceProjectionSelection,
     InterfaceReport,
     InterfaceSelectionRequest,
 )
 from .interface_compute import aggregate_interface_models, compute_interface_model
+from .interface_projection import project_interface_residues
 from .interface_service import InterfaceReportService
 from .plot_coordinator import PlotCoordinator
 from .presentation import Notice, PresentationPort
@@ -68,6 +75,15 @@ class _PendingInterfaces:
 class _InterfaceJobResult:
     source: ResolvedAnalysis
     report: InterfaceReport
+
+
+@dataclass(frozen=True)
+class _PendingProjection:
+    lease: OperationLease
+    action: DeferredAnalysisAction
+    resolved: ResolvedAnalysis
+    model: InterfaceModelResult
+    cancelled: Event
 
 
 class AnalysisCoordinator(DataLoadObserver):
@@ -104,6 +120,7 @@ class AnalysisCoordinator(DataLoadObserver):
         self._resolver = AnalysisResolver()
         self._interfaces = interfaces
         self._pending_interfaces: _PendingInterfaces | None = None
+        self._pending_projection: _PendingProjection | None = None
         self._ui_revision: int = 0
         self._pending: DeferredAnalysisAction | None = None
         self._pending_computation: _PendingMetricComputation | None = None
@@ -148,6 +165,183 @@ class AnalysisCoordinator(DataLoadObserver):
         if self._interfaces is not None:
             self._interfaces.select(request)
 
+    def project_interface_residues(
+        self,
+        selection: InterfaceProjectionSelection,
+        action: Literal["interface_color", "interface_profile"],
+    ) -> None:
+        report = None if self._interfaces is None else self._interfaces.report
+        if report is None:
+            return
+        options = None
+        if action == "interface_color":
+            options = ColorOptions(
+                "viridis" if selection.kind == "ipsae_profile" else "interface_mask",
+                reverse_palette=selection.kind == "ipsae_profile",
+                vmin=0.0,
+                vmax=1.0,
+            )
+        self.submit(
+            DeferredAnalysisAction(
+                AnalysisRequest(
+                    action,
+                    report.target_name,
+                    ui_revision=self._ui_revision,
+                    interface_projection=selection,
+                ),
+                options,
+            )
+        )
+
+    def _start_projection(self, action: DeferredAnalysisAction) -> None:
+        selection = action.request.interface_projection
+        interfaces = self._interfaces
+        if selection is None or interfaces is None or self._operations.is_busy:
+            return
+        model = interfaces.projection_model(selection)
+        report = interfaces.report
+        if model is None or report is None:
+            self._presenter.present_notice(
+                Notice(
+                    "stale_interface_projection",
+                    "Residue actions require an available result in the current snapshot. Analyze the current target again.",
+                )
+            )
+            return
+        resolved = self._resolver.resolve(action.request, self._state)
+        members = tuple(m for m in resolved.members if m.rank == selection.rank)
+        if (
+            len(members) != 1
+            or members[0].model_state.token_map is not model.token_map
+            or members[0].obj_name != model.object_name
+        ):
+            raise ValueError("Projection member is not in the resolved target.")
+        resolved = replace(resolved, members=members)
+        if not self._dependencies.ensure(
+            resolved.dependency_keys, feature_label="Interface residues"
+        ):
+            return
+        if interfaces.projection_model(selection) is not model:
+            return
+        cancelled = Event()
+        lease = self._operations.begin(
+            "analysis",
+            title="FoldQC – Interface residues",
+            label="Preparing residue values…",
+            cancellable=True,
+            on_cancel=self._cancel_projection,
+        )
+        if lease is None:
+            return
+        self._pending_projection = _PendingProjection(
+            lease, action, resolved, model, cancelled
+        )
+        cutoff = report.options.ipsae_cutoff
+
+        def task(progress: Callable[[str], None]) -> InterfaceProjectionResult:
+            def check() -> None:
+                if cancelled.is_set():
+                    raise InterruptedError("Interface projection cancelled.")
+
+            return project_interface_residues(model, selection, cutoff, check)
+
+        try:
+            handle = self._job_runner.submit(
+                lease.request_id,
+                task,
+                self._projection_progress,
+                self._projection_result,
+                self._projection_error,
+            )
+            self._operations.attach(lease, handle)
+        except Exception as exc:
+            self._projection_error(lease.request_id, exc)
+
+    def _cancel_projection(self) -> None:
+        pending, self._pending_projection = self._pending_projection, None
+        if pending is not None:
+            pending.cancelled.set()
+            if self._operations.is_current(pending.lease):
+                self._operations.abandon()
+
+    def _projection_current(self, pending: _PendingProjection) -> bool:
+        selection = pending.action.request.interface_projection
+        return (
+            not pending.cancelled.is_set()
+            and self._operations.is_current(pending.lease)
+            and self._interfaces is not None
+            and selection is not None
+            and self._interfaces.projection_model(selection) is pending.model
+        )
+
+    def _projection_progress(self, request_id: int, label: str) -> None:
+        pending = self._pending_projection
+        if pending is not None and pending.lease.request_id == request_id:
+            self._operations.update(pending.lease, label)
+
+    def _projection_result(self, request_id: int, value: object) -> None:
+        pending = self._pending_projection
+        if pending is None or pending.lease.request_id != request_id:
+            self._job_runner.dispose(value)
+            return
+        try:
+            if not self._projection_current(pending):
+                return
+            if (
+                not isinstance(value, InterfaceProjectionResult)
+                or value.selection != pending.action.request.interface_projection
+                or value.token_map is not pending.model.token_map
+                or value.object_name != pending.model.object_name
+            ):
+                raise ValueError("Unexpected interface projection result.")
+            if pending.action.request.action == "interface_color":
+                options = pending.action.options
+                if not isinstance(options, ColorOptions):
+                    raise ValueError("Interface coloring requires captured appearance.")
+                self._coloring.execute_projection(
+                    pending.resolved,
+                    value,
+                    options,
+                    lambda: self._projection_current(pending),
+                )
+            else:
+                assert self._interfaces is not None
+                prepared = self._plots.prepare_projection(value)
+                if not self._projection_current(pending):
+                    self._job_runner.dispose(prepared)
+                    return
+                port = self._interfaces.projection_selection_port(
+                    value.selection,
+                    tuple(map(int, np.flatnonzero(np.isfinite(value.values)))),
+                )
+                self._presenter.show_plot(replace(prepared, selection_port=port))
+        except Exception as exc:
+            if self._projection_current(pending):
+                self._presenter.present_notice(
+                    Notice("interface_projection_failed", str(exc), severity="error")
+                )
+        finally:
+            if self._pending_projection is pending:
+                self._pending_projection = None
+            self._job_runner.dispose(value)
+            self._operations.finish(pending.lease)
+
+    def _projection_error(self, request_id: int, failure: object) -> None:
+        pending = self._pending_projection
+        if pending is None or pending.lease.request_id != request_id:
+            return
+        current = self._projection_current(pending)
+        self._pending_projection = None
+        self._operations.finish(pending.lease)
+        if current:
+            self._presenter.present_notice(
+                Notice(
+                    "interface_projection_failed",
+                    str(getattr(failure, "message", failure)),
+                    severity="error",
+                )
+            )
+
     def clear_interface_selection(self) -> None:
         if self._interfaces is not None:
             self._interfaces.clear_selection()
@@ -161,6 +355,7 @@ class AnalysisCoordinator(DataLoadObserver):
             self._interfaces.export_contacts(request)
 
     def interface_window_closed(self) -> None:
+        self._cancel_projection()
         pending = self._pending_interfaces
         self._pending_interfaces = None
         if pending is not None:
@@ -184,6 +379,9 @@ class AnalysisCoordinator(DataLoadObserver):
         if action.request.ui_revision != self._ui_revision:
             return
         try:
+            if action.request.interface_projection is not None:
+                self._start_projection(action)
+                return
             resolved, plan = self.resolve_and_plan(action.request)
             plot = resolved.plot_spec
             feature_label = (

@@ -307,6 +307,7 @@ class QtPresenter:
                 title=title,
                 parent=self.dialog,
                 on_close=forget_window,
+                selection_port=prepared.selection_port,
             )
             self._plot_windows.append(dialog)
         except Exception as qt_exc:

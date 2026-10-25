@@ -231,16 +231,20 @@ def snapshot_atom_visuals(obj_name: str):
 
     from .gui_services import AtomVisualSnapshot
 
-    model = cmd.get_model(obj_name)
-    atoms = tuple(getattr(model, "atom", ()) or ())
+    # Chempy atoms returned by get_model() do not expose PyMOL's color index.
+    # Read actual atom properties through iterate, before suspending updates.
+    visuals: list[tuple[int, float, int]] = []
+    cmd.iterate(
+        obj_name,
+        "foldqc_visuals.append((index, b, color))",
+        space={"foldqc_visuals": visuals},
+    )
     return AtomVisualSnapshot(
         obj_name=str(obj_name),
-        atom_indices=tuple(int(atom.index) for atom in atoms),
-        b_factors=np.asarray(
-            [float(getattr(atom, "b", 0.0)) for atom in atoms], dtype=np.float32
-        ),
+        atom_indices=tuple(int(index) for index, _b, _color in visuals),
+        b_factors=np.asarray([b for _index, b, _color in visuals], dtype=np.float32),
         color_indices=np.asarray(
-            [int(getattr(atom, "color", 0)) for atom in atoms], dtype=np.int32
+            [color for _index, _b, color in visuals], dtype=np.int32
         ),
     )
 

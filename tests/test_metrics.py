@@ -105,6 +105,7 @@ def test_metric_plot_matrix_and_export_metadata() -> None:
 
 def test_plot_registry_is_ordered_and_strict() -> None:
     assert [spec.key for spec in metrics.PLOTS] == [
+        "interface_profile",
         "line",
         "distribution",
         "matrix",
@@ -116,6 +117,12 @@ def test_plot_registry_is_ordered_and_strict() -> None:
     assert metrics.PLOTS.require("matrix").dependency_keys == ("matplotlib",)
     assert not metrics.PLOTS.require("pae_summary").requires_metric
     assert metrics.PLOTS.find("missing") is None
+    assert metrics.PLOTS.require("interface_profile").surface == "interface"
+    assert all(
+        spec.surface == "main"
+        for spec in metrics.PLOTS
+        if spec.key != "interface_profile"
+    )
 
 
 def test_registry_rejects_duplicates_and_invalid_combinations() -> None:
