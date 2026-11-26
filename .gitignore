@@ -28,8 +28,5 @@ htmlcov/
 *.swp
 *.swo
 
-# Examples
-examples/
-
 AGENTS.md
 uv.lock
