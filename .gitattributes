@@ -1,3 +1,12 @@
 # Files and directories excluded from `git archive` exports (e.g. GitHub release zips)
 # (files already in .gitignore are untracked and excluded automatically)
 tests/           export-ignore
+
+# Example data for the application note (Git LFS). Markdown stays in regular Git so that it renders on GitHub.
+examples/**/*.pdb   filter=lfs diff=lfs merge=lfs -text
+examples/**/*.cif   filter=lfs diff=lfs merge=lfs -text
+examples/**/*.npz   filter=lfs diff=lfs merge=lfs -text
+examples/**/*.json  filter=lfs diff=lfs merge=lfs -text
+
+# Keep the example data out of release archives
+examples/           export-ignore
